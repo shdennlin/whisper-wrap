@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  whisper-wrap:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - WHISPER_SERVER_URL=http://whisper-server:9000
+      - MAX_FILE_SIZE_MB=100
+      - TEMP_DIR=/tmp/whisper-wrap
+      - LOG_LEVEL=INFO
+      - UPLOAD_TIMEOUT_SECONDS=30
+    volumes:
+      - /tmp/whisper-wrap:/tmp/whisper-wrap
+    depends_on:
+      - whisper-server
+    restart: unless-stopped
+
+  # whisper-server using whisper.cpp submodule
+  whisper-server:
+    build:
+      context: ./whisper.cpp
+      dockerfile: .devops/main-cuda12.Dockerfile
+    ports:
+      - "9000:9000"
+    command: >
+      ./build/bin/whisper-server
+      --host 0.0.0.0
+      --port 9000
+      -m /models/ggml-large-v3-turbo-q8_0.bin
+      -l auto
+      -tdrz
+    volumes:
+      - ./whisper.cpp/models:/models
+    restart: unless-stopped
