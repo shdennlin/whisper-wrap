@@ -1,6 +1,8 @@
 services:
   whisper-wrap:
     build: .
+    image: whisper-wrap:latest
+    container_name: whisper-wrap
     ports:
       - "8000:8000"
     environment:

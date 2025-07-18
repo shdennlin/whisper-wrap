@@ -55,7 +55,8 @@ make lint               # Code quality checks
 
 **Docker Deployment:**
 ```bash
-make docker             # Build and start with persistence
+make docker             # Build and start with persistence (creates whisper-wrap:latest)
+docker ps               # Check running container (name: whisper-wrap)
 ```
 
 ## API Endpoints
@@ -158,3 +159,8 @@ curl http://localhost:8000/health  # Check service health
 - **Build Time**: 10-15 minutes first build (downloads and compiles whisper.cpp)
 - **Image Size**: ~3GB (includes models and build tools)
 - **Volumes**: Models persisted via named volumes, temp files ephemeral
+- **Multi-Architecture**: Auto-detects and optimizes for Intel/AMD (x86_64) and ARM64 systems
+- **CPU Optimizations**: 
+  - **x86_64 (Intel/AMD)**: AVX, AVX2, F16C, FMA instruction sets enabled
+  - **ARM64 (Apple Silicon)**: NEON optimizations with armv8-a targeting
+  - **Generic**: Fallback configuration for other architectures

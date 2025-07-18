@@ -32,6 +32,11 @@ FastAPI wrapper for whisper.cpp with universal audio format support.
 - Arch Linux (current)
 - Windows 10+ (WSL2 recommended)
 
+**CPU Architectures**:
+- **x86_64 (Intel/AMD)**: Full support with AVX/AVX2 optimizations
+- **ARM64 (Apple Silicon)**: Native support with NEON optimizations
+- **Generic**: Fallback support for other architectures
+
 ## Architecture
 
 whisper-wrap provides a REST API layer over whisper.cpp's whisper-server:
@@ -356,12 +361,15 @@ The API handles various error conditions:
 
 **Quick Docker Setup**:
 ```bash
-# Build and run with Docker Compose
+# Build and run with Docker Compose (recommended)
 make docker
 
 # Or manually:
-docker build -t whisper-wrap .
-docker run -p 8000:8000 whisper-wrap
+docker build -t whisper-wrap:latest .
+docker run -p 8000:8000 whisper-wrap:latest
+
+# Check running containers:
+docker ps
 ```
 
 **Docker Compose** (recommended):
@@ -369,6 +377,8 @@ docker run -p 8000:8000 whisper-wrap
 services:
   whisper-wrap:
     build: .
+    image: whisper-wrap:latest          # Consistent image naming
+    container_name: whisper-wrap        # Predictable container name
     ports:
       - "8000:8000"
     environment:
@@ -453,6 +463,10 @@ volumes:
 - Requires ~3GB disk space for final image
 - Ensure Docker has sufficient memory (4GB+ recommended)
 - Build includes downloading 1.5GB whisper model
+- **Multi-Architecture Support**: Auto-detects Intel/AMD (x86_64) vs ARM64 and optimizes accordingly
+- **CPU Optimizations**: Enables AVX/AVX2 for Intel/AMD, NEON for ARM systems
+- **Verify Architecture**: Check build with `docker run --rm whisper-wrap:latest uname -m`
+- **Image Management**: All builds create consistent `whisper-wrap:latest` image name
 
 ## Common Use Cases
 

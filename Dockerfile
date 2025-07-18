@@ -16,17 +16,47 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 # Set working directory
 WORKDIR /app
 
-# Copy dependency files
+# Copy dependency files and README (required by hatchling)
 COPY pyproject.toml .
 COPY uv.lock .
+COPY README.md .
 
 # Install Python dependencies
 RUN uv sync --frozen --no-dev
 
-# Clone and build whisper.cpp
+# Clone and build whisper.cpp with multi-architecture support
 RUN git clone https://github.com/ggml-org/whisper.cpp.git /whisper.cpp && \
     cd /whisper.cpp && \
-    cmake -B build && \
+    ARCH=$(uname -m) && \
+    echo "Building for architecture: $ARCH" && \
+    if [ "$ARCH" = "aarch64" ]; then \
+        echo "Configuring for ARM64/Apple Silicon" && \
+        cmake -B build \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_HBM=OFF \
+            -DGGML_AVX=OFF \
+            -DGGML_AVX2=OFF \
+            -DGGML_F16C=OFF \
+            -DGGML_FMA=OFF \
+            -DCMAKE_C_FLAGS="-march=armv8-a -mtune=generic" \
+            -DCMAKE_CXX_FLAGS="-march=armv8-a -mtune=generic"; \
+    elif [ "$ARCH" = "x86_64" ]; then \
+        echo "Configuring for x86_64 (Intel/AMD)" && \
+        cmake -B build \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_HBM=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_F16C=ON \
+            -DGGML_FMA=ON \
+            -DCMAKE_C_FLAGS="-march=x86-64 -mtune=generic" \
+            -DCMAKE_CXX_FLAGS="-march=x86-64 -mtune=generic"; \
+    else \
+        echo "Configuring for generic architecture: $ARCH" && \
+        cmake -B build \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_HBM=OFF; \
+    fi && \
     cmake --build build -j --config Release
 
 # Download whisper model
