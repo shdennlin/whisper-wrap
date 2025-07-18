@@ -7,18 +7,20 @@ WHISPER_BINARY := $(WHISPER_DIR)/build/bin/whisper-server
 WHISPER_MODEL := $(WHISPER_DIR)/models/ggml-large-v3-turbo-q8_0.bin
 WHISPER_CMD := ./build/bin/whisper-server --host 0.0.0.0 --port 9000 -m ./models/ggml-large-v3-turbo-q8_0.bin -l 'auto' -tdrz
 
-.PHONY: help setup clone-whisper build-whisper download-model install test lint format clean run dev docker deps
+.PHONY: help setup check-system-deps install-system-deps clone-whisper build-whisper download-model install test lint format clean run dev docker deps
 
 # Default target
 help:
 	@echo "whisper-wrap - FastAPI wrapper for whisper.cpp"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  setup          - Complete setup (clone + install deps + build whisper + download model)"
-	@echo "  install        - Install Python dependencies with uv"
-	@echo "  clone-whisper  - Clone whisper.cpp repository to parent directory"
-	@echo "  build-whisper  - Build whisper.cpp using cmake"
-	@echo "  download-model - Download whisper model"
+	@echo "  setup              - Complete setup (check system deps + install + build + download model)"
+	@echo "  check-system-deps  - Check required system dependencies"
+	@echo "  install-system-deps- Install system dependencies (macOS/Linux)"
+	@echo "  install            - Install Python dependencies with uv"
+	@echo "  clone-whisper      - Clone whisper.cpp repository to parent directory"
+	@echo "  build-whisper      - Build whisper.cpp using cmake"
+	@echo "  download-model     - Download whisper model"
 	@echo "  test           - Run test suite"
 	@echo "  lint           - Run code linting"
 	@echo "  format         - Format code"
@@ -30,8 +32,92 @@ help:
 	@echo ""
 
 # Complete setup
-setup: install clone-whisper build-whisper download-model
+setup: check-system-deps install clone-whisper build-whisper download-model
 	@echo "Setup complete! You can now run 'make dev' to start both services."
+
+# Check system dependencies
+check-system-deps:
+	@echo "Checking required system dependencies..."
+	@echo "======================================"
+	@# Check operating system
+	@OS=$$(uname -s); \
+	echo "Operating System: $$OS"; \
+	echo ""
+	@# Check essential tools
+	@echo "Essential tools:"
+	@which uv >/dev/null && echo "✅ uv found" || (echo "❌ uv not found. Install from https://github.com/astral-sh/uv" && exit 1)
+	@which cmake >/dev/null && echo "✅ cmake found" || (echo "❌ cmake not found. Install cmake." && exit 1)
+	@which make >/dev/null && echo "✅ make found" || (echo "❌ make not found. Install build tools." && exit 1)
+	@which git >/dev/null && echo "✅ git found" || (echo "❌ git not found. Install git." && exit 1)
+	@echo ""
+	@# Check audio processing dependencies
+	@echo "Audio processing dependencies:"
+	@if which ffmpeg >/dev/null; then \
+		echo "✅ ffmpeg found"; \
+		ffmpeg -version | head -1; \
+	else \
+		echo "❌ ffmpeg not found"; \
+		echo "   Install with: make install-system-deps"; \
+		echo "   Or manually: brew install ffmpeg (macOS) / apt install ffmpeg (Ubuntu)"; \
+		exit 1; \
+	fi
+	@# Check libmagic (try different ways to detect it)
+	@if python3 -c "import magic; print('✅ python-magic can import libmagic')" 2>/dev/null; then \
+		echo "✅ libmagic accessible via Python"; \
+	elif [ -f /usr/lib/libmagic.so ] || [ -f /usr/local/lib/libmagic.dylib ] || [ -f /opt/homebrew/lib/libmagic.dylib ]; then \
+		echo "✅ libmagic library found on system"; \
+	else \
+		echo "❌ libmagic not found or not accessible"; \
+		echo "   Install with: make install-system-deps"; \
+		echo "   Or manually: brew install libmagic (macOS) / apt install libmagic1 (Ubuntu)"; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "✅ All system dependencies are available!"
+	@echo "   You can proceed with: make install"
+
+# Install system dependencies automatically
+install-system-deps:
+	@echo "Installing system dependencies..."
+	@OS=$$(uname -s); \
+	if [ "$$OS" = "Darwin" ]; then \
+		echo "Detected macOS - using Homebrew"; \
+		if ! which brew >/dev/null; then \
+			echo "❌ Homebrew not found. Please install Homebrew first:"; \
+			echo "   /bin/bash -c \"\$$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""; \
+			exit 1; \
+		fi; \
+		echo "Installing ffmpeg and libmagic..."; \
+		brew install ffmpeg libmagic; \
+	elif [ "$$OS" = "Linux" ]; then \
+		echo "Detected Linux"; \
+		if which apt-get >/dev/null; then \
+			echo "Using apt (Ubuntu/Debian)"; \
+			echo "Installing ffmpeg and libmagic..."; \
+			sudo apt-get update && sudo apt-get install -y ffmpeg libmagic1 libmagic-dev; \
+		elif which yum >/dev/null; then \
+			echo "Using yum (RHEL/CentOS)"; \
+			echo "Installing ffmpeg and libmagic..."; \
+			sudo yum install -y ffmpeg file-devel; \
+		elif which pacman >/dev/null; then \
+			echo "Using pacman (Arch Linux)"; \
+			echo "Installing ffmpeg and libmagic..."; \
+			sudo pacman -S --noconfirm ffmpeg file; \
+		else \
+			echo "❌ Unsupported Linux distribution. Please install manually:"; \
+			echo "   - ffmpeg"; \
+			echo "   - libmagic (libmagic1/file-devel/file)"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "❌ Unsupported operating system: $$OS"; \
+		echo "Please install manually:"; \
+		echo "   - ffmpeg"; \
+		echo "   - libmagic"; \
+		exit 1; \
+	fi
+	@echo "✅ System dependencies installed successfully!"
+	@echo "   Run 'make check-system-deps' to verify installation"
 
 # Install Python dependencies
 install:

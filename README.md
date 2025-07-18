@@ -13,13 +13,48 @@ FastAPI wrapper for whisper.cpp with universal audio format support.
 
 ## Prerequisites
 
+### Automatic Installation (Recommended)
+
+The setup process will automatically check and install dependencies:
+
+```bash
+# Check what's needed
+make check-system-deps
+
+# Install missing system dependencies  
+make install-system-deps
+
+# Complete setup
+make setup
+```
+
+### Manual Installation
+
+If you prefer manual installation:
+
 1. **System Dependencies**:
    - ffmpeg (for audio conversion)
    - libmagic (for file type detection)
 
-   On macOS with Homebrew:
+   **macOS (Homebrew)**:
    ```bash
    brew install ffmpeg libmagic
+   ```
+
+   **Ubuntu/Debian**:
+   ```bash
+   sudo apt-get update
+   sudo apt-get install ffmpeg libmagic1 libmagic-dev
+   ```
+
+   **RHEL/CentOS**:
+   ```bash
+   sudo yum install ffmpeg file-devel
+   ```
+
+   **Arch Linux**:
+   ```bash
+   sudo pacman -S ffmpeg file
    ```
 
 2. **whisper-server**: whisper.cpp will be automatically downloaded
@@ -167,20 +202,22 @@ UPLOAD_TIMEOUT_SECONDS=30
 ### Available Make Targets
 
 ```bash
-make help          # Show all available targets
-make setup         # Complete setup (clone + install + build + download model)
-make install       # Install Python dependencies
-make clone-whisper # Clone whisper.cpp repository to parent directory
-make build-whisper # Build whisper.cpp
-make download-model # Download whisper model
-make test          # Run test suite
-make lint          # Run code linting
-make format        # Format code
-make run           # Start FastAPI server only
-make run-whisper   # Start whisper-server only
-make dev           # Start both services (development mode)
-make clean         # Clean build artifacts
-make docker        # Build and run with Docker Compose
+make help               # Show all available targets
+make setup              # Complete setup (check system deps + install + build + download model)
+make check-system-deps  # Check required system dependencies
+make install-system-deps# Install system dependencies (macOS/Linux)
+make install            # Install Python dependencies
+make clone-whisper      # Clone whisper.cpp repository to parent directory  
+make build-whisper      # Build whisper.cpp
+make download-model     # Download whisper model
+make test               # Run test suite
+make lint               # Run code linting
+make format             # Format code
+make run                # Start FastAPI server only
+make run-whisper        # Start whisper-server only
+make dev                # Start both services (development mode)
+make clean              # Clean build artifacts
+make docker             # Build and run with Docker Compose
 ```
 
 ### Running Tests
@@ -254,13 +291,18 @@ For production use:
 - Verify whisper-server is running on configured port
 - Check WHISPER_SERVER_URL in configuration
 
+**System dependencies missing**:
+- Run `make check-system-deps` to see what's missing
+- Run `make install-system-deps` for automatic installation
+- Or install manually (see Prerequisites section)
+
 **ffmpeg not found**:
 - Install ffmpeg system dependency
 - Verify ffmpeg is in system PATH
 
 **libmagic import error**:
-- Install libmagic system dependency
-- On macOS: `brew install libmagic`
+- Install libmagic system dependency  
+- Check with: `python3 -c "import magic"`
 
 ## License
 
