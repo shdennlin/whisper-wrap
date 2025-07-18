@@ -366,7 +366,6 @@ docker run -p 8000:8000 whisper-wrap
 
 **Docker Compose** (recommended):
 ```yaml
-version: '3.8'
 services:
   whisper-wrap:
     build: .
@@ -375,10 +374,13 @@ services:
     environment:
       - MAX_FILE_SIZE_MB=200
       - LOG_LEVEL=INFO
+      - UPLOAD_TIMEOUT_SECONDS=60
     volumes:
-      - ./models:/app/models  # Share models between containers
+      - /tmp/whisper-wrap:/tmp/whisper-wrap
     restart: unless-stopped
 ```
+
+**Note**: The Docker image includes both whisper-wrap and whisper.cpp in a single container for simplicity. Both services start automatically.
 
 ### Production Considerations
 
