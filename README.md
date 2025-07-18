@@ -1,6 +1,8 @@
 # whisper-wrap
 
-FastAPI wrapper for whisper.cpp with universal audio format support.
+FastAPI wrapper for [whisper.cpp](https://github.com/ggml-org/whisper.cpp) with universal audio format support.
+
+> **Built on whisper.cpp** - This project leverages the powerful [whisper.cpp](https://github.com/ggml-org/whisper.cpp) implementation by [ggml-org](https://github.com/ggml-org) to provide fast, local speech-to-text transcription powered by OpenAI's Whisper models.
 
 ## 🚀 Quick Start
 
@@ -174,6 +176,17 @@ done
 - **API Questions**: Refer to [API Documentation](docs/API.md)
 - **Deployment**: Follow [Deployment Guide](docs/DEPLOYMENT.md)
 
+## 🙏 Acknowledgments
+
+This project is built upon the excellent work of:
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** by [ggml-org](https://github.com/ggml-org) - High-performance C++ implementation of OpenAI's Whisper
+- **[OpenAI Whisper](https://github.com/openai/whisper)** - The original speech recognition model and research
+- **[GGML](https://github.com/ggerganov/ggml)** - Tensor library that powers whisper.cpp's efficient inference
+
+Special thanks to the whisper.cpp community for creating a fast, local, and production-ready speech-to-text solution.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+**Note**: This project uses whisper.cpp as a dependency, which is also MIT licensed. The underlying Whisper models are released under the MIT license by OpenAI.
