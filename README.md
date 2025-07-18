@@ -344,6 +344,9 @@ The API handles various error conditions:
 - **10 minute audio**: ~2-5 minutes processing time  
 - **1 hour audio**: ~15-30 minutes processing time
 
+> [!TIP]
+> **Docker Performance**: These estimates apply to both native and Docker deployments. ARM systems (Mac/Apple Silicon) achieve similar performance through CPU optimization despite lacking GPU acceleration in Docker containers.
+
 **System Limits**:
 - **File Size**: 100MB default (configurable via MAX_FILE_SIZE_MB)
 - **Timeout**: 30 seconds default (configurable via UPLOAD_TIMEOUT_SECONDS)
@@ -358,6 +361,9 @@ The API handles various error conditions:
 ## Production Deployment
 
 ### Docker Deployment
+
+> [!IMPORTANT]
+> **GPU Acceleration**: Docker containers cannot access GPU acceleration on ARM systems (Mac/Apple Silicon). The service uses CPU-only processing with optimized NEON instructions, providing excellent performance but without GPU benefits.
 
 **Quick Docker Setup**:
 ```bash
@@ -467,6 +473,12 @@ volumes:
 - **CPU Optimizations**: Enables AVX/AVX2 for Intel/AMD, NEON for ARM systems
 - **Verify Architecture**: Check build with `docker run --rm whisper-wrap:latest uname -m`
 - **Image Management**: All builds create consistent `whisper-wrap:latest` image name
+
+> [!WARNING]
+> **ARM/Mac GPU Limitation**: Docker containers on ARM architecture (including Apple Silicon Macs) cannot access GPU acceleration for whisper models. The service will run using CPU-only processing, which is still fast but slower than GPU-accelerated setups on dedicated hardware.
+
+> [!NOTE]
+> **Performance on ARM**: Despite the lack of GPU acceleration, ARM64 processors (especially Apple Silicon) provide excellent CPU performance for whisper.cpp with NEON optimizations. Expect transcription speeds of 2-4x real-time on modern ARM systems.
 
 ## Common Use Cases
 

@@ -164,3 +164,6 @@ curl http://localhost:8000/health  # Check service health
   - **x86_64 (Intel/AMD)**: AVX, AVX2, F16C, FMA instruction sets enabled
   - **ARM64 (Apple Silicon)**: NEON optimizations with armv8-a targeting
   - **Generic**: Fallback configuration for other architectures
+
+> [!WARNING]
+> **ARM Docker Limitation**: Docker containers on ARM systems (Mac/Apple Silicon) cannot access GPU acceleration. Performance remains excellent with CPU-only processing and NEON optimizations.
