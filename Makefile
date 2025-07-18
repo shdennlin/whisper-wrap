@@ -1,6 +1,12 @@
 # whisper-wrap Makefile
 # Builds and manages the whisper-wrap FastAPI service and whisper.cpp dependencies
 
+# Load environment variables from .env file if it exists
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
+
 # Configuration variables
 WHISPER_DIR := ../whisper.cpp
 WHISPER_BINARY := $(WHISPER_DIR)/build/bin/whisper-server

@@ -121,6 +121,11 @@ The service supports configurable ports for both the API server and whisper-serv
 - Ports cannot be the same when running on the same host
 - Validation occurs on startup with clear error messages
 
+**Makefile Integration:**
+- Automatically loads `.env` file if it exists
+- No need to export environment variables manually
+- Supports all three configuration methods (direct, export, .env file)
+
 ## whisper-server Integration
 
 **Automatic Setup:**

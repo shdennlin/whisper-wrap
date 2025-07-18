@@ -285,14 +285,22 @@ docker-compose up --build
 
 **Makefile Port Configuration:**
 ```bash
-# Start with custom ports
+# Method 1: Create .env file (recommended)
+echo "API_PORT=9001" > .env
+echo "WHISPER_SERVER_PORT=9002" >> .env
+make dev
+
+# Method 2: Set environment variables directly
 API_PORT=9001 WHISPER_SERVER_PORT=9002 make dev
 
-# Or export environment variables
+# Method 3: Export environment variables
 export API_PORT=9001
 export WHISPER_SERVER_PORT=9002
 make dev
 ```
+
+> [!NOTE]
+> The Makefile automatically loads environment variables from the `.env` file if it exists. This means you can simply create or modify the `.env` file and run `make dev` without needing to export variables manually.
 
 ## Development
 
