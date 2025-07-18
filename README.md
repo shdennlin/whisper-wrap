@@ -261,3 +261,7 @@ For production use:
 **libmagic import error**:
 - Install libmagic system dependency
 - On macOS: `brew install libmagic`
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
