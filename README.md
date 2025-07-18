@@ -376,9 +376,18 @@ services:
       - LOG_LEVEL=INFO
       - UPLOAD_TIMEOUT_SECONDS=60
     volumes:
-      - /tmp/whisper-wrap:/tmp/whisper-wrap
+      - whisper_models:/whisper.cpp/models  # Persist models across restarts
     restart: unless-stopped
+
+volumes:
+  whisper_models:
+    driver: local
 ```
+
+**Volume Strategy**:
+- **✅ Models persisted**: 1.5GB whisper model survives container restarts
+- **✅ Temp files ephemeral**: Automatic cleanup prevents disk bloat  
+- **✅ Fast restarts**: No need to re-download models
 
 **Note**: The Docker image includes both whisper-wrap and whisper.cpp in a single container for simplicity. Both services start automatically.
 
@@ -438,6 +447,12 @@ services:
 - Check supported formats list
 - Try converting to WAV format first
 - Verify file isn't corrupted or empty
+
+**Docker build issues**:
+- First build takes 10-15 minutes (downloads and compiles whisper.cpp)
+- Requires ~3GB disk space for final image
+- Ensure Docker has sufficient memory (4GB+ recommended)
+- Build includes downloading 1.5GB whisper model
 
 ## Common Use Cases
 

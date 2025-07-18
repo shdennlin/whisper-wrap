@@ -9,5 +9,10 @@ services:
       - LOG_LEVEL=INFO
       - UPLOAD_TIMEOUT_SECONDS=60
     volumes:
-      - /tmp/whisper-wrap:/tmp/whisper-wrap
+      - whisper_models:/whisper.cpp/models  # Persist downloaded models (1.5GB)
+      # Note: /tmp/whisper-wrap uses container's tmpfs for automatic cleanup
     restart: unless-stopped
+
+volumes:
+  whisper_models:
+    driver: local
