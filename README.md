@@ -126,7 +126,7 @@ If you prefer manual installation:
 
 3. **Test the API**:
    ```bash
-   # Standard multipart upload
+   # Standard multipart upload (default port 8000)
    curl -X POST "http://localhost:8000/transcribe" \
         -F "file=@your-audio-file.mp3"
    
@@ -134,6 +134,10 @@ If you prefer manual installation:
    curl -X POST "http://localhost:8000/transcribe-raw" \
         -H "Content-Type: audio/mp3" \
         --data-binary "@your-audio-file.mp3"
+   
+   # With custom port (if API_PORT is set)
+   curl -X POST "http://localhost:${API_PORT:-8000}/transcribe" \
+        -F "file=@your-audio-file.mp3"
    ```
 
 ### Manual Setup (Alternative)
@@ -238,11 +242,56 @@ Get API information and available endpoints.
 Environment variables can be set in `.env` file:
 
 ```env
-WHISPER_SERVER_URL=http://localhost:9000
+# API server configuration
+API_PORT=8000
+API_HOST=0.0.0.0
+
+# Whisper server configuration
+WHISPER_SERVER_HOST=localhost
+WHISPER_SERVER_PORT=9000
+
+# Alternative: Use complete URL (overrides individual components)
+# WHISPER_SERVER_URL=http://localhost:9000
+
+# File handling configuration
 MAX_FILE_SIZE_MB=100
 TEMP_DIR=/tmp/whisper-wrap
 LOG_LEVEL=INFO
 UPLOAD_TIMEOUT_SECONDS=30
+```
+
+### Port Configuration
+
+You can customize the ports used by both services:
+
+**API Server Ports:**
+- `API_PORT`: Port for the FastAPI server (default: 8000)
+- `API_HOST`: Host interface to bind to (default: 0.0.0.0)
+
+**Whisper Server Ports:**
+- `WHISPER_SERVER_PORT`: Port for the whisper-server (default: 9000)
+- `WHISPER_SERVER_HOST`: Host for the whisper-server (default: localhost)
+
+**Docker Port Configuration:**
+```bash
+# Set custom ports via environment variables
+API_PORT=9001 WHISPER_SERVER_PORT=9002 docker-compose up --build
+
+# Or create a .env file:
+echo "API_PORT=9001" > .env
+echo "WHISPER_SERVER_PORT=9002" >> .env
+docker-compose up --build
+```
+
+**Makefile Port Configuration:**
+```bash
+# Start with custom ports
+API_PORT=9001 WHISPER_SERVER_PORT=9002 make dev
+
+# Or export environment variables
+export API_PORT=9001
+export WHISPER_SERVER_PORT=9002
+make dev
 ```
 
 ## Development

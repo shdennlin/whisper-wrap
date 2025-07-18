@@ -91,12 +91,35 @@ API information and endpoint documentation.
 
 Environment variables (`.env` file):
 ```env
-WHISPER_SERVER_URL=http://localhost:9000  # whisper-server location
+# API server configuration
+API_PORT=8000                             # FastAPI server port
+API_HOST=0.0.0.0                          # FastAPI server host
+
+# Whisper server configuration
+WHISPER_SERVER_HOST=localhost             # whisper-server host
+WHISPER_SERVER_PORT=9000                  # whisper-server port
+# Alternative: WHISPER_SERVER_URL=http://localhost:9000  # overrides host/port
+
+# File handling configuration
 MAX_FILE_SIZE_MB=100                      # File upload limit
 TEMP_DIR=/tmp/whisper-wrap                # Temporary file storage
 LOG_LEVEL=DEBUG                           # Logging level (DEBUG for development)
 UPLOAD_TIMEOUT_SECONDS=30                 # Processing timeout
 ```
+
+### Port Configuration
+
+The service supports configurable ports for both the API server and whisper-server:
+
+**Configuration Priority:**
+1. `WHISPER_SERVER_URL` (if set) - overrides individual host/port components
+2. `WHISPER_SERVER_HOST` + `WHISPER_SERVER_PORT` - recommended for flexibility
+3. Default: `http://localhost:9000`
+
+**Port Validation:**
+- Both ports must be in valid range (1-65535)
+- Ports cannot be the same when running on the same host
+- Validation occurs on startup with clear error messages
 
 ## whisper-server Integration
 
@@ -109,7 +132,11 @@ make run-whisper        # Start whisper-server only
 **Manual Setup:**
 ```bash
 cd ../whisper.cpp
+# Default ports
 ./build/bin/whisper-server --host 0.0.0.0 --port 9000 -m ./models/ggml-large-v3-turbo-q8_0.bin -l 'auto' -tdrz
+
+# Custom ports (set environment variables or use Makefile)
+WHISPER_SERVER_PORT=9001 make run-whisper
 ```
 
 **Model Information:**

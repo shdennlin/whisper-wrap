@@ -22,10 +22,10 @@ async def lifespan(app: FastAPI):
     # Check whisper-server connectivity
     if not await whisper_client.health_check():
         logger.warning(
-            f"Cannot connect to whisper-server at {config.WHISPER_SERVER_URL}"
+            f"Cannot connect to whisper-server at {config.whisper_server_url}"
         )
     else:
-        logger.info(f"Connected to whisper-server at {config.WHISPER_SERVER_URL}")
+        logger.info(f"Connected to whisper-server at {config.whisper_server_url}")
 
     yield
 
@@ -52,7 +52,7 @@ async def health_check():
     return {
         "status": "healthy" if whisper_healthy else "degraded",
         "whisper_server": whisper_healthy,
-        "whisper_server_url": config.WHISPER_SERVER_URL,
+        "whisper_server_url": config.whisper_server_url,
     }
 
 
@@ -74,4 +74,7 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Validate port configuration on startup
+    config.validate_ports()
+    
+    uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)

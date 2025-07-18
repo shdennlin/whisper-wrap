@@ -4,8 +4,12 @@ services:
     image: whisper-wrap:latest
     container_name: whisper-wrap
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
     environment:
+      - API_PORT=${API_PORT:-8000}
+      - API_HOST=${API_HOST:-0.0.0.0}
+      - WHISPER_SERVER_PORT=${WHISPER_SERVER_PORT:-9000}
+      - WHISPER_SERVER_HOST=${WHISPER_SERVER_HOST:-localhost}
       - MAX_FILE_SIZE_MB=200
       - TEMP_DIR=/tmp/whisper-wrap
       - LOG_LEVEL=INFO

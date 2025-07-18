@@ -10,8 +10,12 @@ class WhisperClient:
     """HTTP client for communicating with whisper-server."""
 
     def __init__(self):
-        self.base_url = config.WHISPER_SERVER_URL
         self.timeout = config.UPLOAD_TIMEOUT_SECONDS
+
+    @property
+    def base_url(self) -> str:
+        """Get the current whisper server URL."""
+        return config.whisper_server_url
 
     async def transcribe(self, wav_file_path: Path) -> Dict[str, Any]:
         """Send WAV file to whisper-server for transcription."""

@@ -5,7 +5,14 @@
 WHISPER_DIR := ../whisper.cpp
 WHISPER_BINARY := $(WHISPER_DIR)/build/bin/whisper-server
 WHISPER_MODEL := $(WHISPER_DIR)/models/ggml-large-v3-turbo-q8_0.bin
-WHISPER_CMD := ./build/bin/whisper-server --host 0.0.0.0 --port 9000 -m ./models/ggml-large-v3-turbo-q8_0.bin -l 'auto' -tdrz
+
+# Port configuration (can be overridden by environment variables)
+API_PORT ?= 8000
+API_HOST ?= 0.0.0.0
+WHISPER_SERVER_PORT ?= 9000
+WHISPER_SERVER_HOST ?= 0.0.0.0
+
+WHISPER_CMD := ./build/bin/whisper-server --host $(WHISPER_SERVER_HOST) --port $(WHISPER_SERVER_PORT) -m ./models/ggml-large-v3-turbo-q8_0.bin -l 'auto' -tdrz
 
 .PHONY: help setup check-system-deps install-system-deps clone-whisper build-whisper download-model install test lint format clean run dev docker deps
 
@@ -175,8 +182,8 @@ format:
 # Start FastAPI server
 run:
 	@echo "Starting whisper-wrap API server..."
-	@echo "Server will be available at http://localhost:8000"
-	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+	@echo "Server will be available at http://$(API_HOST):$(API_PORT)"
+	uv run uvicorn app.main:app --host $(API_HOST) --port $(API_PORT)
 
 # Start whisper-server
 run-whisper:
@@ -189,7 +196,7 @@ run-whisper:
 		echo "Error: Model not found. Run 'make download-model' first."; \
 		exit 1; \
 	fi
-	@echo "Server will be available at http://localhost:9000"
+	@echo "Server will be available at http://$(WHISPER_SERVER_HOST):$(WHISPER_SERVER_PORT)"
 	@echo "Press Ctrl+C to stop the server"
 	cd $(WHISPER_DIR) && $(WHISPER_CMD)
 
@@ -213,7 +220,7 @@ dev:
 	sleep 2; \
 	echo "Starting FastAPI server..."; \
 	trap "echo 'Stopping services...'; kill $$WHISPER_PID 2>/dev/null || true; exit" INT TERM; \
-	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn app.main:app --reload --host $(API_HOST) --port $(API_PORT)
 
 # Clean build artifacts
 clean:
