@@ -11,6 +11,47 @@ FastAPI wrapper for whisper.cpp with universal audio format support.
 - **Health Monitoring**: Built-in health checks for service monitoring
 - **Production Ready**: Built with FastAPI for performance and reliability
 
+## System Requirements
+
+**Hardware Requirements**:
+- **RAM**: 4GB minimum, 8GB+ recommended (whisper models are memory-intensive)
+- **Disk Space**: ~3GB free space (whisper.cpp compilation + models)
+- **CPU**: Multi-core recommended for faster transcription
+
+**Software Requirements**:
+- **Python**: 3.8 or higher
+- **uv**: Fast Python package manager ([install guide](https://github.com/astral-sh/uv))
+- **git**: For cloning whisper.cpp repository
+- **cmake**: For building whisper.cpp (3.16+)
+- **C++ compiler**: GCC, Clang, or MSVC for compilation
+
+**Operating Systems**:
+- macOS 10.15+ (Intel/Apple Silicon)
+- Ubuntu 18.04+ / Debian 10+
+- RHEL/CentOS 7+ / Fedora 30+
+- Arch Linux (current)
+- Windows 10+ (WSL2 recommended)
+
+## Architecture
+
+whisper-wrap provides a REST API layer over whisper.cpp's whisper-server:
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Client App    │───▶│  whisper-wrap   │───▶│ whisper-server  │
+│  (iOS/Web/CLI)  │    │   (FastAPI)     │    │  (whisper.cpp)  │
+│                 │    │   Port 8000     │    │   Port 9000     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+**Data Flow**:
+1. **Upload**: Client sends audio file to `/transcribe` or `/transcribe-raw`
+2. **Validate**: Check file size, type, and format using libmagic
+3. **Convert**: ffmpeg converts audio to 16kHz mono WAV format
+4. **Transcribe**: Forward WAV file to whisper-server for processing
+5. **Response**: Return JSON with transcription text, language, duration
+6. **Cleanup**: Automatically remove temporary files
+
 ## Prerequisites
 
 ### Automatic Installation (Recommended)
@@ -62,6 +103,8 @@ If you prefer manual installation:
    # All setup is handled by the Makefile
    # See Quick Start section below
    ```
+
+**Setup Time**: Expect 10-30 minutes for first-time installation (internet speed dependent)
 
 ## Quick Start
 
@@ -259,6 +302,27 @@ parent-directory/
 **Audio**: mp3, wav, m4a, flac, ogg, aac, wma
 **Video**: mp4, avi, mov, mkv (audio extraction)
 
+## Whisper Model Information
+
+**Model**: `ggml-large-v3-turbo-q8_0` (default)
+- **Size**: ~1.5GB download
+- **Quality**: High accuracy, optimized for speed
+- **Languages**: 100+ languages supported including:
+  - **Tier 1** (Excellent): English, Spanish, French, German, Italian, Portuguese, Dutch, Russian
+  - **Tier 2** (Very Good): Japanese, Chinese, Korean, Arabic, Hindi, Turkish, Polish
+  - **Tier 3** (Good): 80+ additional languages with varying quality
+  
+**Performance Characteristics**:
+- **Transcription Speed**: ~2-4x real-time (varies by hardware)
+- **Memory Usage**: ~2-4GB RAM during processing
+- **CPU Usage**: Multi-threaded, scales with available cores
+- **Language Detection**: Automatic language detection included
+
+**Audio Quality Guidelines**:
+- **Best**: Clear speech, minimal background noise, 16kHz+ sample rate
+- **Good**: Podcast/call quality, some background noise acceptable
+- **Fair**: Compressed audio, noisy environments (accuracy may vary)
+
 ## Error Handling
 
 The API handles various error conditions:
@@ -270,20 +334,77 @@ The API handles various error conditions:
 
 ## Performance
 
-- **File Size Limit**: 100MB default (configurable)
-- **Timeout**: 30 seconds default (configurable)  
-- **Conversion**: Automatic to 16kHz mono WAV for optimal whisper performance
+**Transcription Timing Estimates**:
+- **1 minute audio**: ~15-30 seconds processing time
+- **10 minute audio**: ~2-5 minutes processing time  
+- **1 hour audio**: ~15-30 minutes processing time
+
+**System Limits**:
+- **File Size**: 100MB default (configurable via MAX_FILE_SIZE_MB)
+- **Timeout**: 30 seconds default (configurable via UPLOAD_TIMEOUT_SECONDS)
+- **Concurrent Requests**: Single-threaded whisper-server (queue requests)
+- **Memory**: Peak usage ~4GB during large file processing
+
+**Optimization**:
+- **Conversion**: Automatic to 16kHz mono WAV for optimal whisper performance  
 - **Cleanup**: Automatic temporary file removal after processing
+- **Caching**: No transcription caching (each request processed fresh)
 
 ## Production Deployment
 
-For production use:
+### Docker Deployment
 
-1. Set appropriate resource limits
-2. Configure logging level
-3. Set up monitoring for /health endpoint
-4. Ensure whisper-server reliability
-5. Configure reverse proxy if needed
+**Quick Docker Setup**:
+```bash
+# Build and run with Docker Compose
+make docker
+
+# Or manually:
+docker build -t whisper-wrap .
+docker run -p 8000:8000 whisper-wrap
+```
+
+**Docker Compose** (recommended):
+```yaml
+version: '3.8'
+services:
+  whisper-wrap:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - MAX_FILE_SIZE_MB=200
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./models:/app/models  # Share models between containers
+    restart: unless-stopped
+```
+
+### Production Considerations
+
+**Resource Planning**:
+1. **Memory**: Allocate 6-8GB RAM for safe operation
+2. **CPU**: Multi-core systems provide better performance  
+3. **Storage**: Monitor temp directory disk usage
+4. **Network**: Consider file upload bandwidth requirements
+
+**Configuration**:
+1. Set appropriate file size limits (`MAX_FILE_SIZE_MB`)
+2. Configure logging level (`LOG_LEVEL=INFO` for production)
+3. Set up monitoring for `/health` endpoint
+4. Configure reverse proxy (nginx/Apache) for SSL/load balancing
+
+**Security**:
+1. **Input Validation**: File type and size limits enforced
+2. **Temporary Files**: Automatic cleanup prevents disk exhaustion
+3. **Network**: Run behind reverse proxy, block direct whisper-server access
+4. **Environment**: Use `.env` file for sensitive configuration
+
+**Monitoring**:
+1. **Health Checks**: `GET /health` endpoint for load balancer health checks
+2. **Logs**: Monitor for ffmpeg errors, whisper-server connectivity issues
+3. **Metrics**: Track request rate, processing time, error rates
+4. **Disk Space**: Monitor temp directory usage
 
 ## Troubleshooting
 
@@ -303,6 +424,54 @@ For production use:
 **libmagic import error**:
 - Install libmagic system dependency  
 - Check with: `python3 -c "import magic"`
+
+**Performance issues**:
+- Check available RAM (whisper needs 2-4GB)
+- Monitor CPU usage during transcription
+- Verify disk space for temporary files
+- Consider shorter audio files for testing
+
+**Audio quality issues**:
+- Ensure audio is clear with minimal background noise
+- Check supported formats list
+- Try converting to WAV format first
+- Verify file isn't corrupted or empty
+
+## Common Use Cases
+
+**iOS Shortcuts Integration**:
+```
+Use "Get Contents of URL" with:
+- URL: http://your-server:8000/transcribe-raw
+- Method: POST  
+- Headers: Content-Type = audio/m4a
+- Body: Select your recorded audio file
+```
+
+**Batch Processing** (command line):
+```bash
+# Process multiple files
+for file in *.mp3; do
+  curl -X POST "http://localhost:8000/transcribe" \
+       -F "file=@$file" \
+       -o "${file%.mp3}.json"
+done
+```
+
+**API Integration** (Python):
+```python
+import httpx
+
+# Transcribe audio file
+with open("audio.mp3", "rb") as f:
+    response = httpx.post(
+        "http://localhost:8000/transcribe-raw",
+        headers={"Content-Type": "audio/mp3"},
+        content=f.read()
+    )
+    transcription = response.json()
+    print(transcription["text"])
+```
 
 ## License
 
