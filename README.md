@@ -2,6 +2,37 @@
 
 FastAPI wrapper for whisper.cpp with universal audio format support.
 
+## Table of Contents
+
+- [Features](#features)
+- [System Requirements](#system-requirements)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [API Documentation](#api-documentation)
+  - [POST /transcribe](#post-transcribe)
+  - [POST /transcribe-raw](#post-transcribe-raw)
+  - [GET /health](#get-health)
+  - [GET /](#get-)
+- [Configuration](#configuration)
+  - [Port Configuration](#port-configuration)
+- [Development](#development)
+  - [Available Make Targets](#available-make-targets)
+  - [Running Tests](#running-tests)
+  - [Code Quality](#code-quality)
+  - [Project Structure](#project-structure)
+- [Supported Formats](#supported-formats)
+- [Whisper Model Information](#whisper-model-information)
+- [Error Handling](#error-handling)
+- [Performance](#performance)
+- [Production Deployment](#production-deployment)
+  - [Docker Deployment](#docker-deployment)
+  - [Production Considerations](#production-considerations)
+- [Troubleshooting](#troubleshooting)
+- [Common Use Cases](#common-use-cases)
+  - [iOS Shortcuts Integration](#ios-shortcuts-integration)
+- [License](#license)
+
 ## Features
 
 - **Universal Format Support**: Accepts any audio/video format (mp3, wav, m4a, flac, ogg, aac, mp4, avi, mov, mkv)
@@ -539,14 +570,48 @@ volumes:
 
 ## Common Use Cases
 
-**iOS Shortcuts Integration**:
+### iOS Shortcuts Integration
+
+**Ready-to-Use Shortcut**: 
+📱 **[Download ASR Shortcut](https://www.icloud.com/shortcuts/698627e2c3934b3e996426b64a943742)**
+
+![iOS Shortcuts Workflow](doc/ios-shortcuts-workflow.jpeg)
+
+This shortcut provides a complete voice transcription workflow:
+- 🎙️ **Record Audio**: Tap to record voice memos
+- 🌐 **Auto-Transcribe**: Sends audio to your whisper-wrap server
+- 📝 **Instant Results**: Displays transcribed text immediately
+- ⚙️ **Configurable**: Easy server URL setup in shortcut settings
+
+**Setup Instructions**:
+1. **Install the shortcut** from the link above
+2. **Configure your server URL** in the shortcut's "Comment" field:
+   - Replace `http://192.168.10.10:8000` with your server address
+   - Use your actual IP address or domain name
+   - Include the correct port (default: 8000)
+3. **Test the shortcut** by running it and recording a short message
+
+**Manual Setup** (alternative):
 ```
-Use "Get Contents of URL" with:
-- URL: http://your-server:8000/transcribe-raw
-- Method: POST  
-- Headers: Content-Type = audio/m4a
-- Body: Select your recorded audio file
+Create a new shortcut with these actions:
+1. Record Audio (or Get File from input)
+2. Get Contents of URL:
+   - URL: http://your-server:8000/transcribe-raw
+   - Method: POST  
+   - Headers: Content-Type = audio/m4a
+   - Request Body: [Audio file from step 1]
+3. Get Dictionary from Contents of URL
+4. Get Dictionary Value for "text"
+5. Show Result (or speak text, save to file, etc.)
 ```
+
+**Configuration Examples**:
+- **Local Network**: `http://192.168.1.100:8000/transcribe-raw`
+- **Custom Port**: `http://192.168.1.100:12000/transcribe-raw`
+- **Remote Server**: `https://your-domain.com/transcribe-raw`
+
+> [!TIP]
+> **Network Setup**: Ensure your iPhone and server are on the same network for local usage, or configure port forwarding/VPN for remote access.
 
 **Batch Processing** (command line):
 ```bash
