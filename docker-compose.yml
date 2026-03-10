@@ -1,6 +1,9 @@
 services:
   whisper-wrap:
-    build: .
+    build:
+      context: .
+      args:
+        MODEL_NAME: ${MODEL_NAME:-large-v3-turbo-q8}
     image: whisper-wrap:latest
     container_name: whisper-wrap
     ports:
@@ -10,15 +13,17 @@ services:
       - API_HOST=${API_HOST:-0.0.0.0}
       - WHISPER_SERVER_PORT=${WHISPER_SERVER_PORT:-9000}
       - WHISPER_SERVER_HOST=${WHISPER_SERVER_HOST:-localhost}
+      - MODEL_NAME=${MODEL_NAME:-large-v3-turbo-q8}
+      - MODEL_PATH=${MODEL_PATH:-/app/models/ggml-large-v3-turbo-q8_0.bin}
       - MAX_FILE_SIZE_MB=200
       - TEMP_DIR=/tmp/whisper-wrap
       - LOG_LEVEL=INFO
       - UPLOAD_TIMEOUT_SECONDS=60
     volumes:
-      - whisper_models:/whisper.cpp/models  # Persist downloaded models (1.5GB)
+      - whisper-models:/app/models  # Persist downloaded models
       # Note: /tmp/whisper-wrap uses container's tmpfs for automatic cleanup
     restart: unless-stopped
 
 volumes:
-  whisper_models:
+  whisper-models:
     driver: local

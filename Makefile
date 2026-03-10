@@ -8,9 +8,13 @@ ifneq (,$(wildcard .env))
 endif
 
 # Configuration variables
-WHISPER_DIR := ../whisper.cpp
+WHISPER_DIR := ./whisper.cpp
 WHISPER_BINARY := $(WHISPER_DIR)/build/bin/whisper-server
-WHISPER_MODEL := $(WHISPER_DIR)/models/ggml-large-v3-turbo-q8_0.bin
+MODELS_DIR := ./models
+
+# Model configuration (can be overridden by .env or environment variables)
+MODEL_NAME ?= large-v3-turbo-q8
+MODEL_PATH ?= $(MODELS_DIR)/ggml-large-v3-turbo-q8_0.bin
 
 # Port configuration (can be overridden by environment variables)
 API_PORT ?= 8000
@@ -18,35 +22,42 @@ API_HOST ?= 0.0.0.0
 WHISPER_SERVER_PORT ?= 9000
 WHISPER_SERVER_HOST ?= 0.0.0.0
 
-WHISPER_CMD := ./build/bin/whisper-server --host $(WHISPER_SERVER_HOST) --port $(WHISPER_SERVER_PORT) -m ./models/ggml-large-v3-turbo-q8_0.bin -l 'auto' -tdrz
+WHISPER_CMD := $(WHISPER_BINARY) --host $(WHISPER_SERVER_HOST) --port $(WHISPER_SERVER_PORT) -m $(MODEL_PATH) -l 'auto' -tdrz
 
-.PHONY: help setup check-system-deps install-system-deps clone-whisper build-whisper download-model install test lint format clean run dev docker deps
+.PHONY: help setup check-system-deps install-system-deps init-submodule build-whisper download-model download-default-model install test lint format clean run dev docker deps models set-model delete-model
 
 # Default target
 help:
 	@echo "whisper-wrap - FastAPI wrapper for whisper.cpp"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  setup              - Complete setup (check system deps + install + build + download model)"
+	@echo "  setup              - Complete setup (deps + install + build + download default model)"
 	@echo "  check-system-deps  - Check required system dependencies"
 	@echo "  install-system-deps- Install system dependencies (macOS/Linux)"
 	@echo "  install            - Install Python dependencies with uv"
-	@echo "  clone-whisper      - Clone whisper.cpp repository to parent directory"
+	@echo "  init-submodule     - Initialize whisper.cpp git submodule"
 	@echo "  build-whisper      - Build whisper.cpp using cmake"
-	@echo "  download-model     - Download whisper model"
-	@echo "  test           - Run test suite"
-	@echo "  lint           - Run code linting"
-	@echo "  format         - Format code"
-	@echo "  run            - Start the FastAPI server"
-	@echo "  run-whisper    - Start whisper-server"
-	@echo "  dev            - Start both whisper-server and FastAPI (development)"
-	@echo "  clean          - Clean build artifacts"
-	@echo "  docker         - Build and run with Docker Compose"
+	@echo "  test               - Run test suite"
+	@echo "  lint               - Run code linting"
+	@echo "  format             - Format code"
+	@echo "  run                - Start the FastAPI server"
+	@echo "  run-whisper        - Start whisper-server"
+	@echo "  dev                - Start both whisper-server and FastAPI (development)"
+	@echo "  clean              - Clean build artifacts"
+	@echo "  docker             - Build and run with Docker Compose"
+	@echo ""
+	@echo "Model management:"
+	@echo "  models             - List all models (registry + installed + active)"
+	@echo "  download-model     - Download a model: make download-model MODEL=breeze-asr-25"
+	@echo "  set-model          - Set active model: make set-model MODEL=breeze-asr-25"
+	@echo "  delete-model       - Delete a model: make delete-model MODEL=breeze-asr-25"
 	@echo ""
 
 # Complete setup
-setup: check-system-deps install clone-whisper build-whisper download-model
-	@echo "Setup complete! You can now run 'make dev' to start both services."
+setup: check-system-deps install init-submodule build-whisper download-default-model
+	@echo ""
+	@echo "Setup complete! Run 'make models' to see available models."
+	@echo "Start with: make dev"
 
 # Check system dependencies
 check-system-deps:
@@ -137,38 +148,48 @@ install:
 	@echo "Installing Python dependencies..."
 	uv sync
 
-# Clone whisper.cpp repository
-clone-whisper:
-	@echo "Cloning whisper.cpp repository..."
-	@if [ ! -d "$(WHISPER_DIR)" ]; then \
-		echo "Cloning whisper.cpp to $(WHISPER_DIR)..."; \
-		git clone https://github.com/ggml-org/whisper.cpp.git $(WHISPER_DIR); \
+# Initialize whisper.cpp submodule
+init-submodule:
+	@echo "Initializing whisper.cpp submodule..."
+	@if [ ! -d "$(WHISPER_DIR)/.git" ] && [ ! -f "$(WHISPER_DIR)/.git" ]; then \
+		git submodule update --init --recursive; \
 	else \
-		echo "whisper.cpp already exists at $(WHISPER_DIR)"; \
+		echo "whisper.cpp submodule already initialized."; \
 	fi
 
 # Build whisper.cpp
 build-whisper:
 	@echo "Building whisper.cpp..."
-	@if [ ! -d "$(WHISPER_DIR)" ]; then \
-		echo "Error: whisper.cpp not found. Run 'make clone-whisper' first."; \
+	@if [ ! -d "$(WHISPER_DIR)" ] || { [ ! -d "$(WHISPER_DIR)/.git" ] && [ ! -f "$(WHISPER_DIR)/.git" ]; }; then \
+		echo "Error: whisper.cpp not found. Run 'make init-submodule' first."; \
 		exit 1; \
 	fi
 	cd $(WHISPER_DIR) && cmake -B build
 	cd $(WHISPER_DIR) && cmake --build build -j --config Release
 
-# Download whisper model
+# Download default model from registry
+download-default-model:
+	@bash scripts/model-manager.sh download-default
+
+# ── Model management ─────────────────────────────────────────────────────────
+
+# List all models (registry + installed + active)
+models:
+	@bash scripts/model-manager.sh list
+
+# Download a model: make download-model MODEL=breeze-asr-25
 download-model:
-	@echo "Downloading whisper model..."
-	@if [ ! -d "$(WHISPER_DIR)" ]; then \
-		echo "Error: whisper.cpp not found. Run 'make clone-whisper' first."; \
-		exit 1; \
-	fi
-	@if [ ! -f "$(WHISPER_MODEL)" ]; then \
-		cd $(WHISPER_DIR) && bash ./models/download-ggml-model.sh large-v3-turbo-q8_0; \
-	else \
-		echo "Model already exists: $(WHISPER_MODEL)"; \
-	fi
+	@bash scripts/model-manager.sh download $(MODEL)
+
+# Set active model: make set-model MODEL=breeze-asr-25
+set-model:
+	@bash scripts/model-manager.sh set $(MODEL)
+
+# Delete a model: make delete-model MODEL=breeze-asr-25
+delete-model:
+	@bash scripts/model-manager.sh delete $(MODEL)
+
+# ── Development ───────────────────────────────────────────────────────────────
 
 # Run tests
 test:
@@ -198,13 +219,15 @@ run-whisper:
 		echo "Error: whisper-server not built. Run 'make build-whisper' first."; \
 		exit 1; \
 	fi
-	@if [ ! -f "$(WHISPER_MODEL)" ]; then \
-		echo "Error: Model not found. Run 'make download-model' first."; \
+	@if [ ! -f "$(MODEL_PATH)" ]; then \
+		echo "Error: Model not found at $(MODEL_PATH)."; \
+		echo "Run 'make download-model MODEL=$(MODEL_NAME)' first."; \
 		exit 1; \
 	fi
+	@echo "Model: $(MODEL_NAME) ($(MODEL_PATH))"
 	@echo "Server will be available at http://$(WHISPER_SERVER_HOST):$(WHISPER_SERVER_PORT)"
 	@echo "Press Ctrl+C to stop the server"
-	cd $(WHISPER_DIR) && $(WHISPER_CMD)
+	$(WHISPER_CMD)
 
 # Development mode - start both services
 dev:
@@ -215,12 +238,14 @@ dev:
 		echo "Error: whisper-server not built. Run 'make setup' first."; \
 		exit 1; \
 	fi
-	@if [ ! -f "$(WHISPER_MODEL)" ]; then \
-		echo "Error: Model not found. Run 'make setup' first."; \
+	@if [ ! -f "$(MODEL_PATH)" ]; then \
+		echo "Error: Model not found at $(MODEL_PATH)."; \
+		echo "Run 'make download-model MODEL=$(MODEL_NAME)' or 'make setup' first."; \
 		exit 1; \
 	fi
+	@echo "Model: $(MODEL_NAME) ($(MODEL_PATH))"
 	@# Start whisper-server in background
-	cd $(WHISPER_DIR) && $(WHISPER_CMD) & \
+	$(WHISPER_CMD) & \
 	WHISPER_PID=$$!; \
 	echo "Whisper-server started with PID $$WHISPER_PID"; \
 	sleep 2; \

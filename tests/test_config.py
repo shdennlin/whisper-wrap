@@ -1,6 +1,8 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from app.config import Config
 
 
@@ -52,3 +54,36 @@ def test_ensure_temp_dir():
         assert not test_dir.exists()
         config.ensure_temp_dir()
         assert test_dir.exists()
+
+
+def test_model_name_default():
+    """Test MODEL_NAME defaults to large-v3-turbo-q8."""
+    config = Config()
+    assert config.MODEL_NAME == "large-v3-turbo-q8"
+
+
+def test_model_path_default():
+    """Test MODEL_PATH defaults to the expected model binary path."""
+    config = Config()
+    assert config.MODEL_PATH == Path("./models/ggml-large-v3-turbo-q8_0.bin")
+
+
+def test_validate_model_missing_file():
+    """Test validate_model raises FileNotFoundError when model file doesn't exist."""
+    config = Config()
+    config.MODEL_PATH = Path("/nonexistent/path/model.bin")
+
+    with pytest.raises(FileNotFoundError, match="Model not found"):
+        config.validate_model()
+
+
+def test_validate_model_existing_file(tmp_path):
+    """Test validate_model succeeds when model file exists."""
+    model_file = tmp_path / "ggml-test-model.bin"
+    model_file.write_bytes(b"fake model data")
+
+    config = Config()
+    config.MODEL_PATH = model_file
+
+    # Should not raise
+    config.validate_model()
