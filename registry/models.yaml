@@ -33,11 +33,18 @@ models:
     description: "OpenAI Whisper large-v3-turbo (8-bit quantized, smaller + faster)"
 
   breeze-asr-25:
-    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-Breeze-ASR-25.bin"
-    filename: "ggml-Breeze-ASR-25.bin"
-    size: "~3GB"
+    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-model.bin"
+    filename: "ggml-breeze-asr-25.bin"
+    size: "3.1GB"
     languages: [zh-TW, en]
     description: "MediaTek Breeze ASR 25 - Taiwanese Mandarin + English code-switching"
+
+  breeze-asr-25-q8:
+    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-model-q8_0.bin"
+    filename: "ggml-breeze-asr-25-q8_0.bin"
+    size: "1.7GB"
+    languages: [zh-TW, en]
+    description: "MediaTek Breeze ASR 25 (8-bit quantized, smaller + faster)"
 
   large-v3:
     url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"

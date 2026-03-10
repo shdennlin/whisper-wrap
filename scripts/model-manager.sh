@@ -219,8 +219,18 @@ cmd_download() {
     echo "Saving to: $MODELS_DIR/$filename"
     echo ""
 
-    if ! curl -L --progress-bar -o "$MODELS_DIR/$filename" "$url"; then
-        echo "Error: Download failed."
+    if ! curl -fL --progress-bar -o "$MODELS_DIR/$filename" "$url"; then
+        echo "Error: Download failed (HTTP error or network issue)."
+        rm -f "$MODELS_DIR/$filename"
+        exit 1
+    fi
+
+    # Validate download — real models are at least 1MB
+    local file_bytes
+    file_bytes=$(stat -f%z "$MODELS_DIR/$filename" 2>/dev/null || stat --printf="%s" "$MODELS_DIR/$filename" 2>/dev/null || echo 0)
+    if [ "$file_bytes" -lt 1048576 ]; then
+        echo "Error: Downloaded file is too small (${file_bytes} bytes) — likely not a valid model."
+        echo "The URL may be incorrect or the file may have moved."
         rm -f "$MODELS_DIR/$filename"
         exit 1
     fi
@@ -229,8 +239,6 @@ cmd_download() {
     echo "Download complete: $MODELS_DIR/$filename"
 
     # Show file size
-    local file_bytes
-    file_bytes=$(stat -f%z "$MODELS_DIR/$filename" 2>/dev/null || stat --printf="%s" "$MODELS_DIR/$filename" 2>/dev/null || echo 0)
     if [ "$file_bytes" -gt 1073741824 ]; then
         echo "Size: $(echo "scale=1; $file_bytes / 1073741824" | bc)GB"
     elif [ "$file_bytes" -gt 1048576 ]; then

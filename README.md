@@ -87,7 +87,8 @@ whisper-wrap includes a built-in model registry with 6 pre-configured models:
 |-------|------|-----------|-------------|
 | `large-v3-turbo` | 1.6GB | Multilingual | Fast, general purpose |
 | **`large-v3-turbo-q8`** | 874MB | Multilingual | 8-bit quantized (default) |
-| `breeze-asr-25` | ~3GB | zh-TW, en | Taiwanese Mandarin + English code-switching |
+| `breeze-asr-25` | 3.1GB | zh-TW, en | Taiwanese Mandarin + English code-switching |
+| `breeze-asr-25-q8` | 1.7GB | zh-TW, en | Breeze ASR 25 (8-bit quantized) |
 | `large-v3` | 3.1GB | Multilingual | Highest accuracy, slower |
 | `medium` | 1.5GB | Multilingual | Balanced speed/accuracy |
 | `base` | 148MB | Multilingual | Lightweight, fast |
