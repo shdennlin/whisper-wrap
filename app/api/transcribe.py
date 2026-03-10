@@ -1,8 +1,8 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 
 from app.config import config
 from app.services.converter import audio_converter
@@ -15,7 +15,11 @@ router = APIRouter()
 
 
 @router.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: str = Query("auto", description="Spoken language code (e.g., 'en', 'zh') or 'auto' for detection"),
+    prompt: Optional[str] = Query(None, description="Initial prompt to guide transcription style and punctuation"),
+) -> Dict[str, Any]:
     """
     Transcribe an audio file to text.
 
@@ -64,7 +68,9 @@ async def transcribe_audio(file: UploadFile = File(...)) -> Dict[str, Any]:
         temp_wav_file = audio_converter.convert_to_wav(temp_input_file)
 
         # Send to whisper-server for transcription
-        transcription = await whisper_client.transcribe(temp_wav_file)
+        transcription = await whisper_client.transcribe(
+            temp_wav_file, language=language, prompt=prompt
+        )
 
         # Return the transcription result
         return transcription
@@ -87,7 +93,11 @@ async def transcribe_audio(file: UploadFile = File(...)) -> Dict[str, Any]:
 
 
 @router.post("/transcribe-raw")
-async def transcribe_raw_audio(request: Request) -> Dict[str, Any]:
+async def transcribe_raw_audio(
+    request: Request,
+    language: str = Query("auto", description="Spoken language code (e.g., 'en', 'zh') or 'auto' for detection"),
+    prompt: Optional[str] = Query(None, description="Initial prompt to guide transcription style and punctuation"),
+) -> Dict[str, Any]:
     """
     Transcribe raw audio data from request body.
 
@@ -155,7 +165,9 @@ async def transcribe_raw_audio(request: Request) -> Dict[str, Any]:
         temp_wav_file = audio_converter.convert_to_wav(temp_input_file)
 
         # Send to whisper-server for transcription
-        transcription = await whisper_client.transcribe(temp_wav_file)
+        transcription = await whisper_client.transcribe(
+            temp_wav_file, language=language, prompt=prompt
+        )
 
         # Return the transcription result
         return transcription
