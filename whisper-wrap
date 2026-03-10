@@ -1,0 +1,38 @@
+#!/bin/bash
+# whisper-wrap - simple CLI for managing the service
+
+set -euo pipefail
+
+case "${1:-help}" in
+  setup)      make setup ;;
+  start)      make dev ;;
+  run)        make run ;;
+  models)     make models ;;
+  download)   make download-model MODEL="${2:-}" ;;
+  use)        make set-model MODEL="${2:-}" ;;
+  delete)     make delete-model MODEL="${2:-}" ;;
+  build)      make build-whisper ;;
+  test)       make test ;;
+  help|"")
+    echo "whisper-wrap - FastAPI wrapper for whisper.cpp"
+    echo ""
+    echo "Usage: ./whisper-wrap <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  setup              Complete first-time setup"
+    echo "  start              Start both services (dev mode)"
+    echo "  run                Start FastAPI server only"
+    echo "  models             List available models"
+    echo "  download <name>    Download a model"
+    echo "  use <name>         Set active model"
+    echo "  delete <name>      Delete a downloaded model"
+    echo "  build              Build whisper.cpp"
+    echo "  test               Run test suite"
+    echo "  help               Show this help"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Run './whisper-wrap help' for usage."
+    exit 1
+    ;;
+esac

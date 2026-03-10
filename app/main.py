@@ -18,6 +18,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting whisper-wrap API server")
     config.ensure_temp_dir()
+    logger.info(f"whisper-wrap starting with model: {config.MODEL_NAME} ({config.MODEL_PATH})")
+
+    # Warn if model file is missing (whisper-server may host it independently)
+    try:
+        config.validate_model()
+    except FileNotFoundError as e:
+        logger.warning(str(e))
 
     # Check whisper-server connectivity
     if not await whisper_client.health_check():
@@ -51,6 +58,7 @@ async def health_check():
 
     return {
         "status": "healthy" if whisper_healthy else "degraded",
+        "model": config.MODEL_NAME,
         "whisper_server": whisper_healthy,
         "whisper_server_url": config.whisper_server_url,
     }
@@ -76,5 +84,5 @@ if __name__ == "__main__":
 
     # Validate port configuration on startup
     config.validate_ports()
-    
+
     uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)

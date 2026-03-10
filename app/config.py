@@ -13,11 +13,15 @@ class Config:
     # Server port configuration
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
-    
+
     # Whisper server configuration
     WHISPER_SERVER_URL: str = os.getenv("WHISPER_SERVER_URL", "http://localhost:9000")
     WHISPER_SERVER_PORT: int = int(os.getenv("WHISPER_SERVER_PORT", "9000"))
     WHISPER_SERVER_HOST: str = os.getenv("WHISPER_SERVER_HOST", "localhost")
+
+    # Model configuration
+    MODEL_NAME: str = os.getenv("MODEL_NAME", "large-v3-turbo-q8")
+    MODEL_PATH: Path = Path(os.getenv("MODEL_PATH", "./models/ggml-large-v3-turbo-q8_0.bin"))
 
     # File handling configuration
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
@@ -52,12 +56,20 @@ class Config:
 
         if not is_valid_port(self.API_PORT):
             raise ValueError(f"Invalid API_PORT: {self.API_PORT}. Must be between 1-65535.")
-        
+
         if not is_valid_port(self.WHISPER_SERVER_PORT):
             raise ValueError(f"Invalid WHISPER_SERVER_PORT: {self.WHISPER_SERVER_PORT}. Must be between 1-65535.")
-        
+
         if self.API_PORT == self.WHISPER_SERVER_PORT and self.API_HOST == self.WHISPER_SERVER_HOST:
-            raise ValueError(f"API_PORT and WHISPER_SERVER_PORT cannot be the same when running on the same host.")
+            raise ValueError("API_PORT and WHISPER_SERVER_PORT cannot be the same when running on the same host.")
+
+    def validate_model(self) -> None:
+        """Validate that the configured model file exists."""
+        if not self.MODEL_PATH.exists():
+            raise FileNotFoundError(
+                f"Model not found: {self.MODEL_PATH}. "
+                f"Run 'make download-model MODEL={self.MODEL_NAME}' to download it."
+            )
 
 
 # Global configuration instance
