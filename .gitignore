@@ -1,4 +1,5 @@
 .claude/
+.agents/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -203,3 +204,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.spectra/
+openspec/.vector-search.db*
+
+# ASR model files
+models/*.bin
