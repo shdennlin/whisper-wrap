@@ -21,6 +21,7 @@ curl -X POST "http://localhost:8000/transcribe" \
 ## ✨ Features
 
 - **Universal Format Support**: Accepts any audio/video format (mp3, wav, m4a, flac, ogg, aac, mp4, avi, mov, mkv)
+- **Multi-Model Support**: Switch between ASR models via a YAML registry — including [Breeze ASR 25](https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp) for Taiwanese Mandarin + English code-switching
 - **iOS Shortcuts Integration**: Ready-to-use shortcut for voice transcription
 - **Automatic Conversion**: Uses ffmpeg to convert files to WAV format for whisper
 - **Production Ready**: Built with FastAPI, Docker support, health monitoring
@@ -78,6 +79,40 @@ curl -X POST "http://localhost:8000/transcribe-raw" \
 }
 ```
 
+## 🤖 Model Management
+
+whisper-wrap includes a built-in model registry with 6 pre-configured models:
+
+| Model | Size | Languages | Description |
+|-------|------|-----------|-------------|
+| `large-v3-turbo` | 1.6GB | Multilingual | Fast, general purpose |
+| **`large-v3-turbo-q8`** | 874MB | Multilingual | 8-bit quantized (default) |
+| `breeze-asr-25` | ~3GB | zh-TW, en | Taiwanese Mandarin + English code-switching |
+| `large-v3` | 3.1GB | Multilingual | Highest accuracy, slower |
+| `medium` | 1.5GB | Multilingual | Balanced speed/accuracy |
+| `base` | 148MB | Multilingual | Lightweight, fast |
+
+```bash
+# List available models and their install status
+make models
+
+# Download a model
+make download-model MODEL=breeze-asr-25
+
+# Switch active model
+make set-model MODEL=breeze-asr-25
+
+# Delete a model
+make delete-model MODEL=base
+```
+
+Or use the CLI wrapper:
+```bash
+./whisper-wrap models              # List models
+./whisper-wrap download breeze-asr-25   # Download
+./whisper-wrap use breeze-asr-25        # Switch model
+```
+
 ## ⚙️ Configuration
 
 Create a `.env` file for custom configuration:
@@ -90,6 +125,10 @@ API_HOST=0.0.0.0
 WHISPER_SERVER_HOST=localhost
 WHISPER_SERVER_PORT=9000
 
+# Model selection
+MODEL_NAME=large-v3-turbo-q8
+MODEL_PATH=./models/ggml-large-v3-turbo-q8_0.bin
+
 # File handling
 MAX_FILE_SIZE_MB=100
 LOG_LEVEL=INFO
@@ -98,11 +137,11 @@ LOG_LEVEL=INFO
 ## 🐳 Docker Deployment
 
 ```bash
-# Quick start with Docker
+# Quick start with Docker (uses default model: large-v3-turbo-q8)
 make docker
 
-# Or manually
-docker build -t whisper-wrap:latest .
+# Build with a specific model
+docker build --build-arg MODEL_NAME=breeze-asr-25 -t whisper-wrap:latest .
 docker run -p 8000:8000 whisper-wrap:latest
 ```
 
@@ -127,6 +166,7 @@ make lint               # Code quality checks
 ## 🎯 Common Use Cases
 
 - **Voice Memos**: Use iOS Shortcuts for instant voice-to-text
+- **Taiwanese Mandarin**: Use Breeze ASR 25 for zh-TW + English code-switching
 - **Batch Processing**: Process multiple audio files via command line
 - **API Integration**: Embed transcription in your applications
 - **Multi-language Support**: 100+ languages with automatic detection
@@ -182,6 +222,7 @@ This project is built upon the excellent work of:
 - **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** by [ggml-org](https://github.com/ggml-org) - High-performance C++ implementation of OpenAI's Whisper
 - **[OpenAI Whisper](https://github.com/openai/whisper)** - The original speech recognition model and research
 - **[GGML](https://github.com/ggerganov/ggml)** - Tensor library that powers whisper.cpp's efficient inference
+- **[Breeze ASR 25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25)** by [MediaTek Research](https://github.com/MediaTek-Research) - Taiwanese Mandarin + English code-switching ASR model
 
 Special thanks to the whisper.cpp community for creating a fast, local, and production-ready speech-to-text solution.
 
