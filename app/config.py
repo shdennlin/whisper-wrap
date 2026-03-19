@@ -32,7 +32,7 @@ class Config:
     WHISPER_BINARY_PATH: Path = Path(
         os.getenv("WHISPER_BINARY_PATH", "./whisper.cpp/build/bin/whisper-server")
     )
-    WHISPER_AUTO_RESTART: bool = os.getenv("WHISPER_AUTO_RESTART", "false").lower() in (
+    WHISPER_AUTO_RESTART: bool = os.getenv("WHISPER_AUTO_RESTART", "true").lower() in (
         "true", "1", "yes",
     )
     WHISPER_MAX_RETRIES: int = int(os.getenv("WHISPER_MAX_RETRIES", "2"))
