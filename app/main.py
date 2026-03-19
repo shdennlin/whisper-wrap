@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -6,6 +7,7 @@ from fastapi import FastAPI
 from app.api.transcribe import router as transcribe_router
 from app.config import config
 from app.services.whisper import whisper_client
+from app.services.whisper_manager import whisper_manager
 
 # Configure logging
 logging.basicConfig(level=config.LOG_LEVEL)
@@ -26,6 +28,15 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError as e:
         logger.warning(str(e))
 
+    # Start managed whisper-server if auto-restart is enabled
+    if config.WHISPER_AUTO_RESTART:
+        logger.info("WHISPER_AUTO_RESTART is enabled — starting managed whisper-server")
+        try:
+            whisper_manager.start()
+            await asyncio.sleep(2)
+        except FileNotFoundError as e:
+            logger.error("Cannot start managed whisper-server: %s", e)
+
     # Check whisper-server connectivity
     if not await whisper_client.health_check():
         logger.warning(
@@ -37,6 +48,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    if config.WHISPER_AUTO_RESTART:
+        logger.info("Stopping managed whisper-server...")
+        whisper_manager.stop()
     logger.info("Shutting down whisper-wrap API server")
 
 

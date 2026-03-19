@@ -28,6 +28,15 @@ class Config:
     TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "/tmp/whisper-wrap"))
     UPLOAD_TIMEOUT_SECONDS: int = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "30"))
 
+    # Whisper-server process management
+    WHISPER_BINARY_PATH: Path = Path(
+        os.getenv("WHISPER_BINARY_PATH", "./whisper.cpp/build/bin/whisper-server")
+    )
+    WHISPER_AUTO_RESTART: bool = os.getenv("WHISPER_AUTO_RESTART", "false").lower() in (
+        "true", "1", "yes",
+    )
+    WHISPER_MAX_RETRIES: int = int(os.getenv("WHISPER_MAX_RETRIES", "2"))
+
     # Logging configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG")
 

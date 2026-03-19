@@ -45,7 +45,47 @@ class WhisperClient:
 
         Forwards language and prompt to whisper-server's /inference endpoint.
         The text output is stripped of trailing whitespace/newlines.
+
+        When WHISPER_AUTO_RESTART is enabled, automatically restarts the
+        whisper-server on failure and retries the request.
         """
+        max_attempts = config.WHISPER_MAX_RETRIES + 1 if config.WHISPER_AUTO_RESTART else 1
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await self._do_transcribe(
+                    wav_file_path, language=language, prompt=prompt
+                )
+            except RuntimeError as e:
+                last_error = e
+                is_server_error = "server error" in str(e).lower()
+                is_connect_error = "cannot connect" in str(e).lower()
+                is_timeout = "timeout" in str(e).lower()
+
+                if not config.WHISPER_AUTO_RESTART:
+                    raise
+
+                if attempt < max_attempts and (is_server_error or is_connect_error or is_timeout):
+                    logger.warning(
+                        "Transcription attempt %d/%d failed: %s — restarting whisper-server...",
+                        attempt, max_attempts, e,
+                    )
+                    from app.services.whisper_manager import whisper_manager
+                    await whisper_manager.restart()
+                else:
+                    raise
+
+        raise last_error  # type: ignore[misc]
+
+    async def _do_transcribe(
+        self,
+        wav_file_path: Path,
+        *,
+        language: str = "auto",
+        prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute a single transcription request."""
         if not wav_file_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_file_path}")
 
