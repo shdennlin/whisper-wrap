@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -28,7 +27,9 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError as e:
         logger.warning(str(e))
 
-    # Log auto-restart status
+    # Check initial whisper-server connectivity
+    healthy = await whisper_client.health_check()
+
     if config.WHISPER_AUTO_RESTART:
         logger.info(
             "WHISPER_AUTO_RESTART is enabled (max_retries=%d) — "
@@ -36,22 +37,20 @@ async def lifespan(app: FastAPI):
             config.WHISPER_MAX_RETRIES,
         )
 
-        # Only start a managed whisper-server if one isn't already running
-        if not await whisper_client.health_check():
-            logger.info("No healthy whisper-server found — starting managed instance")
-            try:
-                whisper_manager.start()
-                await asyncio.sleep(2)
-            except FileNotFoundError as e:
-                logger.error("Cannot start managed whisper-server: %s", e)
-        else:
+        if healthy:
             logger.info(
                 "whisper-server already running at %s — will take over on crash",
                 config.whisper_server_url,
             )
+        else:
+            logger.info("No healthy whisper-server found — starting managed instance")
+            try:
+                whisper_manager.start()
+                healthy = await whisper_manager._wait_for_ready()
+            except FileNotFoundError as e:
+                logger.error("Cannot start managed whisper-server: %s", e)
 
-    # Check whisper-server connectivity
-    if not await whisper_client.health_check():
+    if not healthy:
         logger.warning(
             f"Cannot connect to whisper-server at {config.whisper_server_url}"
         )
@@ -63,7 +62,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     if config.WHISPER_AUTO_RESTART:
         logger.info("Stopping managed whisper-server...")
-        whisper_manager.stop()
+        await whisper_manager.stop()
     logger.info("Shutting down whisper-wrap API server")
 
 

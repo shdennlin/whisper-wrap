@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import httpx
+
 from app.config import config
 
 logger = logging.getLogger(__name__)
@@ -29,9 +31,7 @@ class WhisperServerManager:
 
     @property
     def is_running(self) -> bool:
-        if self._process is not None and self._process.poll() is None:
-            return True
-        return False
+        return self._process is not None and self._process.poll() is None
 
     def _find_external_pid(self) -> Optional[int]:
         """Find a whisper-server process listening on the configured port.
@@ -58,7 +58,7 @@ class WhisperServerManager:
             pass
         return None
 
-    def _kill_pid(self, pid: int) -> None:
+    async def _kill_pid(self, pid: int) -> None:
         """Send SIGTERM then SIGKILL to an external PID."""
         logger.info("Stopping external whisper-server (PID %d)...", pid)
         try:
@@ -72,8 +72,7 @@ class WhisperServerManager:
             except ProcessLookupError:
                 logger.info("External whisper-server (PID %d) stopped", pid)
                 return
-            import time
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
         logger.warning("External whisper-server (PID %d) did not stop, killing...", pid)
         try:
@@ -113,7 +112,7 @@ class WhisperServerManager:
         )
         logger.info("whisper-server started with PID %d", self._process.pid)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop the whisper-server process gracefully.
 
         Handles both self-started and externally started processes.
@@ -138,7 +137,7 @@ class WhisperServerManager:
 
         external_pid = self._find_external_pid()
         if external_pid is not None:
-            self._kill_pid(external_pid)
+            await self._kill_pid(external_pid)
 
     async def restart(self) -> None:
         """Restart the whisper-server process with readiness check.
@@ -149,7 +148,7 @@ class WhisperServerManager:
         """
         async with self._restart_lock:
             logger.warning("Restarting whisper-server...")
-            self.stop()
+            await self.stop()
 
             await asyncio.sleep(1)
 
@@ -166,24 +165,22 @@ class WhisperServerManager:
         self, timeout: float = 30, interval: float = 1.0
     ) -> bool:
         """Poll the health endpoint until the server is ready or timeout."""
-        import httpx
-
         elapsed = 0.0
-        while elapsed < timeout:
-            if not self.is_running:
-                logger.error("whisper-server process exited during startup")
-                return False
+        async with httpx.AsyncClient(timeout=3) as client:
+            while elapsed < timeout:
+                if not self.is_running:
+                    logger.error("whisper-server process exited during startup")
+                    return False
 
-            try:
-                async with httpx.AsyncClient(timeout=3) as client:
+                try:
                     resp = await client.get(f"{config.whisper_server_url}/health")
                     if resp.status_code == 200:
                         return True
-            except (httpx.ConnectError, httpx.TimeoutException):
-                pass
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass
 
-            await asyncio.sleep(interval)
-            elapsed += interval
+                await asyncio.sleep(interval)
+                elapsed += interval
 
         return False
 

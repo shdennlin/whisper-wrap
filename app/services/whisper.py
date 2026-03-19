@@ -23,6 +23,22 @@ _DEFAULT_PUNCTUATION_PROMPT = (
 )
 
 
+class WhisperServerError(RuntimeError):
+    """Whisper-server returned a non-200 status code."""
+
+
+class WhisperConnectError(RuntimeError):
+    """Cannot connect to whisper-server."""
+
+
+class WhisperTimeoutError(RuntimeError):
+    """Whisper-server request timed out."""
+
+
+# Union of all retryable whisper errors
+WhisperRetryableError = (WhisperServerError, WhisperConnectError, WhisperTimeoutError)
+
+
 class WhisperClient:
     """HTTP client for communicating with whisper-server."""
 
@@ -57,24 +73,18 @@ class WhisperClient:
                 return await self._do_transcribe(
                     wav_file_path, language=language, prompt=prompt
                 )
-            except RuntimeError as e:
+            except WhisperRetryableError as e:
                 last_error = e
-                is_server_error = "server error" in str(e).lower()
-                is_connect_error = "cannot connect" in str(e).lower()
-                is_timeout = "timeout" in str(e).lower()
 
-                if not config.WHISPER_AUTO_RESTART:
+                if not config.WHISPER_AUTO_RESTART or attempt >= max_attempts:
                     raise
 
-                if attempt < max_attempts and (is_server_error or is_connect_error or is_timeout):
-                    logger.warning(
-                        "Transcription attempt %d/%d failed: %s — restarting whisper-server...",
-                        attempt, max_attempts, e,
-                    )
-                    from app.services.whisper_manager import whisper_manager
-                    await whisper_manager.restart()
-                else:
-                    raise
+                logger.warning(
+                    "Transcription attempt %d/%d failed: %s — restarting whisper-server...",
+                    attempt, max_attempts, e,
+                )
+                from app.services.whisper_manager import whisper_manager
+                await whisper_manager.restart()
 
         raise last_error  # type: ignore[misc]
 
@@ -89,8 +99,6 @@ class WhisperClient:
         if not wav_file_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_file_path}")
 
-        files = {"file": ("audio.wav", open(wav_file_path, "rb"), "audio/wav")}
-
         effective_prompt = prompt or _DEFAULT_PUNCTUATION_PROMPT
 
         data = {
@@ -102,48 +110,51 @@ class WhisperClient:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/inference", files=files, data=data
-                )
-
-                if response.status_code != 200:
-                    raise RuntimeError(
-                        f"Whisper server error {response.status_code}: {response.text}"
+            with open(wav_file_path, "rb") as f:
+                files = {"file": ("audio.wav", f, "audio/wav")}
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        f"{self.base_url}/inference", files=files, data=data
                     )
 
-                result = response.json()
-
-                if "text" in result:
-                    raw_text = result["text"]
-                    text = raw_text.strip()
-                    detected_lang = detect_text_language(text)
-                    joined_text = join_newline_segments(text)
-                    normalized_text = normalize_punctuation(joined_text, detected_lang)
-
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "Transcription result:\n"
-                            "  prompt:     %r\n"
-                            "  raw:        %r\n"
-                            "  detected:   %s\n"
-                            "  joined:     %r\n"
-                            "  normalized: %r",
-                            effective_prompt, raw_text, detected_lang,
-                            joined_text, normalized_text,
+                    if response.status_code != 200:
+                        raise WhisperServerError(
+                            f"Whisper server error {response.status_code}: {response.text}"
                         )
 
-                    result = {**result, "text": normalized_text}
+                    result = response.json()
 
-                return result
+                    if "text" in result:
+                        raw_text = result["text"]
+                        text = raw_text.strip()
+                        detected_lang = detect_text_language(text)
+                        joined_text = join_newline_segments(text)
+                        normalized_text = normalize_punctuation(joined_text, detected_lang)
+
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Transcription result:\n"
+                                "  prompt:     %r\n"
+                                "  raw:        %r\n"
+                                "  detected:   %s\n"
+                                "  joined:     %r\n"
+                                "  normalized: %r",
+                                effective_prompt, raw_text, detected_lang,
+                                joined_text, normalized_text,
+                            )
+
+                        result = {**result, "text": normalized_text}
+
+                    return result
 
         except httpx.TimeoutException:
-            raise RuntimeError(f"Whisper server timeout after {self.timeout} seconds")
+            raise WhisperTimeoutError(
+                f"Whisper server timeout after {self.timeout} seconds"
+            )
         except httpx.ConnectError:
-            raise RuntimeError(f"Cannot connect to whisper server at {self.base_url}")
-        finally:
-            if "files" in locals():
-                files["file"][1].close()
+            raise WhisperConnectError(
+                f"Cannot connect to whisper server at {self.base_url}"
+            )
 
     async def health_check(self) -> bool:
         """Check if whisper-server is responding."""
