@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [v1.2.0] — 2026-03-19
+
+### Developer Changelog
+
+#### Features
+
+- **whisper**: add auto-restart process manager for whisper-server (927e846)
+- **config**: enable auto-restart by default and skip managed start if server is healthy (490943d)
+
+#### Bug Fixes
+
+- **transcribe, whisper_manager**: handle `audio/x-m4a` MIME type and external whisper-server processes (9720159)
+
+#### Refactoring
+
+- **whisper**: make server lifecycle async and introduce typed errors (12a190a)
+
+---
+
+### What's New
+
+whisper-wrap can now manage the whisper-server process directly. When the server crashes or becomes unresponsive, whisper-wrap automatically restarts it and retries your transcription request — no manual intervention needed. This feature is enabled out of the box, so existing deployments will benefit immediately after upgrading.
+
+### Fixed
+
+iOS devices that send audio with the `audio/x-m4a` content type will now be handled correctly. Previously, those requests could fail due to an unrecognized MIME type.
+
+The service also now detects whisper-server processes that were started externally (e.g. via `make dev`) and cleans them up properly on shutdown, preventing orphaned processes.
+
+### Improved
+
+The internal whisper-server connection layer was rewritten to be fully asynchronous. Error handling is now backed by distinct exception types (`WhisperServerError`, `WhisperConnectError`, `WhisperTimeoutError`) instead of string matching. A file-handle leak during transcription was also fixed.
+
+---
+
 ## [v1.1.0] — 2026-03-10
 
 ### Developer Changelog
