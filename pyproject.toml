@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "faster-whisper>=1.0.0",
     "google-genai>=0.3.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]

@@ -1,68 +1,47 @@
 # =============================================================================
-# Model Registry for whisper-wrap
+# Model Registry for whisper-wrap v2
 # =============================================================================
 #
-# Each model entry requires:
-#   url:         Direct download URL for the GGML model file
-#   filename:    Local filename to save as (used by download scripts)
-#   size:        Approximate file size (for user reference)
-#   languages:   List of supported languages or [multilingual]
-#   description: Brief description of the model
+# Required fields:
+#   repo_id:      Hugging Face repository ID (e.g. "shdennlin/breeze-asr-25-ct2")
+#   format:       Format discriminator. v2 ONLY accepts "ct2" (CTranslate2).
+#                 Reserved for future formats — other values are rejected.
+#   compute_type: Default compute type for the variant (e.g. "int8_float16").
+#                 NOTE: On Apple Silicon CPU, set COMPUTE_TYPE=default in .env so
+#                 CT2 auto-picks the runtime path. This field is metadata only.
+#   local_dir:    Subdirectory under ./models/ to download into.
+#   size:         Approximate disk footprint (informational).
+#   languages:    List of supported languages or [multilingual].
+#   description:  Brief description.
 #
 # Optional fields:
-#   default:     Set to true for the model used when none is specified
+#   subfolder:    Subfolder within the HF repo (use when the repo publishes
+#                 multiple quantisation variants under one repository).
+#   revision:     Commit SHA or branch name for reproducible pins.
+#   default:      Exactly one entry SHALL set this to true. `make setup`
+#                 downloads the default entry.
 #
 # To add a custom model, append an entry under "models:" following the format
 # below. Models are referenced by their key name (e.g. "large-v3-turbo").
 # =============================================================================
 
 models:
+  breeze-asr-25:
+    default: true
+    repo_id: "shdennlin/breeze-asr-25-ct2"
+    format: ct2
+    subfolder: int8_float16
+    compute_type: int8_float16
+    local_dir: breeze-asr-25
+    size: "1.5GB"
+    languages: [zh-TW, en]
+    description: "MediaTek Breeze ASR 25 (CTranslate2 int8_float16) — Taiwanese Mandarin + English code-switching"
+
   large-v3-turbo:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
-    filename: "ggml-large-v3-turbo.bin"
+    repo_id: "Systran/faster-whisper-large-v3-turbo"
+    format: ct2
+    compute_type: int8_float16
+    local_dir: large-v3-turbo
     size: "1.6GB"
     languages: [multilingual]
-    description: "OpenAI Whisper large-v3-turbo - fast, general purpose"
-
-  large-v3-turbo-q8:
-    default: true
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin"
-    filename: "ggml-large-v3-turbo-q8_0.bin"
-    size: "874MB"
-    languages: [multilingual]
-    description: "OpenAI Whisper large-v3-turbo (8-bit quantized, smaller + faster)"
-
-  breeze-asr-25:
-    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-model.bin"
-    filename: "ggml-breeze-asr-25.bin"
-    size: "3.1GB"
-    languages: [zh-TW, en]
-    description: "MediaTek Breeze ASR 25 - Taiwanese Mandarin + English code-switching"
-
-  breeze-asr-25-q8:
-    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-model-q8_0.bin"
-    filename: "ggml-breeze-asr-25-q8_0.bin"
-    size: "1.7GB"
-    languages: [zh-TW, en]
-    description: "MediaTek Breeze ASR 25 (8-bit quantized, smaller + faster)"
-
-  large-v3:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
-    filename: "ggml-large-v3.bin"
-    size: "3.1GB"
-    languages: [multilingual]
-    description: "OpenAI Whisper large-v3 - highest accuracy, slower"
-
-  medium:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
-    filename: "ggml-medium.bin"
-    size: "1.5GB"
-    languages: [multilingual]
-    description: "OpenAI Whisper medium - balanced speed/accuracy"
-
-  base:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-    filename: "ggml-base.bin"
-    size: "148MB"
-    languages: [multilingual]
-    description: "OpenAI Whisper base - lightweight, fast"
+    description: "OpenAI Whisper large-v3-turbo (CTranslate2 int8_float16) — multilingual fallback"
