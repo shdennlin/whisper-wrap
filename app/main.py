@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api.ask import router as ask_router
+from app.api.listen import router as listen_router
 from app.api.status import router as status_router
 from app.api.transcribe import router as transcribe_router
 from app.config import config, load_env_file, warn_obsolete_env_vars
@@ -81,6 +82,7 @@ app = FastAPI(
 app.include_router(transcribe_router)
 app.include_router(ask_router)
 app.include_router(status_router)
+app.include_router(listen_router)
 
 
 if __name__ == "__main__":

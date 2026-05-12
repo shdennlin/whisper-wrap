@@ -77,6 +77,29 @@ class WhisperClient:
     def __init__(self, model: WhisperModel):
         self._model = model
 
+    async def transcribe_pcm(
+        self,
+        samples,
+        *,
+        language: str = "auto",
+        beam_size: int = 1,
+    ) -> str:
+        """Transcribe a float32 audio array (16 kHz mono) and return the joined text.
+
+        Used by the `WS /listen` streaming wrapper, which needs fast, text-only
+        transcripts on partial-cadence intervals. The slower `transcribe()` method
+        is the right choice for one-shot file transcription.
+        """
+        model_language = None if language == "auto" else language
+
+        def _run():
+            segments, _ = self._model.transcribe(
+                samples, language=model_language, beam_size=beam_size
+            )
+            return "".join(seg.text for seg in segments).strip()
+
+        return await asyncio.to_thread(_run)
+
     async def transcribe(
         self,
         wav_file_path: Path,

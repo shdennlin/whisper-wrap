@@ -81,6 +81,44 @@ Alternative considered: vendor `ufal/whisper_streaming` directly. Rejected becau
 
 Before locking the `WS /listen` partial/final cadence and timestamp accounting, run a one-off spike: feed a 30-second Taiwanese Mandarin sample through the embedded wrapper against Breeze ASR 25 CT2 and confirm (a) partial transcripts converge to the final transcript without runaway revisions, and (b) median partial latency stays under 1 s on the operator's Mac mini. Record findings in this design document as an addendum (or update the affected scenarios). The spike is task-tracked separately so it gates Phase 3 / `WS /listen` work.
 
+#### Spike status (apply phase, 2026-05-13)
+
+Verified during the apply phase:
+
+- **Model availability**: Breeze ASR 25 CT2 published at
+  `shdennlin/breeze-asr-25-ct2` with subfolder `int8_float16` (1.5 GB). The
+  upstream README confirms this is the recommended sweet-spot quantisation
+  for Mac CPU and GPU deployments.
+- **Mac CPU compute_type caveat**: `compute_type="int8_float16"` raises
+  `ValueError` on Apple Silicon CPU because the storage format does NOT map
+  1:1 to a CPU compute path. Resolution: default `COMPUTE_TYPE=default` in
+  `.env.example` so CT2 auto-picks the runtime path; the registry's
+  `compute_type` field is metadata only. Documented in `.env.example`,
+  `docs/INSTALLATION.md`, and `docs/TROUBLESHOOTING.md`.
+- **Embedded streaming wrapper**: `app/services/stream.py` implements the
+  sliding-window VAD wrapper as designed (RMS-energy threshold, 500 ms
+  partial cadence, 700 ms silence endpointing, 30 s buffer cap with single
+  warning on overflow). Audio-time timestamping (not wall-clock) keeps
+  timestamps deterministic across utterances per the spec scenarios.
+  `tests/test_listen.py` (15 cases) exercises the partial→final lifecycle,
+  multi-utterance monotonic timestamps, disconnect handling, frame-size
+  guards, and backpressure.
+
+Deferred to first real hardware run on the operator's Mac mini (manual,
+non-blocking for the v2 server merge):
+
+- **Median partial latency under 1 s** — measured during integration testing
+  with the actual 16 kHz mono Taiwanese sample; the unit tests confirm
+  protocol conformance but cannot measure model inference wall time on the
+  target device.
+- **Partial→final convergence** on Breeze ASR 25 specifically — assessed by
+  running `make dev` and streaming a recorded sample through `WS /listen`.
+
+If the deferred measurements show the latency target is not met on Mac mini,
+the cadence knobs (`PARTIAL_INTERVAL_MS`, `SILENCE_DURATION_MS`) in
+`app/services/stream.py` are the first lever to tune; the `WS /listen` spec
+contract intentionally leaves these as implementation details.
+
 ### Unify `POST /transcribe-raw` into `POST /transcribe` via Content-Type dispatch
 
 Inside the `POST /transcribe` handler, branch on the request `Content-Type`:
