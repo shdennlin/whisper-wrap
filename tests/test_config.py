@@ -1,17 +1,11 @@
 """Tests for v2 Config (in-process faster-whisper backend)."""
 
-import importlib
 import logging
 from pathlib import Path
 
 import pytest
 
-
-def _reload_config():
-    from app import config as config_module
-    importlib.reload(config_module)
-    return config_module
-
+from app.config import Config, warn_obsolete_env_vars
 
 OBSOLETE_V1_KEYS = (
     "WHISPER_SERVER_HOST",
@@ -42,8 +36,7 @@ def clean_env(monkeypatch):
 
 
 def test_defaults(clean_env):
-    cm = _reload_config()
-    c = cm.Config()
+    c = Config()
 
     assert c.MODEL_NAME == "breeze-asr-25"
     assert c.MODEL_DIR is None
@@ -58,8 +51,7 @@ def test_defaults(clean_env):
 
 def test_model_dir_override(clean_env):
     clean_env.setenv("MODEL_DIR", "/opt/models/breeze-int8")
-    cm = _reload_config()
-    c = cm.Config()
+    c = Config()
     assert c.MODEL_DIR == "/opt/models/breeze-int8"
     # MODEL_DIR override does NOT clobber MODEL_NAME — both coexist, resolver picks DIR first.
     assert c.MODEL_NAME == "breeze-asr-25"
@@ -67,22 +59,19 @@ def test_model_dir_override(clean_env):
 
 def test_model_name_custom(clean_env):
     clean_env.setenv("MODEL_NAME", "large-v3-turbo")
-    cm = _reload_config()
-    assert cm.Config().MODEL_NAME == "large-v3-turbo"
+    assert Config().MODEL_NAME == "large-v3-turbo"
 
 
 def test_compute_type_and_device_overrides(clean_env):
     clean_env.setenv("COMPUTE_TYPE", "int8_float16")
     clean_env.setenv("DEVICE", "cuda")
-    cm = _reload_config()
-    c = cm.Config()
+    c = Config()
     assert c.COMPUTE_TYPE == "int8_float16"
     assert c.DEVICE == "cuda"
 
 
 def test_gemini_unset_is_none(clean_env):
-    cm = _reload_config()
-    c = cm.Config()
+    c = Config()
     assert c.GEMINI_API_KEY is None
     assert c.GEMINI_MODEL is None
     assert c.GEMINI_SYSTEM_PROMPT is None
@@ -92,8 +81,7 @@ def test_gemini_empty_string_preserved(clean_env):
     """Empty string MUST be preserved (not coerced to None) so llm.py can warn on it."""
     clean_env.setenv("GEMINI_MODEL", "")
     clean_env.setenv("GEMINI_SYSTEM_PROMPT", "")
-    cm = _reload_config()
-    c = cm.Config()
+    c = Config()
     assert c.GEMINI_MODEL == ""
     assert c.GEMINI_SYSTEM_PROMPT == ""
 
@@ -102,24 +90,19 @@ def test_gemini_set_values(clean_env):
     clean_env.setenv("GEMINI_API_KEY", "sk-test")
     clean_env.setenv("GEMINI_MODEL", "gemini-2.0-pro")
     clean_env.setenv("GEMINI_SYSTEM_PROMPT", "You are a helpful assistant.")
-    cm = _reload_config()
-    c = cm.Config()
+    c = Config()
     assert c.GEMINI_API_KEY == "sk-test"
     assert c.GEMINI_MODEL == "gemini-2.0-pro"
     assert c.GEMINI_SYSTEM_PROMPT == "You are a helpful assistant."
 
 
 def test_max_file_size_bytes():
-    from app.config import Config
-
     c = Config()
     c.MAX_FILE_SIZE_MB = 10
     assert c.max_file_size_bytes == 10 * 1024 * 1024
 
 
 def test_ensure_temp_dir(tmp_path):
-    from app.config import Config
-
     c = Config()
     c.TEMP_DIR = tmp_path / "subdir"
     assert not c.TEMP_DIR.exists()
@@ -128,8 +111,6 @@ def test_ensure_temp_dir(tmp_path):
 
 
 def test_validate_port_invalid():
-    from app.config import Config
-
     c = Config()
     c.API_PORT = 70000
     with pytest.raises(ValueError, match="Invalid API_PORT"):
@@ -137,8 +118,6 @@ def test_validate_port_invalid():
 
 
 def test_validate_port_zero():
-    from app.config import Config
-
     c = Config()
     c.API_PORT = 0
     with pytest.raises(ValueError, match="Invalid API_PORT"):
@@ -146,8 +125,6 @@ def test_validate_port_zero():
 
 
 def test_validate_port_ok():
-    from app.config import Config
-
     c = Config()
     c.API_PORT = 8000
     c.validate_port()  # does not raise
@@ -159,8 +136,7 @@ def test_obsolete_v1_key_emits_warning(clean_env, caplog, obsolete_key):
     clean_env.setenv(obsolete_key, "anything")
 
     with caplog.at_level(logging.WARNING, logger="app.config"):
-        cm = _reload_config()
-        cm.warn_obsolete_env_vars()
+        warn_obsolete_env_vars()
 
     matches = [r for r in caplog.records if obsolete_key in r.getMessage()]
     assert len(matches) == 1, f"Expected 1 WARNING for {obsolete_key}, got {len(matches)}"
@@ -170,9 +146,7 @@ def test_obsolete_v1_key_emits_warning(clean_env, caplog, obsolete_key):
 def test_no_warning_when_clean(clean_env, caplog):
     """When zero obsolete vars are set, no obsolete-key WARNING fires."""
     with caplog.at_level(logging.WARNING, logger="app.config"):
-        cm = _reload_config()
-        cm.warn_obsolete_env_vars()
-
+        warn_obsolete_env_vars()
     assert not any("Obsolete v1 env var" in r.getMessage() for r in caplog.records)
 
 
@@ -180,6 +154,5 @@ def test_warn_obsolete_returns_detected_keys(clean_env):
     """The helper returns the detected keys list (for downstream observability/testing)."""
     clean_env.setenv("WHISPER_SERVER_HOST", "x")
     clean_env.setenv("MODEL_PATH", "y")
-    cm = _reload_config()
-    detected = cm.warn_obsolete_env_vars()
+    detected = warn_obsolete_env_vars()
     assert set(detected) == {"WHISPER_SERVER_HOST", "MODEL_PATH"}

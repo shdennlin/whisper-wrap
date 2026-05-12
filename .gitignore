@@ -210,5 +210,6 @@ __marimo__/
 .spectra/
 openspec/.vector-search.db*
 
-# ASR model files
-models/*.bin
+# ASR model artefacts — keep the directory via .gitkeep, ignore everything else
+models/*
+!models/.gitkeep

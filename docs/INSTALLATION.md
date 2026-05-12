@@ -10,6 +10,27 @@ Complete setup guide for whisper-wrap with system requirements and dependencies.
 > or place the service behind a VPN / Tailscale boundary. Bind to `127.0.0.1`
 > (not `0.0.0.0`) when the host has a public network interface.
 
+## Model Directory Layout (v2)
+
+Models live in `./models/<entry.local_dir>/` as CTranslate2 directories. The directory
+is created at clone time via `models/.gitkeep`; downloaded artefacts are gitignored.
+`make download-model MODEL=<name>` uses `hf download` to populate the directory.
+
+### Dropped v1 built-in entries
+
+The v1 GGML registry shipped `large-v3-turbo-q8`, `large-v3`, `medium`, `base`, and a
+GGML `breeze-asr-25`. v2 ships only **`breeze-asr-25`** (default, CT2 `int8_float16`
+from `shdennlin/breeze-asr-25-ct2`) and **`large-v3-turbo`** (from
+`Systran/faster-whisper-large-v3-turbo`). If you depended on a dropped entry, add an
+equivalent CT2 entry to your local `registry/models.yaml`. Suggested replacements:
+
+| v1 (GGML)             | v2 (CT2) repo                                  |
+| --------------------- | ---------------------------------------------- |
+| `large-v3-turbo-q8`   | `Systran/faster-whisper-large-v3-turbo`        |
+| `large-v3`            | `Systran/faster-whisper-large-v3`              |
+| `medium`              | `Systran/faster-whisper-medium`                |
+| `base`                | `Systran/faster-whisper-base`                  |
+
 ## System Requirements
 
 ### Hardware Requirements
