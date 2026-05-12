@@ -1,106 +1,79 @@
+"""FastAPI entry point for the v2 in-process whisper-wrap server.
+
+The lifespan handler eagerly loads the shared `WhisperModel` at startup so every
+endpoint sees a fully-loaded model on the first request and `/status` can always
+report `model.loaded=true`.
+"""
+
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.api.transcribe import router as transcribe_router
-from app.config import config
-from app.services.whisper import whisper_client
-from app.services.whisper_manager import whisper_manager
+from app.config import config, load_env_file, warn_obsolete_env_vars
+from app.services.registry import resolve_model_dir
+from app.services.whisper import WhisperClient, load_model
 
-# Configure logging
-logging.basicConfig(level=config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan management."""
-    # Startup
+    # Surface .env first so subsequent reads see the developer's overrides,
+    # then warn on any v1 keys still hanging around in the environment.
+    load_env_file()
+    logging.basicConfig(level=config.LOG_LEVEL)
     logger.info("Starting whisper-wrap API server")
     config.ensure_temp_dir()
-    logger.info(f"whisper-wrap starting with model: {config.MODEL_NAME} ({config.MODEL_PATH})")
+    warn_obsolete_env_vars()
 
-    # Warn if model file is missing (whisper-server may host it independently)
-    try:
-        config.validate_model()
-    except FileNotFoundError as e:
-        logger.warning(str(e))
+    model_dir = resolve_model_dir(config.MODEL_NAME, config.MODEL_DIR)
+    logger.info(
+        "Loading WhisperModel from %s (compute_type=%s, device=%s)",
+        model_dir,
+        config.COMPUTE_TYPE,
+        config.DEVICE,
+    )
 
-    # Check initial whisper-server connectivity
-    healthy = await whisper_client.health_check()
+    load_start = time.perf_counter()
+    model = load_model(
+        model_dir, compute_type=config.COMPUTE_TYPE, device=config.DEVICE
+    )
+    load_time_ms = int((time.perf_counter() - load_start) * 1000)
 
-    if config.WHISPER_AUTO_RESTART:
-        logger.info(
-            "WHISPER_AUTO_RESTART is enabled (max_retries=%d) — "
-            "whisper-server will be restarted automatically on failure",
-            config.WHISPER_MAX_RETRIES,
-        )
+    app.state.whisper_model = model
+    app.state.whisper_client = WhisperClient(model=model)
+    app.state.model_dir = model_dir
+    app.state.load_time_ms = load_time_ms
+    app.state.lifespan_completed_at = time.time()
 
-        if healthy:
-            logger.info(
-                "whisper-server already running at %s — will take over on crash",
-                config.whisper_server_url,
-            )
-        else:
-            logger.info("No healthy whisper-server found — starting managed instance")
-            try:
-                whisper_manager.start()
-                healthy = await whisper_manager._wait_for_ready()
-            except FileNotFoundError as e:
-                logger.error("Cannot start managed whisper-server: %s", e)
-
-    if not healthy:
-        logger.warning(
-            f"Cannot connect to whisper-server at {config.whisper_server_url}"
-        )
-    else:
-        logger.info(f"Connected to whisper-server at {config.whisper_server_url}")
+    logger.info("WhisperModel loaded in %d ms", load_time_ms)
 
     yield
 
-    # Shutdown
-    if config.WHISPER_AUTO_RESTART:
-        logger.info("Stopping managed whisper-server...")
-        await whisper_manager.stop()
     logger.info("Shutting down whisper-wrap API server")
 
 
 app = FastAPI(
     title="whisper-wrap",
-    description="FastAPI wrapper for whisper.cpp with universal audio format support",
-    version="1.0.0",
+    description="In-process FastAPI server for faster-whisper transcription, Gemini Q&A, and live PCM streaming",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
-# Include API routes
 app.include_router(transcribe_router)
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    whisper_healthy = await whisper_client.health_check()
-
-    return {
-        "status": "healthy" if whisper_healthy else "degraded",
-        "model": config.MODEL_NAME,
-        "whisper_server": whisper_healthy,
-        "whisper_server_url": config.whisper_server_url,
-    }
 
 
 @app.get("/")
 async def root():
-    """Root endpoint with API information."""
     return {
         "name": "whisper-wrap",
-        "version": "1.0.0",
-        "description": "FastAPI wrapper for whisper.cpp with universal audio format support",
+        "version": "2.0.0",
         "endpoints": {
-            "transcribe": "POST /transcribe - Upload audio file for transcription (multipart/form-data)",
-            "transcribe-raw": "POST /transcribe-raw - Send raw audio data for transcription (iOS Shortcuts compatible)",
-            "health": "GET /health - Service health status",
+            "transcribe": "POST /transcribe - audio transcription (multipart, raw audio/*, or application/octet-stream)",
+            "status": "GET /status - service + model + LLM configuration",
         },
     }
 
@@ -108,7 +81,5 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    # Validate port configuration on startup
-    config.validate_ports()
-
+    config.validate_port()
     uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)

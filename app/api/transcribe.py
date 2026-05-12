@@ -7,7 +7,6 @@ from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from app.config import config
 from app.services.converter import audio_converter
 from app.services.files import file_manager
-from app.services.whisper import whisper_client
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ router = APIRouter()
 
 @router.post("/transcribe")
 async def transcribe_audio(
+    request: Request,
     file: UploadFile = File(...),
     language: str = Query("auto", description="Spoken language code (e.g., 'en', 'zh') or 'auto' for detection"),
     prompt: Optional[str] = Query(None, description="Initial prompt to guide transcription style and punctuation"),
@@ -67,9 +67,9 @@ async def transcribe_audio(
         # Convert to WAV format
         temp_wav_file = audio_converter.convert_to_wav(temp_input_file)
 
-        # Send to whisper-server for transcription
+        whisper_client = request.app.state.whisper_client
         transcription = await whisper_client.transcribe(
-            temp_wav_file, language=language, prompt=prompt
+            temp_wav_file, language=language, initial_prompt=prompt
         )
 
         # Return the transcription result
@@ -165,9 +165,9 @@ async def transcribe_raw_audio(
         # Convert to WAV format
         temp_wav_file = audio_converter.convert_to_wav(temp_input_file)
 
-        # Send to whisper-server for transcription
+        whisper_client = request.app.state.whisper_client
         transcription = await whisper_client.transcribe(
-            temp_wav_file, language=language, prompt=prompt
+            temp_wav_file, language=language, initial_prompt=prompt
         )
 
         # Return the transcription result
