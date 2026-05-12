@@ -14,7 +14,7 @@ SCRIPT := ./scripts/model-manager.sh
 
 .PHONY: help setup check-system-deps install-system-deps install \
         download-default-model models download-model set-model delete-model \
-        test lint format clean run dev docker deps
+        test lint format clean run dev docker deps samples transcribe-sample
 
 help:
 	@echo "whisper-wrap (v2)"
@@ -99,6 +99,17 @@ set-model:
 
 delete-model:
 	@bash $(SCRIPT) delete $(MODEL)
+
+# ── Local samples for testing ────────────────────────────────────────────────
+
+samples:
+	@bash scripts/fetch-samples.sh
+
+transcribe-sample:
+	@if [ -z "$(SAMPLE)" ]; then echo "usage: make transcribe-sample SAMPLE=<filename>"; exit 1; fi
+	@curl -s -X POST -H 'Content-Type: audio/wav' \
+		--data-binary @samples/$(SAMPLE) \
+		"http://$(API_HOST):$(API_PORT)/transcribe?language=zh" | jq
 
 # ── Development ──────────────────────────────────────────────────────────────
 
