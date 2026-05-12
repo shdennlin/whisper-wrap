@@ -147,20 +147,29 @@ else:
 
 #### GGML 版本（給 VoiceInk / whisper.cpp 使用者）
 
+> 數字以 **Breeze-ASR-25**（Whisper-**large-v2**, 1.55B 參數）實際轉換結果為準。其他 large-v3-turbo 衍生模型尺寸大約是一半。
+> ⚠️ 命名：whisper.cpp 用小寫 `q4_k` `q5_k`（不是 llama.cpp 的 `q4_K_M`）
+
 | 量化 | 磁碟 | RAM (Core ML) | WER ↑ | 速度 M1 / M2+ | 速度 x86 CPU | 優先度 | 備註 |
 |---|---|---|---|---|---|---|---|
-| f16 | ~3.0 GB | ~3.8 GB | **基準 0%** | 2–3x / 4–6x | 0.8–1.2x | P1 | 原始品質，研究/比較用 |
-| **q8_0** ⭐ | ~800 MB | **~1.4 GB** | **+0.1–0.3%** | **3–5x / 6–9x** | 1.5–2.5x | **P0** | **甜蜜點，準度幾乎無損** |
-| q5_K_M | ~550 MB | ~1.0 GB | +0.5–1% | 4–6x / 7–10x | 2–3x | P1 | 中量化，記憶體緊時 |
-| q5_0 | ~520 MB | ~1.0 GB | +1–1.5% | 4–6x / 7–10x | 2–3x | P2 | 舊版量化，相容性最廣 |
-| q4_K_M | ~450 MB | ~0.85 GB | +1–2% | 5–7x / 8–12x | 2.5–3.5x | P1 | 極省，邊緣裝置 |
-| q4_0 | ~420 MB | ~0.8 GB | +2–3% | 5–7x / 8–12x | 2.5–3.5x | P2 | 舊版極省 |
+| f16 | 2.9 GB | ~3.5 GB | **基準 0%** | 2–3x / 4–6x | 0.8–1.2x | P1 | 原始品質，研究/比較用 |
+| **q8_0** ⭐ | 1.7 GB | **~2.2 GB** | **+0.1–0.3%** | **3–5x / 6–9x** | 1.5–2.5x | **P0** | **甜蜜點，準度幾乎無損** |
+| q6_k | 1.3 GB | ~1.8 GB | +0.3–0.6% | 3–5x / 7–10x | 2–3x | P2 | K-quant 中等，q8_0 替代 |
+| q5_k | 1.1 GB | ~1.5 GB | +0.5–1% | 4–6x / 7–10x | 2–3x | **P1** | **K-quant，比 q5_0 同 size 高品質** |
+| q5_0 | 1.1 GB | ~1.5 GB | +1–1.5% | 4–6x / 7–10x | 2–3x | P2 | 舊版量化，相容性最廣 |
+| q4_k | 889 MB | ~1.2 GB | +1–2% | 5–7x / 8–12x | 2.5–3.5x | **P1** | **K-quant，邊緣裝置首選** |
+| q4_0 | 889 MB | ~1.2 GB | +2–3% | 5–7x / 8–12x | 2.5–3.5x | P2 | 舊版極省 |
 
 **Core ML encoder（搭配 GGML 使用，Apple Silicon ANE 加速）**
 
 | 檔案 | 大小 | RAM 額外 | 速度提升（vs 同量化 GGML 純 CPU）| WER 影響 | 優先度 |
 |---|---|---|---|---|---|
-| `ggml-breeze-asr-25-encoder.mlmodelc` | ~150 MB | +200 MB peak load | **encoder 3–5x、端到端 1.3–2x** | **0%** | P2 |
+| `ggml-breeze-asr-25-encoder.mlmodelc/` | 1.2 GB | +400 MB peak load | **encoder 3–5x、端到端 1.3–2x** | **0%** | P2 |
+
+> 💡 **Core ML 生成注意**（2026-05-13 驗證）：
+> 1. 用 `convert-h5-to-coreml.py --model-name large-v2`（Breeze 的架構名），不是 `breeze-asr-25`（whitelist 不允許）
+> 2. 中間產物 `hf-large-v2.pt` 6.2 GB 用完後刪掉
+> 3. `.mlpackage` → `.mlmodelc` 用 `xcrun coremlc compile` 編譯（要 Xcode CLI tools）
 
 **搭配說明**：
 - **不是獨立模型，是 whisper.cpp 的 encoder 加速器**
@@ -207,17 +216,24 @@ else:
 
 | 量化 | 磁碟 | RAM (CPU) | VRAM (GPU) | WER ↑ | 速度 CPU | 速度 3070 Ti | 優先度 | 備註 |
 |---|---|---|---|---|---|---|---|---|
-| float16 | ~1.5 GB | ~2.8 GB | ~3.1 GB | **基準 0%** | N/A | 25–35x | P1 | GPU 部署（VRAM 充足） |
-| **int8_float16** ⭐ | ~800 MB | **~1.8 GB** | **~2.3 GB** | **+0.2–0.5%** | **3–5x** | **20–30x** | **P0** | **server 主推（Mac+GPU 通用）** |
-| int8 | ~600 MB | ~1.5 GB | ~1.8 GB | +0.3–0.6% | 3–5x | 15–25x | P1 | 純 CPU server |
-| bfloat16 | ~1.5 GB | ~2.8 GB | ~3.1 GB | ~0% | N/A | 25–35x | P2 | Hopper / 新 Mac 可選 |
+| float16 | 2.9 GB | ~3.5 GB | ~3.5 GB | **基準 0%** | N/A | 25–35x | P1 | GPU 部署（VRAM 充足） |
+| **int8_float16** ⭐ | 1.5 GB | **~2.3 GB** | **~2.5 GB** | **+0.2–0.5%** | **3–5x** | **20–30x** | **P0** | **server 主推（Mac+GPU 通用，runtime 用 `compute_type="default"`，見下注）** |
+| int8 | 1.5 GB | ~2.2 GB | ~2.3 GB | +0.3–0.6% | 3–5x | 15–25x | P1 | 純 CPU server |
 
 > **速度單位**：x = real-time multiplier（1 分鐘音檔處理需 60/x 秒）。例如 5x = 1 分鐘音檔花 12 秒
 > **數字假設**：beam_size=5、30 秒音檔片段、單一 inference、機器無其他重負載
-> **WER ↑** 是相對 fp16 baseline 的**絕對百分點**增加（不是相對 %）。例如 baseline 8% → q5_K_M 約 8.5–9%
+> **WER ↑** 是相對 fp16 baseline 的**絕對百分點**增加。例如 baseline 8% → q5_k 約 8.5–9%
 > **streaming 額外加** ~150 MB 記憶體
 > **process baseline** (Python+FastAPI) 已含在 CT2 RAM 數字裡 (~500 MB)
-> **WER 數字**為 Mandarin/multilingual benchmark 上的典型範圍，**台灣華語/中英混雜場景**可能略高（Breeze 微調過，仍承襲 Whisper 量化容忍度）
+>
+> ⚠️ **Mac CPU compute_type 注意事項**（2026-05-13 驗證）：
+> int8_float16 是**儲存格式**，runtime compute_type 在 Mac CPU 上要用 `"default"` 或 `"int8_float32"`（faster-whisper 自動轉換）。直接寫 `compute_type="int8_float16"` 會 throw ValueError，因為 Mac CPU 不支援高效 fp16 計算。
+> ```python
+> # Mac CPU 用法（建議）
+> model = WhisperModel(model_dir, device="auto", compute_type="default")
+> # GPU 用法（明確指定）
+> model = WhisperModel(model_dir, device="cuda", compute_type="int8_float16")
+> ```
 
 ### 4.2.1 記憶體 / 速度說明
 
@@ -307,71 +323,122 @@ runtime_memory ≈ weight_size × 1.2~1.5 + activation_buffer + process_overhead
 **完整（P0 + P1 + P2）**：11 個版本
 - 上表全部，含 Core ML encoder
 
-### 4.4 轉換步驟
+### 4.4 轉換步驟（**已驗證可跑**，2026-05-13）
 
-#### Step 1：下載原始 model
+#### Step 0：建工作空間（在 git repo 外）
 ```bash
-huggingface-cli download MediaTek-Research/Breeze-ASR-25 \
-  --local-dir ./source/breeze-asr-25
+mkdir -p ~/workspace/breeze-asr-25-build/{source,ggml,ct2,coreml,tools}
+cd ~/workspace/breeze-asr-25-build/tools
+uv venv .venv --python 3.13
+source .venv/bin/activate
+uv pip install ctranslate2 "transformers[torch]" huggingface_hub tiktoken tqdm
 ```
 
-#### Step 2：GGML 系列（在 Mac，用 whisper.cpp 工具）
+#### Step 1：下載原始 model（注意 HF CLI 已改名 `hf`）
 ```bash
+hf download MediaTek-Research/Breeze-ASR-25 \
+  --local-dir ~/workspace/breeze-asr-25-build/source
+
+# 清訓練殘留（HF repo 不小心含進去）
+cd ~/workspace/breeze-asr-25-build/source
+rm -f optimizer.bin scheduler.bin random_states_*.pkl
+# whisper-github/ 內有 .pt 檔，留 3.1GB fp16 那份，刪 6.2GB fp32 那份
+rm -rf whisper-github/<fp32-hash-dir>/
+mv whisper-github/<fp16-hash-dir>/breeze-asr-25.pt ./
+rm -rf whisper-github/
+```
+
+#### Step 2：GGML 系列
+```bash
+cd ~/workspace/breeze-asr-25-build/tools
+# Clone openai/whisper（convert script 需要它的 python module）
+git clone --depth 1 https://github.com/openai/whisper.git openai-whisper
+# Clone + build whisper.cpp
+git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git
 cd whisper.cpp
+cmake -B build -DGGML_METAL=ON -DWHISPER_BUILD_TESTS=OFF
+cmake --build build -j --config Release
 
-# 轉成 fp16 GGML
-python models/convert-h5-to-ggml.py \
-  ../source/breeze-asr-25 \
-  ../source/whisper-pytorch ../output/
+# 轉成 fp16 GGML（用 .pt → ggml，比 h5 → ggml 更穩）
+cd ~/workspace/breeze-asr-25-build/tools/openai-whisper
+python ../whisper.cpp/models/convert-pt-to-ggml.py \
+  ../../source/breeze-asr-25.pt \
+  ~/workspace/breeze-asr-25-build/tools/openai-whisper \
+  ~/workspace/breeze-asr-25-build/ggml
+mv ~/workspace/breeze-asr-25-build/ggml/ggml-model.bin \
+   ~/workspace/breeze-asr-25-build/ggml/ggml-breeze-asr-25-f16.bin
 
-# 量化（產出 q8_0, q5_K_M, q4_K_M）
-for q in q8_0 q5_K_M q5_0 q4_K_M q4_0; do
-  ./build/bin/quantize \
-    ../output/ggml-breeze-asr-25-f16.bin \
-    ../output/ggml-breeze-asr-25-${q}.bin ${q}
+# 量化（whisper.cpp 用小寫 q4_k q5_k，binary 叫 whisper-quantize）
+cd ~/workspace/breeze-asr-25-build/ggml
+QUANTIZE=~/workspace/breeze-asr-25-build/tools/whisper.cpp/build/bin/whisper-quantize
+for q in q8_0 q6_k q5_k q5_0 q4_k q4_0; do
+  $QUANTIZE ggml-breeze-asr-25-f16.bin ggml-breeze-asr-25-${q}.bin ${q}
 done
 
-# Core ML encoder（可選）
+# Core ML encoder（給 Apple Silicon ANE 加速）
+cd ~/workspace/breeze-asr-25-build/tools/whisper.cpp
 ./models/generate-coreml-model.sh breeze-asr-25
 ```
 
-#### Step 3：CT2 系列（任一機器，用 ctranslate2）
+#### Step 3：CT2 系列
 ```bash
-pip install ctranslate2 transformers[torch]
+cd ~/workspace/breeze-asr-25-build/tools && source .venv/bin/activate
 
-for q in float16 int8_float16 int8 bfloat16; do
+for q in float16 int8_float16 int8; do
   ct2-transformers-converter \
-    --model ./source/breeze-asr-25 \
-    --output_dir ./output/breeze-asr-25-ct2-${q} \
+    --model ~/workspace/breeze-asr-25-build/source \
+    --output_dir ~/workspace/breeze-asr-25-build/ct2/breeze-asr-25-ct2-${q} \
     --quantization ${q} \
-    --copy_files tokenizer.json preprocessor_config.json
+    --copy_files tokenizer.json preprocessor_config.json normalizer.json \
+                 special_tokens_map.json tokenizer_config.json vocab.json \
+                 merges.txt added_tokens.json generation_config.json
 done
+# ⚠️ --copy_files 在 zsh 要把每個檔名展開寫，變數 $FILES 不會 word-split
 ```
 
-#### Step 4：上傳 HuggingFace
+#### Step 4：Sanity test（建議跑一次再上傳）
+```bash
+# GGML 測試
+~/workspace/breeze-asr-25-build/tools/whisper.cpp/build/bin/whisper-cli \
+  -m ~/workspace/breeze-asr-25-build/ggml/ggml-breeze-asr-25-q8_0.bin \
+  -f ~/workspace/breeze-asr-25-build/tools/whisper.cpp/samples/jfk.wav -nt
+
+# CT2 測試（Mac CPU 用 compute_type="default" 不能 literal "int8_float16"）
+python -c '
+from faster_whisper import WhisperModel
+m = WhisperModel("~/workspace/breeze-asr-25-build/ct2/breeze-asr-25-ct2-int8_float16",
+                 device="cpu", compute_type="default")
+for s, _ in [m.transcribe("samples/jfk.wav", beam_size=5)]:
+    for seg in s: print(seg.text)
+'
+```
+
+#### Step 5：上傳 HuggingFace
 分成兩個 repo（GGML 慣例和 CT2 慣例不同）：
 
 ```bash
-# Repo 1: GGML 系列（單一 repo 多檔）
-huggingface-cli repo create breeze-asr-25-ggml
-huggingface-cli upload shdennlin/breeze-asr-25-ggml \
-  ./output/ggml-breeze-asr-25-*.bin
+hf auth login   # 互動，要 Write token
 
-# Repo 2: CT2 系列（每個量化一個 branch 或 subfolder）
-huggingface-cli repo create breeze-asr-25-ct2
-# 上傳每個 subdir
+# Repo 1: GGML 系列
+hf repo create <USER>/breeze-asr-25-ggml
+hf upload <USER>/breeze-asr-25-ggml \
+  ~/workspace/breeze-asr-25-build/ggml/
+
+# Repo 2: CT2 系列（subfolder 區分 quantization）
+hf repo create <USER>/breeze-asr-25-ct2
 for q in float16 int8_float16 int8; do
-  huggingface-cli upload shdennlin/breeze-asr-25-ct2 \
-    ./output/breeze-asr-25-ct2-${q} ${q}
+  hf upload <USER>/breeze-asr-25-ct2 \
+    ~/workspace/breeze-asr-25-build/ct2/breeze-asr-25-ct2-${q} ${q}
 done
 ```
 
-#### Step 5：寫 model card（README.md）
+#### Step 6：寫 model card（README.md）
 - 標明 base model（Whisper-large-v2 → Breeze-ASR-25 fine-tune）
 - License：Apache 2.0（繼承自上游）
 - 強調台灣華語 + 中英 code-switching
 - 各版本選擇指南（GGML vs CT2、量化選擇）
 - 使用範例（whisper.cpp、VoiceInk、faster-whisper）
+- **CT2 readme 要警告 Mac CPU 用 `compute_type="default"`** 不要寫 literal "int8_float16"
 
 ---
 
@@ -379,11 +446,12 @@ done
 
 ### Phase 0：模型轉換 + HF 上傳（1–2 個晚上）
 
-- [ ] 在 Mac 完成 GGML 系列轉換（q8_0 已有，補 f16/q5_K_M/q4_K_M）
-- [ ] 在 Mac 或 PVE 完成 CT2 系列轉換（int8_float16/float16/int8）
+- [x] 在 Mac 完成 GGML 系列轉換（f16, q8_0, q6_k, q5_k, q5_0, q4_k, q4_0 — **2026-05-13 完成**）
+- [x] 在 Mac 完成 CT2 系列轉換（float16, int8_float16, int8 — **2026-05-13 完成**）
+- [x] Sanity test 通過（whisper-cli + faster-whisper 都成功轉錄 jfk.wav）
+- [x] 產生 Core ML encoder（1.2 GB `.mlmodelc` — **2026-05-13 完成**）
 - [ ] 建立兩個 HF repo 並上傳
 - [ ] 撰寫 model card README
-- [ ] （可選）產生 Core ML encoder
 
 **驗收**：HF 上看得到並能下載；whisper.cpp 載 GGML 可推理；faster-whisper 載 CT2 可推理
 
@@ -414,7 +482,7 @@ done
 - [ ] 加 `faster-whisper` 依賴
 - [ ] 重寫 `app/services/whisper.py`：從 HTTP client 變成 in-process `WhisperModel` wrapper
 - [ ] 改 `app/config.py`：`MODEL_DIR` 取代 `WHISPER_SERVER_URL` / `MODEL_PATH`
-- [ ] 加 `device="auto"`、`compute_type="int8_float16"` 設定
+- [ ] 加 `device="auto"`、`compute_type="default"` 設定（model 用 int8_float16 儲存格式，runtime 由 CT2 自動選；Mac CPU 落到 int8_float32，GPU 用 int8_float16）
 - [ ] 改 `app/main.py` lifespan：啟動時載入 model 到記憶體
 - [ ] **合併 `/transcribe-raw` → `/transcribe`**：寫 Content-Type 分派邏輯（multipart vs raw audio）
 - [ ] **`/health` → `/status`**：擴充回應 schema（見 §3.4）
@@ -494,7 +562,7 @@ done
 **目標**：Mac mini 和 PVE GPU server 都能跑同一套
 
 - [ ] 確認 `device="auto"` 在 Mac (CPU+Accelerate) 和 Linux+CUDA (3070 Ti) 都正確
-- [ ] `compute_type="int8_float16"` 兩邊跑通
+- [ ] `compute_type="default"` 兩邊跑通（GPU 自動選 int8_float16，Mac CPU 自動落到 int8_float32）
 - [ ] Docker image 同時支援 ARM64 (Mac) 和 amd64 + CUDA (PVE)
 - [ ] 評估是否要 `.env.mac` 和 `.env.gpu` profile
 

@@ -1,6 +1,8 @@
+.DS_Store
+
 .claude/
 .agents/
-.DS_Store
+.serena/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
