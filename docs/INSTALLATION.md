@@ -2,6 +2,14 @@
 
 Complete setup guide for whisper-wrap with system requirements and dependencies.
 
+> **Deployment scope: LAN / localhost only.**
+> whisper-wrap v2 ships no built-in authentication, rate limiting, or transport
+> encryption. `GET /status` exposes the loaded model name/path and runtime
+> configuration but no credentials. For public-internet exposure, terminate TLS
+> and authenticate requests at a reverse proxy (Caddy, nginx, Cloudflare Tunnel)
+> or place the service behind a VPN / Tailscale boundary. Bind to `127.0.0.1`
+> (not `0.0.0.0`) when the host has a public network interface.
+
 ## System Requirements
 
 ### Hardware Requirements

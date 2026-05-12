@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app import __version__
 from app.api.ask import router as ask_router
+from app.api.status import router as status_router
 from app.api.transcribe import router as transcribe_router
 from app.config import config, load_env_file, warn_obsolete_env_vars
 from app.services.llm import LLMClient
@@ -72,25 +74,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="whisper-wrap",
     description="In-process FastAPI server for faster-whisper transcription, Gemini Q&A, and live PCM streaming",
-    version="2.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
 app.include_router(transcribe_router)
 app.include_router(ask_router)
-
-
-@app.get("/")
-async def root():
-    return {
-        "name": "whisper-wrap",
-        "version": "2.0.0",
-        "endpoints": {
-            "transcribe": "POST /transcribe - audio transcription (multipart, raw audio/*, or application/octet-stream)",
-            "ask": "POST /ask - audio or text question → Gemini answer (with optional ?stream=true SSE)",
-            "status": "GET /status - service + model + LLM configuration",
-        },
-    }
+app.include_router(status_router)
 
 
 if __name__ == "__main__":

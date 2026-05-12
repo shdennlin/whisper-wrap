@@ -68,13 +68,13 @@ def test_lifespan_fails_fast_when_load_raises(monkeypatch):
             pass
 
 
-def test_root_endpoint_lists_v2_endpoints(patched_loader):
+def test_root_endpoint_returns_endpoint_catalogue(patched_loader):
+    """Smoke: GET / returns a payload with an `endpoints` field. Detailed schema
+    assertions live in tests/test_status.py."""
     from app.main import app
 
     with TestClient(app) as client:
         resp = client.get("/")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["name"] == "whisper-wrap"
-        assert body["version"] == "2.0.0"
         assert "endpoints" in body
