@@ -41,7 +41,7 @@ curl -X POST "http://localhost:8000/transcribe" \
 
 **Ready-to-Use Shortcut**: 📱 **[Download ASR Shortcut](https://www.icloud.com/shortcuts/698627e2c3934b3e996426b64a943742)**
 
-<img src="doc/ios-shortcuts-workflow.jpeg" alt="iOS Shortcuts Workflow" width="400">
+<img src="docs/ios-shortcuts-workflow.jpeg" alt="iOS Shortcuts Workflow" width="400">
 
 This shortcut provides a complete voice transcription workflow:
 - 🎙️ **Record Audio**: Tap to record voice memos
