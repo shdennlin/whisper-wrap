@@ -1,144 +1,121 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+"""Tests for the v2 in-process faster-whisper wrapper (app/services/whisper.py)."""
+
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from app.services.whisper import WhisperClient, _DEFAULT_PUNCTUATION_PROMPT
+from app.services.whisper import (
+    WhisperClient,
+    WhisperLoadError,
+    WhisperTranscriptionError,
+)
+
+
+def _fake_segments(*texts: str) -> list:
+    return [SimpleNamespace(start=0.0, end=1.0, text=t) for t in texts]
+
+
+def _fake_info(language: str = "zh", duration: float = 1.0):
+    return SimpleNamespace(language=language, duration=duration)
 
 
 @pytest.fixture
-def wav_file(tmp_path):
-    """Create a temporary WAV file for testing."""
-    wav_path = tmp_path / "test.wav"
-    wav_path.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt ")
-    return wav_path
+def tmp_wav(tmp_path: Path) -> Path:
+    p = tmp_path / "audio.wav"
+    p.write_bytes(b"RIFF....WAVE")
+    return p
 
 
 @pytest.fixture
-def client():
-    """Create a WhisperClient instance."""
-    return WhisperClient()
+def mock_model():
+    """A MagicMock standing in for faster_whisper.WhisperModel."""
+    m = MagicMock()
+    m.transcribe.return_value = (iter(_fake_segments("hello world")), _fake_info("en"))
+    return m
 
 
-def _mock_response(text="Hello world."):
-    """Build a mock httpx response with the given text."""
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = {"text": text}
-    return resp
+async def test_transcribe_success(tmp_wav, mock_model):
+    client = WhisperClient(model=mock_model)
+    result = await client.transcribe(tmp_wav)
+    assert "text" in result
+    assert result["text"] == "hello world"
+    assert result["language"] == "en"
+    assert isinstance(result["segments"], list)
+    assert result["segments"][0]["text"] == "hello world"
 
 
-def _extract_form_data(mock_post):
-    """Extract the `data` dict passed to client.post()."""
-    _, kwargs = mock_post.call_args
-    return kwargs["data"]
+async def test_transcribe_language_forwarded(tmp_wav, mock_model):
+    client = WhisperClient(model=mock_model)
+    await client.transcribe(tmp_wav, language="zh")
+    kwargs = mock_model.transcribe.call_args.kwargs
+    assert kwargs["language"] == "zh"
 
 
-@pytest.mark.asyncio
-async def test_both_language_and_prompt_forwarded(client, wav_file):
-    """WHEN transcribe() is called with language and prompt,
-    THEN form data includes both values."""
-    mock_post = AsyncMock(return_value=_mock_response())
-
-    with patch("app.services.whisper.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value.__aenter__ = AsyncMock(
-            return_value=MagicMock(post=mock_post)
-        )
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        await client.transcribe(wav_file, language="en", prompt="Hello.")
-
-    data = _extract_form_data(mock_post)
-    assert data["language"] == "en"
-    assert data["prompt"] == "Hello."
+async def test_transcribe_auto_language_mapped_to_none(tmp_wav, mock_model):
+    """The 'auto' sentinel SHALL map to None for faster-whisper's auto-detect."""
+    client = WhisperClient(model=mock_model)
+    await client.transcribe(tmp_wav, language="auto")
+    kwargs = mock_model.transcribe.call_args.kwargs
+    assert kwargs["language"] is None
 
 
-@pytest.mark.asyncio
-async def test_only_language_forwarded_uses_default_prompt(client, wav_file):
-    """WHEN transcribe() is called with language but no prompt,
-    THEN form data includes language and the default punctuation prompt."""
-    mock_post = AsyncMock(return_value=_mock_response())
-
-    with patch("app.services.whisper.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value.__aenter__ = AsyncMock(
-            return_value=MagicMock(post=mock_post)
-        )
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        await client.transcribe(wav_file, language="zh")
-
-    data = _extract_form_data(mock_post)
-    assert data["language"] == "zh"
-    assert data["prompt"] == _DEFAULT_PUNCTUATION_PROMPT
+async def test_transcribe_initial_prompt_forwarded(tmp_wav, mock_model):
+    client = WhisperClient(model=mock_model)
+    await client.transcribe(tmp_wav, initial_prompt="custom prompt seed")
+    kwargs = mock_model.transcribe.call_args.kwargs
+    assert kwargs["initial_prompt"] == "custom prompt seed"
 
 
-@pytest.mark.asyncio
-async def test_default_language_is_auto(client, wav_file):
-    """WHEN transcribe() is called without language,
-    THEN form data uses 'auto' as the default language."""
-    mock_post = AsyncMock(return_value=_mock_response())
-
-    with patch("app.services.whisper.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value.__aenter__ = AsyncMock(
-            return_value=MagicMock(post=mock_post)
-        )
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        await client.transcribe(wav_file)
-
-    data = _extract_form_data(mock_post)
-    assert data["language"] == "auto"
+async def test_transcribe_default_prompt_used_when_none(tmp_wav, mock_model):
+    """When initial_prompt is None, the default punctuation seed SHALL be applied."""
+    client = WhisperClient(model=mock_model)
+    await client.transcribe(tmp_wav, initial_prompt=None)
+    kwargs = mock_model.transcribe.call_args.kwargs
+    assert kwargs["initial_prompt"]  # truthy
+    assert "標點符號" in kwargs["initial_prompt"]  # bilingual seed contains zh marker
 
 
-@pytest.mark.asyncio
-async def test_no_prompt_uses_default_punctuation_prompt(client, wav_file):
-    """WHEN transcribe() is called without prompt,
-    THEN form data includes _DEFAULT_PUNCTUATION_PROMPT."""
-    mock_post = AsyncMock(return_value=_mock_response())
-
-    with patch("app.services.whisper.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value.__aenter__ = AsyncMock(
-            return_value=MagicMock(post=mock_post)
-        )
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        await client.transcribe(wav_file)
-
-    data = _extract_form_data(mock_post)
-    assert data["prompt"] == _DEFAULT_PUNCTUATION_PROMPT
-
-
-@pytest.mark.asyncio
-async def test_post_processing_pipeline_runs(client, wav_file):
-    """WHEN whisper-server returns text,
-    THEN detect_text_language, join_newline_segments, and normalize_punctuation
-    are applied to the result."""
-    mock_post = AsyncMock(return_value=_mock_response("  Raw text\n"))
-
-    with (
-        patch("app.services.whisper.httpx.AsyncClient") as mock_cls,
-        patch("app.services.whisper.detect_text_language", return_value="en") as mock_detect,
-        patch("app.services.whisper.join_newline_segments", return_value="Raw text") as mock_join,
-        patch("app.services.whisper.normalize_punctuation", return_value="Raw text.") as mock_norm,
-    ):
-        mock_cls.return_value.__aenter__ = AsyncMock(
-            return_value=MagicMock(post=mock_post)
-        )
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        result = await client.transcribe(wav_file)
-
-    # strip() is called first on the raw text
-    mock_detect.assert_called_once_with("Raw text")
-    mock_join.assert_called_once_with("Raw text")
-    mock_norm.assert_called_once_with("Raw text", "en")
-    assert result["text"] == "Raw text."
+async def test_postprocessing_joins_newlines_and_normalizes(tmp_wav):
+    """Raw segments with newlines + zh punctuation SHALL be joined and normalised."""
+    model = MagicMock()
+    # Two zh-punctuation segments separated by newline; English mode maps zh punct → en.
+    model.transcribe.return_value = (
+        iter(_fake_segments("hello world，", "\n", "more text.")),
+        _fake_info("en"),
+    )
+    client = WhisperClient(model=model)
+    result = await client.transcribe(tmp_wav)
+    # zh comma normalised to en comma (target language = "en" from info)
+    assert "，" not in result["text"]
+    assert "," in result["text"]
+    # No standalone newline survives the join step
+    assert "\n" not in result["text"]
 
 
-@pytest.mark.asyncio
-async def test_file_not_found_raises(client, tmp_path):
-    """WHEN wav_file_path does not exist,
-    THEN FileNotFoundError is raised."""
-    missing = tmp_path / "missing.wav"
-
+async def test_transcribe_missing_file_raises_filenotfound(tmp_path, mock_model):
+    client = WhisperClient(model=mock_model)
+    missing = tmp_path / "nope.wav"
     with pytest.raises(FileNotFoundError, match="WAV file not found"):
         await client.transcribe(missing)
+
+
+async def test_transcribe_model_exception_mapped_to_transcription_error(tmp_wav):
+    model = MagicMock()
+    model.transcribe.side_effect = RuntimeError("ct2 crashed")
+    client = WhisperClient(model=model)
+    with pytest.raises(WhisperTranscriptionError, match="ct2 crashed"):
+        await client.transcribe(tmp_wav)
+
+
+def test_load_model_failure_raises_typed_error(monkeypatch):
+    """load_model() SHALL wrap WhisperModel construction errors in WhisperLoadError."""
+    from app.services import whisper as whisper_module
+
+    def boom(*args, **kwargs):
+        raise FileNotFoundError("model.bin missing")
+
+    monkeypatch.setattr(whisper_module, "WhisperModel", boom)
+    with pytest.raises(WhisperLoadError, match="model.bin missing"):
+        whisper_module.load_model("/nope/dir")
