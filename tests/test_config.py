@@ -20,9 +20,12 @@ OBSOLETE_V1_KEYS = (
 
 @pytest.fixture
 def clean_env(monkeypatch):
-    """Strip both v1 and v2 model/LLM env vars so default-resolution tests are deterministic."""
+    """Strip every env var Config reads so default-resolution tests are deterministic
+    regardless of the developer's local shell or .env."""
     for k in (
         *OBSOLETE_V1_KEYS,
+        "API_PORT",
+        "API_HOST",
         "MODEL_NAME",
         "MODEL_DIR",
         "COMPUTE_TYPE",
@@ -30,6 +33,10 @@ def clean_env(monkeypatch):
         "GEMINI_API_KEY",
         "GEMINI_MODEL",
         "GEMINI_SYSTEM_PROMPT",
+        "MAX_FILE_SIZE_MB",
+        "TEMP_DIR",
+        "UPLOAD_TIMEOUT_SECONDS",
+        "LOG_LEVEL",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
