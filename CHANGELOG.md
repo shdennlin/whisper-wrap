@@ -4,6 +4,139 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [2.0.0] — Unreleased
+
+**Breaking release.** Single in-process FastAPI server replaces the v1
+FastAPI + `whisper-server` subprocess pair. Migrating from v1 requires changes
+to `.env` and `registry/models.yaml`; see the migration sections below.
+
+### Migration overview
+
+#### Removed endpoints
+
+- `POST /transcribe-raw` — folded into `POST /transcribe` via Content-Type
+  dispatch (use `Content-Type: audio/m4a`, `audio/wav`, etc., or
+  `application/octet-stream` for raw bodies).
+- `GET /health` — replaced by `GET /status` with a richer payload.
+
+#### Removed environment variables
+
+The v2 server detects these still present in the environment at startup and
+emits a one-line `WARNING` per detected key, then proceeds — startup does NOT
+fail. Remove them from `.env` to silence the warnings.
+
+```
+WHISPER_SERVER_HOST    WHISPER_SERVER_PORT     WHISPER_SERVER_URL
+WHISPER_AUTO_RESTART   WHISPER_BINARY_PATH     WHISPER_MAX_RETRIES
+MODEL_PATH
+```
+
+In-app auto-restart is also gone. Use the supervisor's restart policy
+(`docker-compose.yml` ships `restart: unless-stopped`; a sample systemd unit
+with `Restart=on-failure` lives at `deploy/whisper-wrap.service`).
+
+#### Added environment variables
+
+```
+MODEL_NAME              registry key (default: breeze-asr-25)
+MODEL_DIR               optional CT2 directory override (bypasses registry)
+COMPUTE_TYPE            default; required on Apple Silicon CPU
+DEVICE                  auto
+GEMINI_API_KEY          required for /ask
+GEMINI_MODEL            default: gemini-2.5-flash
+GEMINI_SYSTEM_PROMPT    optional; falls back to baked-in Taiwan persona
+```
+
+#### Registry schema change
+
+`registry/models.yaml` now describes CTranslate2 directories instead of single
+GGML files. Required fields per entry: `repo_id`, `format` (only `ct2`
+accepted), `compute_type`, `local_dir`, `size`, `languages`, `description`.
+Optional: `subfolder`, `revision`, `default`. **Exactly one entry** SHALL set
+`default: true`; zero or multiple defaults fail validation.
+
+**Before (v1):**
+
+```yaml
+models:
+  large-v3-turbo-q8:
+    default: true
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin"
+    filename: "ggml-large-v3-turbo-q8_0.bin"
+    size: "874MB"
+    languages: [multilingual]
+    description: "..."
+```
+
+**After (v2):**
+
+```yaml
+models:
+  breeze-asr-25:
+    default: true
+    repo_id: "shdennlin/breeze-asr-25-ct2"
+    format: ct2
+    subfolder: int8_float16
+    compute_type: int8_float16
+    local_dir: breeze-asr-25
+    size: "1.5GB"
+    languages: [zh-TW, en]
+    description: "Breeze ASR 25 (CT2 int8_float16) — Taiwanese Mandarin + EN"
+```
+
+#### Dropped built-in registry entries
+
+`large-v3-turbo-q8`, `large-v3`, `medium`, `base`, and the GGML `breeze-asr-25`
+are removed from the shipped registry. Replace them in your local registry
+copy with CT2 equivalents:
+
+| v1 (GGML)           | v2 (CT2) repo                            |
+| ------------------- | ---------------------------------------- |
+| `large-v3-turbo-q8` | `Systran/faster-whisper-large-v3-turbo`  |
+| `large-v3`          | `Systran/faster-whisper-large-v3`        |
+| `medium`            | `Systran/faster-whisper-medium`          |
+| `base`              | `Systran/faster-whisper-base`            |
+
+#### Deployment assumption
+
+`/status` exposes the loaded model path and runtime configuration but no
+credentials. v2 ships no built-in auth/TLS/rate limiting and is designed for
+LAN/localhost deployments. For public exposure, terminate TLS and authenticate
+at a reverse proxy or place the service behind a VPN / Tailscale boundary.
+
+### Added
+
+- **`POST /ask`** — audio or text question, Gemini answer. Optional
+  `?stream=true` returns `text/event-stream` with `transcript` → `token*` →
+  `done`/`error` event order.
+- **`WS /listen`** — live captioning over a WebSocket: 16 kHz mono `pcm_s16le`
+  frames in, `partial`/`final` JSON events out with millisecond timestamps.
+- **`GET /status`** — service health, loaded model details, and LLM
+  configuration in one payload.
+- **`GET /`** — endpoint catalogue for API discovery.
+- `deploy/whisper-wrap.service` — sample systemd unit with `Restart=on-failure`.
+
+### Changed
+
+- **Backend** — in-process `faster-whisper` + CTranslate2 replaces the external
+  `whisper-server` subprocess; no more HTTP round-trip per request.
+- **Model resolution** — `MODEL_DIR` override or `MODEL_NAME` registry lookup;
+  hard-coded `breeze-asr-25` fallback when neither is set.
+- **Dockerfile** — drops cmake/g++/git/build-essential and the whisper.cpp
+  build stage; image build time falls from ~10–15 min to ~1–3 min.
+- **`scripts/model-manager.sh`** — drives `hf download` against
+  `registry/models.yaml` (CT2 entries); v1 URL-based form is rejected with a
+  clear migration message.
+
+### Removed
+
+- `whisper.cpp` git submodule.
+- `app/services/whisper_manager.py` — subprocess lifecycle manager.
+- `make init-submodule`, `make build-whisper`, `make run-whisper` targets.
+- `./whisper-wrap` CLI shim (Makefile targets are the only user-facing CLI).
+
+---
+
 ## [v1.2.0] — 2026-03-19
 
 ### Developer Changelog

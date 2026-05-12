@@ -1,40 +1,44 @@
 # whisper-wrap
 
-FastAPI wrapper for [whisper.cpp](https://github.com/ggml-org/whisper.cpp) with universal audio format support.
+Single-process FastAPI server for **in-process audio transcription, live captioning, and Gemini-backed Q&A**. v2 swaps the previous `whisper.cpp` + `whisper-server` subprocess for [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) running CTranslate2 models directly in the FastAPI process.
 
-> **Built on whisper.cpp** - This project leverages the powerful [whisper.cpp](https://github.com/ggml-org/whisper.cpp) implementation by [ggml-org](https://github.com/ggml-org) to provide fast, local speech-to-text transcription powered by OpenAI's Whisper models.
+> v2.0 is a breaking release. Migrating from v1? See the **[v2.0.0 migration guide in CHANGELOG.md](CHANGELOG.md#200--unreleased)**.
 
 ## 🚀 Quick Start
 
 ```bash
-# Complete setup (first time)
+# Install deps + download the default model (Breeze ASR 25, CT2 int8_float16)
 make setup
 
-# Start both services
+# Start the server
 make dev
 
-# Test the API
-curl -X POST "http://localhost:8000/transcribe" \
+# Test transcription
+curl -X POST http://localhost:8000/transcribe \
      -F "file=@your-audio-file.mp3"
 ```
 
 ## ✨ Features
 
-- **Universal Format Support**: Accepts any audio/video format (mp3, wav, m4a, flac, ogg, aac, mp4, avi, mov, mkv)
-- **Multi-Model Support**: Switch between ASR models via a YAML registry — including [Breeze ASR 25](https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp) for Taiwanese Mandarin + English code-switching
-- **iOS Shortcuts Integration**: Ready-to-use shortcut for voice transcription
-- **Automatic Conversion**: Uses ffmpeg to convert files to WAV format for whisper
-- **Production Ready**: Built with FastAPI, Docker support, health monitoring
-- **Configurable Ports**: Flexible deployment with custom port configuration
+- **In-process backend**: `faster-whisper` + CTranslate2 — no subprocess, no second port, no startup-sleep gymnastics.
+- **Unified `/transcribe`**: Content-Type dispatch handles multipart uploads, raw `audio/*` bodies, and `application/octet-stream` from iOS Shortcuts in one endpoint.
+- **`/ask` with optional SSE streaming**: audio or text in, Gemini answer out. `?stream=true` returns `text/event-stream` with `transcript` → `token*` → `done` events.
+- **`/listen` WebSocket**: live captioning — 16 kHz mono `pcm_s16le` frames in, timestamped `partial`/`final` events out.
+- **Rich `/status`**: loaded model details, runtime device, compute type, Gemini configuration, uptime — useful for distinguishing Mac mini vs GPU deployments at a glance.
+- **CT2 model registry**: `registry/models.yaml` ships **Breeze ASR 25** (default, Taiwanese Mandarin + EN code-switching) and `large-v3-turbo` (multilingual fallback).
+- **iOS Shortcuts ready**: bundled shortcut for one-tap voice transcription.
 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Client App    │───▶│  whisper-wrap   │───▶│ whisper-server  │
-│  (iOS/Web/CLI)  │    │   (FastAPI)     │    │  (whisper.cpp)  │
-│                 │    │   Port 8000     │    │   Port 9000     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌──────────────────┐         ┌────────────────────────────────────┐
+│   Client App     │───────▶ │  whisper-wrap (FastAPI, port 8000) │
+│  (iOS/Web/CLI)   │         │  ├── /transcribe                   │
+│                  │         │  ├── /ask  → Gemini API            │
+│                  │         │  ├── /listen (WebSocket)           │
+│                  │         │  ├── /status, /                    │
+│                  │         │  └── in-process faster-whisper     │
+└──────────────────┘         └────────────────────────────────────┘
 ```
 
 ## 📱 iOS Shortcuts Integration
@@ -55,16 +59,16 @@ This shortcut provides a complete voice transcription workflow:
 ## 🔧 API Endpoints
 
 ### POST /transcribe
-Standard multipart file upload:
+Multipart file upload, raw `audio/*` body, or `application/octet-stream` — the
+handler branches on `Content-Type`:
+
 ```bash
+# Multipart (web/CLI clients)
 curl -X POST "http://localhost:8000/transcribe" \
      -F "file=@audio.mp3"
-```
 
-### POST /transcribe-raw
-Raw binary upload (iOS Shortcuts compatible):
-```bash
-curl -X POST "http://localhost:8000/transcribe-raw" \
+# Raw body (iOS Shortcuts)
+curl -X POST "http://localhost:8000/transcribe" \
      -H "Content-Type: audio/mp3" \
      --data-binary "@audio.mp3"
 ```
@@ -116,19 +120,24 @@ Or use the CLI wrapper:
 
 ## ⚙️ Configuration
 
-Create a `.env` file for custom configuration:
+Create a `.env` file for custom configuration (see `.env.example` for the full
+list):
+
 ```env
 # API server
 API_PORT=8000
 API_HOST=0.0.0.0
 
-# Whisper server
-WHISPER_SERVER_HOST=localhost
-WHISPER_SERVER_PORT=9000
+# Model
+MODEL_NAME=breeze-asr-25         # Registry key (./models/breeze-asr-25)
+# MODEL_DIR=/absolute/path       # Bypass registry lookup
+COMPUTE_TYPE=default             # Required on Apple Silicon CPU
+DEVICE=auto
 
-# Model selection
-MODEL_NAME=large-v3-turbo-q8
-MODEL_PATH=./models/ggml-large-v3-turbo-q8_0.bin
+# Gemini (for /ask)
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+# GEMINI_SYSTEM_PROMPT=          # Falls back to a Taiwan-friendly default
 
 # File handling
 MAX_FILE_SIZE_MB=100
@@ -138,7 +147,7 @@ LOG_LEVEL=INFO
 ## 🐳 Docker Deployment
 
 ```bash
-# Quick start with Docker (uses default model: large-v3-turbo-q8)
+# Quick start with Docker (uses default model: breeze-asr-25)
 make docker
 
 # Build with a specific model
@@ -187,7 +196,7 @@ import httpx
 
 with open("audio.mp3", "rb") as f:
     response = httpx.post(
-        "http://localhost:8000/transcribe-raw",
+        "http://localhost:8000/transcribe",
         headers={"Content-Type": "audio/mp3"},
         content=f.read()
     )
@@ -220,15 +229,14 @@ done
 ## 🙏 Acknowledgments
 
 This project is built upon the excellent work of:
-- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** by [ggml-org](https://github.com/ggml-org) - High-performance C++ implementation of OpenAI's Whisper
-- **[OpenAI Whisper](https://github.com/openai/whisper)** - The original speech recognition model and research
-- **[GGML](https://github.com/ggerganov/ggml)** - Tensor library that powers whisper.cpp's efficient inference
-- **[Breeze ASR 25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25)** by [MediaTek Research](https://github.com/MediaTek-Research) - Taiwanese Mandarin + English code-switching ASR model
+- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** by SYSTRAN — CTranslate2-based Whisper runtime that powers v2's in-process backend
+- **[CTranslate2](https://github.com/OpenNMT/CTranslate2)** by OpenNMT — fast inference engine for Transformer models
+- **[OpenAI Whisper](https://github.com/openai/whisper)** — the original speech recognition model and research
+- **[Breeze ASR 25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25)** by [MediaTek Research](https://github.com/MediaTek-Research) — Taiwanese Mandarin + English code-switching ASR model
+- **[Google Gemini](https://ai.google.dev/)** — LLM backend for `/ask`
 
-Special thanks to the whisper.cpp community for creating a fast, local, and production-ready speech-to-text solution.
+v1 was built around `whisper.cpp` (kept in `CHANGELOG.md` as historical context); v2 transitions to faster-whisper / CTranslate2 for a single-process server.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-**Note**: This project uses whisper.cpp as a dependency, which is also MIT licensed. The underlying Whisper models are released under the MIT license by OpenAI.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

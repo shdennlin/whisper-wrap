@@ -33,192 +33,178 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-whisper-wrap is a production-ready FastAPI wrapper service that provides universal audio transcription with iOS Shortcuts support. The service offers:
+whisper-wrap is a single-process FastAPI server for audio transcription, live
+captioning, and Gemini-backed Q&A. The v2 backend loads a CTranslate2 Whisper
+model (via `faster-whisper`) directly in the FastAPI process — no subprocess,
+no second port.
 
-1. **Universal Audio Processing**: Accepts any audio/video format (mp3, wav, m4a, flac, ogg, aac, mp4, avi, mov, mkv)
-2. **Dual API Endpoints**: Standard multipart upload `/transcribe` and iOS-compatible raw binary `/transcribe-raw`
-3. **Automatic Format Conversion**: Uses ffmpeg to convert files to 16kHz mono WAV for optimal whisper performance
-4. **Intelligent File Management**: libmagic-based MIME detection with automatic temporary file cleanup
-5. **Production Features**: Health monitoring, debug logging, comprehensive error handling
+1. **Universal audio input**: `POST /transcribe` accepts multipart uploads,
+   raw `audio/*` bodies, and `application/octet-stream` (Content-Type dispatch).
+2. **Voice or text Q&A**: `POST /ask` runs the transcript through Gemini.
+   Optional `?stream=true` returns Server-Sent Events.
+3. **Live captioning**: `WS /listen` consumes 16 kHz mono `pcm_s16le` frames
+   and emits timestamped `partial`/`final` events.
+4. **Rich `/status`**: loaded model, runtime device, compute type, Gemini
+   configuration, uptime.
 
 ## Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Client App    │───▶│  whisper-wrap   │───▶│ whisper-server  │
-│  (iOS/Web/CLI)  │    │   (FastAPI)     │    │  (whisper.cpp)  │
-│                 │    │   Port 8000     │    │   Port 9000     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌──────────────────┐         ┌────────────────────────────────────┐
+│   Client App     │───────▶ │  whisper-wrap (FastAPI, port 8000) │
+│  (iOS/Web/CLI)   │         │  ├── /transcribe (Content-Type)    │
+│                  │         │  ├── /ask  → Gemini API            │
+│                  │         │  ├── /listen (WebSocket, PCM)      │
+│                  │         │  ├── /status, /                    │
+│                  │         │  └── in-process faster-whisper     │
+└──────────────────┘         └────────────────────────────────────┘
 ```
 
-**Data Flow**: Upload → Validate (libmagic) → Convert (ffmpeg) → Transcribe (whisper) → Cleanup
-
-**whisper.cpp** is included as a git submodule at `./whisper.cpp` (not a sibling directory clone). This ensures version consistency and simplifies setup.
+**Data Flow** (transcribe): Upload → Validate (libmagic) → Convert
+(ffmpeg → 16 kHz mono WAV) → Transcribe (faster-whisper) → Post-process
+(punctuation join + normalisation) → Cleanup temp files.
 
 **Core Components:**
-- **FastAPI Application** (`app/main.py`): Web server with lifespan management and health checks
-- **API Endpoints** (`app/api/transcribe.py`): Two endpoints with comprehensive error handling and debug logging
-- **File Services** (`app/services/files.py`): MIME detection, validation, and temporary file management
-- **Audio Converter** (`app/services/converter.py`): ffmpeg integration with timeout and error handling
-- **Whisper Client** (`app/services/whisper.py`): HTTP client for whisper-server communication
-- **Configuration** (`app/config.py`): Environment-based configuration with validation
 
-**Setup Automation:**
-- **Makefile**: Complete automation for dependency checking, installation, building, and deployment
-- **Docker Support**: Single-container deployment with model persistence
-- **Cross-Platform**: Automated dependency installation for macOS, Ubuntu, RHEL, Arch Linux
+- **FastAPI Application** (`app/main.py`): Lifespan handler loads the
+  `WhisperModel` and constructs `LLMClient`; both are exposed on `app.state`.
+- **API Endpoints**:
+  - `app/api/transcribe.py` — unified `/transcribe`
+  - `app/api/ask.py` — `/ask` (blocking + SSE streaming)
+  - `app/api/status.py` — `/status` + `/` discovery
+  - `app/api/listen.py` — `WS /listen` (task group 5)
+- **Whisper Wrapper** (`app/services/whisper.py`): Async wrapper around
+  `faster_whisper.WhisperModel`. Inference runs in a thread via
+  `asyncio.to_thread` so the event loop is not blocked.
+- **LLM Client** (`app/services/llm.py`): Gemini wrapper with unset-silent
+  vs empty-warn fallback policy for `GEMINI_MODEL` and `GEMINI_SYSTEM_PROMPT`.
+- **Streaming wrapper** (`app/services/stream.py`): Embedded sliding-window
+  VAD + re-transcription for `WS /listen` (task group 5).
+- **Model Registry** (`app/services/registry.py`): Parses
+  `registry/models.yaml`; resolves the active model via `MODEL_DIR` override
+  or `MODEL_NAME` lookup (hard-coded `breeze-asr-25` fallback).
+- **File Services** (`app/services/files.py`): MIME detection, validation,
+  temp file lifecycle.
+- **Audio Converter** (`app/services/converter.py`): ffmpeg integration.
+- **Configuration** (`app/config.py`): Env-driven Config; env reading
+  happens in `__init__` (not at class definition) so tests can construct
+  fresh instances without `importlib.reload`.
 
 ## Development Workflow
 
-**First-Time Clone:**
-```bash
-git clone --recursive <repo-url>   # Clone with whisper.cpp submodule
-```
-
 **First-Time Setup:**
+
 ```bash
-make check-system-deps    # Verify system requirements
-make install-system-deps  # Auto-install dependencies if needed
-make setup               # Complete setup (submodule init + build + default model download + install)
+make check-system-deps    # Verify ffmpeg, libmagic, uv, hf
+make install-system-deps  # Auto-install via brew / apt / yum / pacman
+make setup                # uv sync + download default model (Breeze ASR 25)
 ```
 
 **Development:**
+
 ```bash
-make dev                 # Start both services
-make test               # Run test suite (14 tests)
-make lint               # Code quality checks
+make dev                 # uvicorn --reload
+make test                # pytest (full suite)
+make lint                # ruff check
 ```
 
-**Docker Deployment:**
+**Docker:**
+
 ```bash
-make docker             # Build and start with persistence (creates whisper-wrap:latest)
-docker ps               # Check running container (name: whisper-wrap)
+make docker              # docker compose build + up
 ```
 
 ## API Endpoints
 
 ### POST /transcribe
-Standard multipart file upload for web applications and curl.
+Unified handler with Content-Type dispatch:
 
-**Request:**
-- Content-Type: `multipart/form-data`
-- Body: `file` field with audio/video file
+- `multipart/form-data` — reads the `file` form field
+- `audio/*` or `application/octet-stream` — reads the raw request body
+- anything else — HTTP 415
 
-### POST /transcribe-raw  
-iOS Shortcuts compatible endpoint for raw binary data.
+Query params: `language` (default `"auto"`), `prompt` (initial seed; defaults
+to a built-in bilingual punctuation prompt).
 
-**Request:**
-- Content-Type: `audio/mp3`, `audio/wav`, etc.
-- Body: Raw binary audio data
+### POST /ask
+Audio or text question; Gemini answer.
 
-**iOS Shortcuts Configuration:**
-- URL: `http://your-server:8000/transcribe-raw`
-- Method: POST
-- Headers: `Content-Type = audio/m4a` (match your format)
-- Body: Select audio file
+- Body: same Content-Types as `/transcribe`, plus `application/json {"text": "..."}` to skip STT.
+- Blocking response: `{"transcript": <string|null>, "answer": "..."}`.
+- `?stream=true` returns `text/event-stream`: one `event: transcript` (text
+  may be null for the JSON path), zero or more `event: token`, terminating
+  `event: done` (or `event: error`).
+- Missing `GEMINI_API_KEY`: blocking → HTTP 502; streaming → single
+  `event: error` then close.
 
-### GET /health
-Health check endpoint for load balancers and monitoring.
+### WS /listen
+Binary frames: 16 kHz mono `pcm_s16le`, size 200 B – 64 KiB. Emits JSON text
+frames: `{"type": "partial"|"final", "text", "start_ms", "end_ms"}`. One
+connection may carry multiple utterances. Disconnect mid-utterance discards
+the in-flight buffer.
+
+### GET /status
+Service health, loaded model details, LLM configuration. Always returns
+`status="ok"` and `model.loaded=true` (the lifespan blocks startup until the
+model is loaded).
 
 ### GET /
-API information and endpoint documentation.
+Endpoint catalogue: each entry has `method`, `path`, `description`.
 
 ## Configuration
 
-Environment variables (`.env` file):
+Environment variables (`.env` file; see `.env.example` for the full list):
+
 ```env
-# API server configuration
-API_PORT=8000                             # FastAPI server port
-API_HOST=0.0.0.0                          # FastAPI server host
+# API server
+API_PORT=8000
+API_HOST=0.0.0.0
 
-# Whisper server configuration
-WHISPER_SERVER_HOST=localhost             # whisper-server host
-WHISPER_SERVER_PORT=9000                  # whisper-server port
-# Alternative: WHISPER_SERVER_URL=http://localhost:9000  # overrides host/port
+# Model
+MODEL_NAME=breeze-asr-25         # Registry key → ./models/<entry.local_dir>
+# MODEL_DIR=/abs/path            # Bypass registry; loaded verbatim
 
-# Model configuration
-MODEL_NAME=large-v3-turbo                 # Active model name (key in registry/models.yaml)
-MODEL_PATH=                               # Custom model file path (overrides MODEL_NAME)
+# CTranslate2 runtime
+COMPUTE_TYPE=default             # On Apple Silicon CPU this MUST be "default"
+DEVICE=auto                      # "cuda" forces GPU; "cpu" forces CPU
 
-# File handling configuration
-MAX_FILE_SIZE_MB=100                      # File upload limit
-TEMP_DIR=/tmp/whisper-wrap                # Temporary file storage
-LOG_LEVEL=DEBUG                           # Logging level (DEBUG for development)
-UPLOAD_TIMEOUT_SECONDS=30                 # Processing timeout
+# Gemini (for /ask)
+GEMINI_API_KEY=                  # Required for /ask
+GEMINI_MODEL=gemini-2.5-flash
+# GEMINI_SYSTEM_PROMPT=          # Falls back to a Taiwan-friendly persona
+
+# File handling
+MAX_FILE_SIZE_MB=100
+TEMP_DIR=/tmp/whisper-wrap
+LOG_LEVEL=INFO
+UPLOAD_TIMEOUT_SECONDS=30
 ```
 
-### Port Configuration
+### Deprecated env vars (v1)
 
-The service supports configurable ports for both the API server and whisper-server:
-
-**Configuration Priority:**
-1. `WHISPER_SERVER_URL` (if set) - overrides individual host/port components
-2. `WHISPER_SERVER_HOST` + `WHISPER_SERVER_PORT` - recommended for flexibility
-3. Default: `http://localhost:9000`
-
-**Port Validation:**
-- Both ports must be in valid range (1-65535)
-- Ports cannot be the same when running on the same host
-- Validation occurs on startup with clear error messages
-
-**Makefile Integration:**
-- Automatically loads `.env` file if it exists
-- No need to export environment variables manually
-- Supports all three configuration methods (direct, export, .env file)
+The v2 server detects these still present in the environment at startup and
+emits a one-line WARNING per detected key (then proceeds — startup does not
+fail). Remove them from `.env` to silence the warnings:
+`WHISPER_SERVER_HOST/PORT/URL`, `WHISPER_AUTO_RESTART`,
+`WHISPER_BINARY_PATH`, `WHISPER_MAX_RETRIES`, `MODEL_PATH`.
 
 ## Model Management
 
-Models are defined in `registry/models.yaml` and stored in `./models/` at the project root.
+Models live in `./models/<entry.local_dir>/` as CTranslate2 directories. The
+v2 manager wraps `hf download` against `registry/models.yaml`:
 
-**Listing and downloading models:**
 ```bash
-make models                           # List all available models with status
-make download-model MODEL=breeze-asr-25  # Download a specific model
+make models                           # List entries with install status
+make download-model MODEL=breeze-asr-25
+make set-model MODEL=large-v3-turbo   # Refuses unless model is downloaded
+make delete-model MODEL=large-v3-turbo # Refuses to delete the active model
 ```
 
-**Switching the active model:**
-```bash
-make set-model MODEL=breeze-asr-25    # Set the active model (updates .env)
-```
+**Registry schema** (`registry/models.yaml`):
 
-**Removing a model:**
-```bash
-make delete-model MODEL=large-v3      # Delete a downloaded model file
-```
-
-**CLI wrapper** (`./whisper-wrap`):
-A convenience script that wraps the Makefile targets for quick access:
-```bash
-./whisper-wrap models              # List available models
-./whisper-wrap download <name>     # Download a model
-./whisper-wrap use <name>          # Set active model
-./whisper-wrap delete <name>       # Delete a downloaded model
-```
-
-**Adding custom models:**
-Append an entry to `registry/models.yaml` following the existing format. Each entry requires `url`, `filename`, `size`, `languages`, and `description`. Set `default: true` on at most one entry to make it the default for `make setup`.
-
-## whisper-server Integration
-
-**Automatic Setup:**
-```bash
-make setup              # Initializes ./whisper.cpp submodule, builds, downloads default model
-make run-whisper        # Start whisper-server only
-```
-
-**Manual Setup:**
-```bash
-# Default ports (run from project root)
-./whisper.cpp/build/bin/whisper-server --host 0.0.0.0 --port 9000 -m ./models/ggml-large-v3-turbo-q8_0.bin -l 'auto' -tdrz
-
-# Custom ports (set environment variables or use Makefile)
-WHISPER_SERVER_PORT=9001 make run-whisper
-```
-
-**Model Information:**
-- **File**: `ggml-large-v3-turbo-q8_0.bin` (~1.5GB)
-- **Languages**: 100+ languages with tier-based quality
-- **Performance**: ~2-4x real-time transcription speed
+Required: `repo_id`, `format: ct2`, `compute_type`, `local_dir`, `size`,
+`languages`, `description`. Optional: `subfolder`, `revision`, `default`.
+Exactly one entry SHALL set `default: true`.
 
 ## Development Guidelines
 
@@ -229,9 +215,11 @@ WHISPER_SERVER_PORT=9001 make run-whisper
 - All changes should pass: `make lint && make test`
 
 **Testing:**
-- 14 comprehensive tests covering all major functionality
-- Test both API endpoints and service layers
-- Include error conditions and edge cases
+- Pytest suite spans config, whisper, llm, transcribe, ask, status, registry,
+  model-manager, and lifespan integration; ~140+ tests after v2.
+- New endpoints (`/ask`, `/listen`) and the registry rewrite each ship dedicated
+  test modules.
+- Include error conditions and edge cases (validation 400s, 415s, SSE error events).
 
 **Documentation:**
 - Update README.md for user-facing changes
@@ -248,25 +236,27 @@ WHISPER_SERVER_PORT=9001 make run-whisper
 
 **Troubleshooting:**
 ```bash
-make check-system-deps  # Verify all dependencies
-make test              # Run comprehensive test suite
-curl http://localhost:8000/health  # Check service health
+make check-system-deps              # Verify ffmpeg, libmagic, uv, hf
+make test                           # Run pytest
+curl http://localhost:8000/status   # Check service health and loaded model
 ```
 
 **Performance:**
-- **Memory**: 2-4GB during processing, 6-8GB recommended for production
-- **Timing**: 1min audio ≈ 15-30s processing time
-- **Concurrency**: Single-threaded whisper-server (queue requests)
+- **Memory**: 2–4 GB during transcription; 8 GB recommended for production
+  (model resident, ffmpeg conversion, request buffers).
+- **Timing**: 1 min of audio ≈ 10–25 s on Mac mini with Breeze CT2 int8_float16.
+- **Concurrency**: Single in-process model — requests queue if many arrive
+  simultaneously. Use a reverse proxy with concurrency limits for production.
 
 **Docker:**
-- **Build Time**: 10-15 minutes first build (downloads and compiles whisper.cpp)
-- **Image Size**: ~3GB (includes models and build tools)
-- **Volumes**: Models persisted via named volumes, temp files ephemeral
-- **Multi-Architecture**: Auto-detects and optimizes for Intel/AMD (x86_64) and ARM64 systems
-- **CPU Optimizations**: 
-  - **x86_64 (Intel/AMD)**: AVX, AVX2, F16C, FMA instruction sets enabled
-  - **ARM64 (Apple Silicon)**: NEON optimizations with armv8-a targeting
-  - **Generic**: Fallback configuration for other architectures
+- **Build Time**: ~1–3 minutes (no whisper.cpp build step in v2).
+- **Image Size**: ~1.5 GB (Python deps + model artefacts).
+- **Volumes**: Models persisted via the `whisper-models` named volume; temp
+  files are ephemeral (container `tmpfs`).
+- **Restart policy**: `restart: unless-stopped` — the supervisor recovers
+  from crashes (v1 in-app auto-restart was removed).
 
 > [!WARNING]
-> **ARM Docker Limitation**: Docker containers on ARM systems (Mac/Apple Silicon) cannot access GPU acceleration. Performance remains excellent with CPU-only processing and NEON optimizations.
+> **ARM Docker Limitation**: Docker containers on ARM systems (Mac/Apple
+> Silicon) cannot access GPU acceleration. v2 uses CT2's CPU paths
+> automatically; performance remains good with `COMPUTE_TYPE=default`.

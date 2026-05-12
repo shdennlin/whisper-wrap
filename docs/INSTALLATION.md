@@ -34,16 +34,16 @@ equivalent CT2 entry to your local `registry/models.yaml`. Suggested replacement
 ## System Requirements
 
 ### Hardware Requirements
-- **RAM**: 4GB minimum, 8GB+ recommended (whisper models are memory-intensive)
-- **Disk Space**: ~3GB free space (whisper.cpp compilation + models)
+- **RAM**: 4GB minimum, 8GB+ recommended (CT2 Whisper models are memory-resident)
+- **Disk Space**: ~2GB free (Python deps + 1.5GB Breeze CT2 model)
 - **CPU**: Multi-core recommended for faster transcription
 
 ### Software Requirements
-- **Python**: 3.8 or higher
+- **Python**: 3.10 or higher
 - **uv**: Fast Python package manager ([install guide](https://github.com/astral-sh/uv))
-- **git**: For cloning whisper.cpp repository
-- **cmake**: For building whisper.cpp (3.16+)
-- **C++ compiler**: GCC, Clang, or MSVC for compilation
+- **ffmpeg**: Audio format conversion
+- **libmagic**: MIME detection
+- **hf** (or **huggingface-cli**): Pulled in as a Python dep; used by the model manager
 
 ### Operating Systems
 - macOS 10.15+ (Intel/Apple Silicon)
@@ -109,27 +109,21 @@ sudo pacman -S ffmpeg file
 make install
 ```
 
-### 3. Whisper.cpp Setup
+### 3. Download the ASR Model
 
 ```bash
-# Clone whisper.cpp
-make clone-whisper
+# Download the default registry entry (Breeze ASR 25, CT2 int8_float16)
+make download-default-model
 
-# Build whisper.cpp
-make build-whisper
-
-# Download model
-make download-model
+# Or pick a specific entry:
+make download-model MODEL=large-v3-turbo
 ```
 
-### 4. Start Services
+### 4. Start the Server
 
 ```bash
-# Terminal 1: Start whisper-server
-make run-whisper
-
-# Terminal 2: Start FastAPI
-make run
+make run        # uvicorn (single FastAPI process; in-process model load)
+make dev        # uvicorn --reload for development
 ```
 
 ## Verification
