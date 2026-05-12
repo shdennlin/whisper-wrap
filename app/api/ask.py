@@ -1,0 +1,232 @@
+"""POST /ask — audio or text question, Gemini answer, optional SSE streaming.
+
+Reuses the `/transcribe` Content-Type dispatch matrix and adds an `application/json`
+branch (`{"text": "..."}`) that skips STT. Optional `?stream=true` returns a
+`text/event-stream` response where every `data:` line is a single JSON document.
+
+Event order (streaming success path):
+  1. `event: transcript` with `data: {"text": <string or null>}`
+  2. zero or more `event: token`  with `data: {"text": "<delta>"}`
+  3. terminating `event: done`    with `data: {"finish_reason": "stop"}`
+
+Failure paths:
+  - STT failure BEFORE LLM call → terminating `event: error` (no `transcript`)
+  - LLM failure AFTER `transcript` event → terminating `event: error`
+  - GEMINI_API_KEY unset           → terminating `event: error` (no `transcript`)
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+from starlette.datastructures import UploadFile
+
+from app.api.transcribe import (
+    _RAW_BODY_EXTENSION_MAP,
+    _is_supported_dispatch_type,
+    _normalize_content_type,
+)
+from app.config import config
+from app.services.converter import audio_converter
+from app.services.files import file_manager
+from app.services.llm import LLMConfigError, LLMUpstreamError
+from app.services.whisper import WhisperTranscriptionError
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+CT_JSON = "application/json"
+
+
+def _is_supported_ask_content_type(ct: str) -> bool:
+    return _is_supported_dispatch_type(ct) or ct == CT_JSON
+
+
+def _sse_event(event_type: str, payload: dict) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _read_text_body(request: Request) -> str:
+    """Read & validate an `application/json {"text": "..."}` body.
+
+    Raises HTTPException 400 for missing / empty / malformed payloads.
+    """
+    try:
+        raw = await request.body()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read body: {e}")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty JSON body")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Malformed JSON: {e.msg}")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="Missing or empty 'text' field")
+    return text
+
+
+async def _extract_audio_body(
+    request: Request, content_type: str
+) -> tuple[bytes, str]:
+    """Cheap validation phase for audio paths — runs before any SSE framing begins."""
+    if content_type == "multipart/form-data":
+        form = await request.form()
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(status_code=400, detail="Missing form field 'file'")
+        body = await upload.read()
+        suffix = Path(upload.filename or "audio.unknown").suffix or ".audio"
+    else:
+        body = await request.body()
+        suffix = _RAW_BODY_EXTENSION_MAP.get(content_type, ".audio")
+    if not body:
+        raise HTTPException(status_code=400, detail="Empty audio body")
+    return body, suffix
+
+
+async def _run_audio_pipeline(
+    request: Request,
+    body: bytes,
+    suffix: str,
+    language: str,
+    prompt: str | None,
+) -> str:
+    """Write to disk, validate format/size, convert to WAV, transcribe. Returns text."""
+    temp_input = file_manager.create_temp_file(suffix=suffix)
+    temp_wav = None
+    try:
+        with open(temp_input, "wb") as f:
+            f.write(body)
+
+        if not file_manager.validate_file_size(temp_input):
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (max {config.MAX_FILE_SIZE_MB}MB)",
+            )
+        if not file_manager.is_audio_file(temp_input):
+            mime = file_manager.detect_mime_type(temp_input)
+            raise HTTPException(
+                status_code=415, detail=f"Unsupported file format. Detected: {mime}"
+            )
+
+        temp_wav = audio_converter.convert_to_wav(temp_input)
+        whisper_client = request.app.state.whisper_client
+        result = await whisper_client.transcribe(
+            temp_wav, language=language, initial_prompt=prompt
+        )
+        return result.get("text", "")
+    finally:
+        if temp_input:
+            file_manager.cleanup_file(temp_input)
+        if temp_wav:
+            file_manager.cleanup_file(temp_wav)
+
+
+@router.post("/ask")
+async def ask(
+    request: Request,
+    stream: bool = Query(
+        False, description="If true, return text/event-stream with token deltas"
+    ),
+    language: str = Query(
+        "auto", description="Spoken language hint for audio inputs"
+    ),
+    prompt: str | None = Query(
+        None, description="Initial prompt seed for audio transcription"
+    ),
+) -> Any:
+    content_type = _normalize_content_type(request.headers.get("content-type"))
+
+    if not _is_supported_ask_content_type(content_type):
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported Content-Type: {content_type or '<missing>'}",
+        )
+
+    # ---- Validation phase: runs BEFORE any SSE framing begins (task 4.3) ----
+    if content_type == CT_JSON:
+        user_text = await _read_text_body(request)
+        audio_body: bytes | None = None
+        audio_suffix: str | None = None
+    else:
+        audio_body, audio_suffix = await _extract_audio_body(request, content_type)
+        user_text = None
+
+    llm_client = request.app.state.llm_client
+
+    # ---- Blocking mode ----
+    if not stream:
+        if user_text is None:
+            transcript = await _run_audio_pipeline(
+                request, audio_body, audio_suffix, language, prompt
+            )
+            llm_input = transcript
+            transcript_for_response: str | None = transcript
+        else:
+            llm_input = user_text
+            transcript_for_response = None
+
+        try:
+            answer = await llm_client.ask(llm_input)
+        except LLMConfigError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        except LLMUpstreamError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+        return {"transcript": transcript_for_response, "answer": answer}
+
+    # ---- Streaming mode ----
+    async def event_stream():
+        if not llm_client.configured:
+            # Missing credentials: single event:error, no transcript event (task 4.5).
+            yield _sse_event(
+                "error", {"error": "GEMINI_API_KEY is not configured"}
+            )
+            return
+
+        if user_text is not None:
+            # JSON text path: transcript event with null text, then proceed to LLM.
+            yield _sse_event("transcript", {"text": None})
+            llm_input = user_text
+        else:
+            # Audio path: run pipeline. STT failure → event:error WITHOUT transcript.
+            try:
+                transcript_text = await _run_audio_pipeline(
+                    request, audio_body, audio_suffix, language, prompt
+                )
+            except HTTPException as he:
+                yield _sse_event("error", {"error": he.detail})
+                return
+            except WhisperTranscriptionError as e:
+                yield _sse_event("error", {"error": str(e)})
+                return
+            except Exception as e:  # defensive: don't crash the stream
+                yield _sse_event("error", {"error": f"Transcription failed: {e}"})
+                return
+            yield _sse_event("transcript", {"text": transcript_text})
+            llm_input = transcript_text
+
+        try:
+            async for delta in llm_client.ask_stream(llm_input):
+                yield _sse_event("token", {"text": delta})
+        except LLMConfigError as e:
+            yield _sse_event("error", {"error": str(e)})
+            return
+        except LLMUpstreamError as e:
+            yield _sse_event("error", {"error": str(e)})
+            return
+        except Exception as e:  # defensive
+            yield _sse_event("error", {"error": f"LLM stream failed: {e}"})
+            return
+
+        yield _sse_event("done", {"finish_reason": "stop"})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

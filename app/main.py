@@ -11,8 +11,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.ask import router as ask_router
 from app.api.transcribe import router as transcribe_router
 from app.config import config, load_env_file, warn_obsolete_env_vars
+from app.services.llm import LLMClient
 from app.services.registry import resolve_model_dir
 from app.services.whisper import WhisperClient, load_model
 
@@ -49,6 +51,17 @@ async def lifespan(app: FastAPI):
     app.state.load_time_ms = load_time_ms
     app.state.lifespan_completed_at = time.time()
 
+    app.state.llm_client = LLMClient(
+        api_key=config.GEMINI_API_KEY,
+        model=config.GEMINI_MODEL,
+        system_prompt=config.GEMINI_SYSTEM_PROMPT,
+    )
+    logger.info(
+        "Gemini LLM client: configured=%s, model=%s",
+        app.state.llm_client.configured,
+        app.state.llm_client.model,
+    )
+
     logger.info("WhisperModel loaded in %d ms", load_time_ms)
 
     yield
@@ -64,6 +77,7 @@ app = FastAPI(
 )
 
 app.include_router(transcribe_router)
+app.include_router(ask_router)
 
 
 @app.get("/")
@@ -73,6 +87,7 @@ async def root():
         "version": "2.0.0",
         "endpoints": {
             "transcribe": "POST /transcribe - audio transcription (multipart, raw audio/*, or application/octet-stream)",
+            "ask": "POST /ask - audio or text question → Gemini answer (with optional ?stream=true SSE)",
             "status": "GET /status - service + model + LLM configuration",
         },
     }

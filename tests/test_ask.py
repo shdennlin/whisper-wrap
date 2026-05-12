@@ -1,0 +1,338 @@
+"""Integration tests for POST /ask (tasks 4.2-4.5)."""
+
+import json
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.services.llm import LLMClient, LLMUpstreamError
+
+
+@pytest.fixture
+def stubbed_app(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "app.main.load_model", lambda *a, **kw: MagicMock(name="WhisperModel")
+    )
+
+    wav_path = tmp_path / "out.wav"
+    wav_path.write_bytes(b"WAV")
+
+    # Stub file/converter pipeline shared with /transcribe.
+    monkeypatch.setattr(
+        "app.api.ask.file_manager.validate_file_size", lambda *a: True
+    )
+    monkeypatch.setattr("app.api.ask.file_manager.is_audio_file", lambda *a: True)
+    monkeypatch.setattr(
+        "app.api.ask.file_manager.detect_mime_type", lambda *a: "audio/wav"
+    )
+    monkeypatch.setattr(
+        "app.api.ask.audio_converter.convert_to_wav", lambda *a: wav_path
+    )
+    monkeypatch.setattr("app.api.ask.file_manager.cleanup_file", lambda *a: None)
+
+    from app.main import app
+
+    return app
+
+
+def _install_llm(app, *, configured=True, ask_text="answer", stream_chunks=None,
+                 stream_error=None, ask_error=None):
+    """Inject a stubbed LLMClient onto app.state, returning it for assertions."""
+
+    async def fake_ask(text):
+        if ask_error:
+            raise ask_error
+        return ask_text
+
+    async def fake_stream(text):
+        if stream_error:
+            raise stream_error
+            yield  # pragma: no cover
+        for c in stream_chunks or []:
+            yield c
+
+    fake = MagicMock(spec=LLMClient)
+    fake.configured = configured
+    fake.ask = fake_ask
+    fake.ask_stream = fake_stream
+    app.state.llm_client = fake
+    return fake
+
+
+def _install_whisper(app, *, transcript="hello world", error=None):
+    async def fake_transcribe(*a, **kw):
+        if error:
+            raise error
+        return {"text": transcript, "language": "en", "segments": []}
+
+    app.state.whisper_client.transcribe = fake_transcribe
+
+
+# =========================================================================
+# Task 4.2: Content-Type dispatch + audio/text inputs + JSON path
+# =========================================================================
+
+
+def test_blocking_json_text_returns_transcript_null_and_answer(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, ask_text="42")
+        _install_whisper(stubbed_app)
+        resp = c.post("/ask", json={"text": "what is the answer?"})
+        assert resp.status_code == 200
+        assert resp.json() == {"transcript": None, "answer": "42"}
+
+
+def test_blocking_multipart_audio_transcribes_then_asks(stubbed_app, tmp_path):
+    audio = tmp_path / "in.mp3"
+    audio.write_bytes(b"fake mp3")
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, ask_text="hi")
+        _install_whisper(stubbed_app, transcript="who are you")
+        with audio.open("rb") as f:
+            resp = c.post(
+                "/ask", files={"file": ("clip.mp3", f, "audio/mp3")}
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"transcript": "who are you", "answer": "hi"}
+
+
+def test_blocking_raw_audio_octet_stream(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, ask_text="ok")
+        _install_whisper(stubbed_app, transcript="raw audio text")
+        resp = c.post(
+            "/ask",
+            headers={"Content-Type": "application/octet-stream"},
+            content=b"raw bytes",
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"transcript": "raw audio text", "answer": "ok"}
+
+
+def test_blocking_unsupported_content_type_returns_415(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app)
+        resp = c.post(
+            "/ask",
+            headers={"Content-Type": "text/plain"},
+            content=b"hello",
+        )
+        assert resp.status_code == 415
+
+
+# =========================================================================
+# Task 4.3: Validation 400 in BOTH blocking and streaming modes
+# =========================================================================
+
+
+@pytest.mark.parametrize("stream_param", [{}, {"stream": "true"}])
+def test_validation_empty_json_body(stubbed_app, stream_param):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app)
+        resp = c.post(
+            "/ask",
+            params=stream_param,
+            headers={"Content-Type": "application/json"},
+            content=b"",
+        )
+        assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("stream_param", [{}, {"stream": "true"}])
+def test_validation_malformed_json(stubbed_app, stream_param):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app)
+        resp = c.post(
+            "/ask",
+            params=stream_param,
+            headers={"Content-Type": "application/json"},
+            content=b"{not-json",
+        )
+        assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("stream_param", [{}, {"stream": "true"}])
+def test_validation_missing_text_field(stubbed_app, stream_param):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app)
+        resp = c.post(
+            "/ask",
+            params=stream_param,
+            json={"not_text": "x"},
+        )
+        assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("stream_param", [{}, {"stream": "true"}])
+def test_validation_multipart_missing_file_field(stubbed_app, stream_param, tmp_path):
+    """Multipart with no `file` field SHALL fail HTTP 400 in both modes."""
+    txt = tmp_path / "x.txt"
+    txt.write_bytes(b"data")
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app)
+        with txt.open("rb") as f:
+            resp = c.post(
+                "/ask",
+                params=stream_param,
+                files={"other": ("x.txt", f, "text/plain")},
+            )
+        assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("stream_param", [{}, {"stream": "true"}])
+def test_validation_zero_byte_raw_audio(stubbed_app, stream_param):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app)
+        resp = c.post(
+            "/ask",
+            params=stream_param,
+            headers={"Content-Type": "audio/wav"},
+            content=b"",
+        )
+        assert resp.status_code == 400
+
+
+# =========================================================================
+# Task 4.4: SSE streaming contract
+# =========================================================================
+
+
+def _parse_sse_events(body: str) -> list[dict]:
+    """Parse a `text/event-stream` body into a list of {event, data} dicts."""
+    events = []
+    current = {}
+    for line in body.split("\n"):
+        if not line.strip():
+            if current:
+                events.append(current)
+                current = {}
+            continue
+        if line.startswith("event:"):
+            current["event"] = line[len("event:"):].strip()
+        elif line.startswith("data:"):
+            data_str = line[len("data:"):].strip()
+            current["data"] = json.loads(data_str)
+    if current:
+        events.append(current)
+    return events
+
+
+def test_streaming_success_emits_transcript_tokens_done(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, stream_chunks=["hel", "lo"])
+        _install_whisper(stubbed_app, transcript="say hi")
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+
+        events = _parse_sse_events(resp.text)
+        types = [e["event"] for e in events]
+        assert types == ["transcript", "token", "token", "done"]
+        assert events[0]["data"] == {"text": "say hi"}
+        assert events[1]["data"] == {"text": "hel"}
+        assert events[2]["data"] == {"text": "lo"}
+        assert events[3]["data"]["finish_reason"] == "stop"
+
+
+def test_streaming_empty_llm_response_emits_transcript_then_done(stubbed_app):
+    """Streaming-with-empty-LLM-response: zero token events, terminating done."""
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, stream_chunks=[])  # no tokens
+        _install_whisper(stubbed_app, transcript="silent")
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        events = _parse_sse_events(resp.text)
+        types = [e["event"] for e in events]
+        assert types == ["transcript", "done"]
+
+
+def test_streaming_llm_error_after_transcript(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, stream_error=LLMUpstreamError("rate limited"))
+        _install_whisper(stubbed_app, transcript="hi")
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        events = _parse_sse_events(resp.text)
+        types = [e["event"] for e in events]
+        assert types == ["transcript", "error"]
+        assert "rate limited" in events[1]["data"]["error"]
+
+
+def test_streaming_stt_failure_before_transcript(stubbed_app):
+    from app.services.whisper import WhisperTranscriptionError
+
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, stream_chunks=["never"])
+        _install_whisper(stubbed_app, error=WhisperTranscriptionError("ct2 crashed"))
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        events = _parse_sse_events(resp.text)
+        types = [e["event"] for e in events]
+        assert types == ["error"]
+        assert "ct2 crashed" in events[0]["data"]["error"]
+
+
+def test_streaming_json_text_path_emits_transcript_null(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, stream_chunks=["ok"])
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            json={"text": "ping"},
+        )
+        events = _parse_sse_events(resp.text)
+        assert events[0] == {"event": "transcript", "data": {"text": None}}
+        assert events[1] == {"event": "token", "data": {"text": "ok"}}
+        assert events[2]["event"] == "done"
+
+
+# =========================================================================
+# Task 4.5: Missing credentials behaviour
+# =========================================================================
+
+
+def test_blocking_missing_gemini_key_returns_502(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(
+            stubbed_app,
+            configured=False,
+            ask_error=__import__("app.services.llm", fromlist=["LLMConfigError"]).LLMConfigError(
+                "GEMINI_API_KEY is not configured"
+            ),
+        )
+        resp = c.post("/ask", json={"text": "ping"})
+        assert resp.status_code == 502
+        assert "GEMINI_API_KEY" in resp.json()["detail"]
+
+
+def test_streaming_missing_gemini_key_emits_single_event_error(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, configured=False)
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            json={"text": "ping"},
+        )
+        events = _parse_sse_events(resp.text)
+        # Exactly one event:error and nothing else (no transcript).
+        types = [e["event"] for e in events]
+        assert types == ["error"]
+        assert "GEMINI_API_KEY" in events[0]["data"]["error"]
