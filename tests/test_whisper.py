@@ -68,13 +68,12 @@ async def test_transcribe_initial_prompt_forwarded(tmp_wav, mock_model):
     assert kwargs["initial_prompt"] == "custom prompt seed"
 
 
-async def test_transcribe_default_prompt_used_when_none(tmp_wav, mock_model):
-    """When initial_prompt is None, the default punctuation seed SHALL be applied."""
+async def test_transcribe_no_prompt_passes_through(tmp_wav, mock_model):
+    """When initial_prompt is None, the wrapper SHALL forward None (no seed)."""
     client = WhisperClient(model=mock_model)
     await client.transcribe(tmp_wav, initial_prompt=None)
     kwargs = mock_model.transcribe.call_args.kwargs
-    assert kwargs["initial_prompt"]  # truthy
-    assert "標點符號" in kwargs["initial_prompt"]  # bilingual seed contains zh marker
+    assert kwargs["initial_prompt"] is None
 
 
 async def test_transcribe_both_language_and_prompt_forwarded(tmp_wav, mock_model):
@@ -86,13 +85,13 @@ async def test_transcribe_both_language_and_prompt_forwarded(tmp_wav, mock_model
     assert kwargs["initial_prompt"] == "seed"
 
 
-async def test_transcribe_only_language_forwarded_uses_default_prompt(tmp_wav, mock_model):
-    """When only `language` is set, the default punctuation seed SHALL still be used."""
+async def test_transcribe_only_language_forwarded_no_prompt(tmp_wav, mock_model):
+    """When only `language` is set, initial_prompt forwards None (no default seed)."""
     client = WhisperClient(model=mock_model)
     await client.transcribe(tmp_wav, language="en")
     kwargs = mock_model.transcribe.call_args.kwargs
     assert kwargs["language"] == "en"
-    assert "標點符號" in kwargs["initial_prompt"]
+    assert kwargs["initial_prompt"] is None
 
 
 async def test_postprocessing_joins_newlines_and_normalizes(tmp_wav):

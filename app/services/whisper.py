@@ -21,15 +21,6 @@ from app.services.punctuation import (
 
 logger = logging.getLogger(__name__)
 
-# Whisper imitates the style of the prompt, so a bilingual punctuated seed nudges
-# the model toward properly-punctuated output. Capped at 224 tokens per the model card.
-_DEFAULT_PUNCTUATION_PROMPT = (
-    "以下是語音轉錄的內容，包含正確的標點符號。"
-    "Hello, this is a transcription. We use commas, periods, and question marks. "
-    "這段文字有逗號、句號、問號？都是正確的標點。"
-)
-
-
 class WhisperLoadError(RuntimeError):
     """The configured WhisperModel could not be constructed (missing files, bad path, etc.)."""
 
@@ -117,7 +108,11 @@ class WhisperClient:
         if not wav_file_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_file_path}")
 
-        effective_prompt = initial_prompt or _DEFAULT_PUNCTUATION_PROMPT
+        # initial_prompt is forwarded verbatim — None means no prompt seed (see
+        # design.md: A/B testing on real Mandarin showed the previous bilingual
+        # default seed had zero effect on punctuation output while costing ~20%
+        # extra inference time per request).
+        effective_prompt = initial_prompt
         model_language = None if language == "auto" else language
 
         try:
