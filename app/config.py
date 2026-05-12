@@ -1,85 +1,96 @@
+"""Application configuration for the v2 in-process faster-whisper backend.
+
+Dotenv loading is intentionally NOT triggered at import time. Entry points (main.py
+and the test conftest) call `load_env_file()` explicitly so tests don't inherit
+stale values from the developer's local `.env` file.
+"""
+
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Load environment variables from `.env`. Must be called by the entry point."""
+    load_dotenv(path)
+
+
+OBSOLETE_V1_KEYS: tuple[str, ...] = (
+    "WHISPER_SERVER_HOST",
+    "WHISPER_SERVER_PORT",
+    "WHISPER_SERVER_URL",
+    "WHISPER_AUTO_RESTART",
+    "WHISPER_BINARY_PATH",
+    "WHISPER_MAX_RETRIES",
+    "MODEL_PATH",
+)
+
+
+def warn_obsolete_env_vars() -> list[str]:
+    """Scan os.environ for v1 env vars dropped in v2 and emit one WARNING per detection.
+
+    Returns the list of detected keys (also useful for tests / observability).
+    """
+    detected: list[str] = []
+    for key in OBSOLETE_V1_KEYS:
+        if key in os.environ:
+            logger.warning(
+                "Obsolete v1 env var %s detected — ignored in v2 (see CHANGELOG for migration)",
+                key,
+            )
+            detected.append(key)
+    return detected
 
 
 class Config:
     """Application configuration loaded from environment variables."""
 
-    # Server port configuration
+    # Server
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
 
-    # Whisper server configuration
-    WHISPER_SERVER_URL: str = os.getenv("WHISPER_SERVER_URL", "http://localhost:9000")
-    WHISPER_SERVER_PORT: int = int(os.getenv("WHISPER_SERVER_PORT", "9000"))
-    WHISPER_SERVER_HOST: str = os.getenv("WHISPER_SERVER_HOST", "localhost")
+    # Model resolution
+    # MODEL_DIR (if set) overrides MODEL_NAME registry lookup.
+    MODEL_NAME: str = os.getenv("MODEL_NAME", "breeze-asr-25")
+    MODEL_DIR: str | None = os.environ.get("MODEL_DIR") or None
 
-    # Model configuration
-    MODEL_NAME: str = os.getenv("MODEL_NAME", "large-v3-turbo-q8")
-    MODEL_PATH: Path = Path(os.getenv("MODEL_PATH", "./models/ggml-large-v3-turbo-q8_0.bin"))
+    # CTranslate2 runtime hints
+    # COMPUTE_TYPE="default" lets CT2 pick the runtime path; required on Apple Silicon CPU
+    # because the int8_float16 storage format does not map 1:1 to a CPU compute path.
+    COMPUTE_TYPE: str = os.getenv("COMPUTE_TYPE", "default")
+    DEVICE: str = os.getenv("DEVICE", "auto")
 
-    # File handling configuration
+    # LLM (Gemini for /ask)
+    # Preserve unset (None) vs empty ("") distinction so app/services/llm.py can implement
+    # the spec's "unset = silent default, empty = warn + default" policy.
+    GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
+    GEMINI_MODEL: str | None = os.environ.get("GEMINI_MODEL")
+    GEMINI_SYSTEM_PROMPT: str | None = os.environ.get("GEMINI_SYSTEM_PROMPT")
+
+    # File handling
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
     TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "/tmp/whisper-wrap"))
     UPLOAD_TIMEOUT_SECONDS: int = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "30"))
 
-    # Whisper-server process management
-    WHISPER_BINARY_PATH: Path = Path(
-        os.getenv("WHISPER_BINARY_PATH", "./whisper.cpp/build/bin/whisper-server")
-    )
-    WHISPER_AUTO_RESTART: bool = os.getenv("WHISPER_AUTO_RESTART", "true").lower() in (
-        "true", "1", "yes",
-    )
-    WHISPER_MAX_RETRIES: int = int(os.getenv("WHISPER_MAX_RETRIES", "2"))
-
-    # Logging configuration
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG")
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     @property
     def max_file_size_bytes(self) -> int:
-        """Convert MB to bytes for file size validation."""
         return self.MAX_FILE_SIZE_MB * 1024 * 1024
 
-    @property
-    def whisper_server_url(self) -> str:
-        """Get dynamically constructed whisper server URL if individual components are provided."""
-        # If WHISPER_SERVER_URL is explicitly set, use it
-        if os.getenv("WHISPER_SERVER_URL"):
-            return self.WHISPER_SERVER_URL
-        # Otherwise, construct from host and port
-        return f"http://{self.WHISPER_SERVER_HOST}:{self.WHISPER_SERVER_PORT}"
-
     def ensure_temp_dir(self) -> None:
-        """Ensure temporary directory exists."""
         self.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    def validate_ports(self) -> None:
-        """Validate port configuration."""
-        def is_valid_port(port: int) -> bool:
-            return 1 <= port <= 65535
-
-        if not is_valid_port(self.API_PORT):
-            raise ValueError(f"Invalid API_PORT: {self.API_PORT}. Must be between 1-65535.")
-
-        if not is_valid_port(self.WHISPER_SERVER_PORT):
-            raise ValueError(f"Invalid WHISPER_SERVER_PORT: {self.WHISPER_SERVER_PORT}. Must be between 1-65535.")
-
-        if self.API_PORT == self.WHISPER_SERVER_PORT and self.API_HOST == self.WHISPER_SERVER_HOST:
-            raise ValueError("API_PORT and WHISPER_SERVER_PORT cannot be the same when running on the same host.")
-
-    def validate_model(self) -> None:
-        """Validate that the configured model file exists."""
-        if not self.MODEL_PATH.exists():
-            raise FileNotFoundError(
-                f"Model not found: {self.MODEL_PATH}. "
-                f"Run 'make download-model MODEL={self.MODEL_NAME}' to download it."
+    def validate_port(self) -> None:
+        if not (1 <= self.API_PORT <= 65535):
+            raise ValueError(
+                f"Invalid API_PORT: {self.API_PORT}. Must be between 1-65535."
             )
 
 
-# Global configuration instance
 config = Config()
