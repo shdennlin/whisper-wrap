@@ -7,14 +7,15 @@ authors = [
 ]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.23.0",
     "python-multipart>=0.0.6",
-    "httpx>=0.24.0",
     "python-magic>=0.4.27",
     "python-dotenv>=1.0.0",
+    "faster-whisper>=1.0.0",
+    "google-genai>=0.3.0",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +35,7 @@ packages = ["app"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "C4", "PYI", "UP"]
