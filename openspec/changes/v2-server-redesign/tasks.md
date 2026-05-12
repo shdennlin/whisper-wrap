@@ -17,9 +17,9 @@
 
 ## 3. Unify `/transcribe-raw` into `/transcribe`
 
-- [ ] 3.1 Implement the design decision "Unify `POST /transcribe-raw` into `POST /transcribe` via Content-Type dispatch" so the unified handler branches on `Content-Type` to read multipart form data, raw `audio/*` body, or `application/octet-stream` body, returning HTTP 415 for unsupported types and HTTP 400 for "missing form field 'file'" or "empty audio body" per the design failure modes; verify with `tests/test_api.py` cases for multipart, raw `audio/m4a`, raw `application/octet-stream`, a `text/plain` 415 case, a multipart-with-no-file 400 case, and a zero-byte raw body 400 case.
-- [ ] 3.2 Satisfy the "Language parameter on transcribe endpoints" and "Prompt parameter on transcribe endpoints" requirements on the unified route: accept both query params for every supported body shape, default `language` to `"auto"`, and omit `initial_prompt` when absent; verify with integration tests covering combinations of body shape × parameter presence.
-- [ ] 3.3 Delete the `/transcribe-raw` route handler and registration with no alias or redirect remaining; verify `grep -r transcribe-raw app/` returns no matches and a regression test asserts `POST /transcribe-raw` returns 404.
+- [x] 3.1 Implement the design decision "Unify `POST /transcribe-raw` into `POST /transcribe` via Content-Type dispatch" so the unified handler branches on `Content-Type` to read multipart form data, raw `audio/*` body, or `application/octet-stream` body, returning HTTP 415 for unsupported types and HTTP 400 for "missing form field 'file'" or "empty audio body" per the design failure modes; verify with `tests/test_api.py` cases for multipart, raw `audio/m4a`, raw `application/octet-stream`, a `text/plain` 415 case, a multipart-with-no-file 400 case, and a zero-byte raw body 400 case.
+- [x] 3.2 Satisfy the "Language parameter on transcribe endpoints" and "Prompt parameter on transcribe endpoints" requirements on the unified route: accept both query params for every supported body shape, default `language` to `"auto"`, and omit `initial_prompt` when absent; verify with integration tests covering combinations of body shape × parameter presence.
+- [x] 3.3 Delete the `/transcribe-raw` route handler and registration with no alias or redirect remaining; verify `grep -r transcribe-raw app/` returns no matches and a regression test asserts `POST /transcribe-raw` returns 404.
 
 ## 4. New `POST /ask` endpoint backed by Gemini
 

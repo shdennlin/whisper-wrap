@@ -1,8 +1,16 @@
+"""POST /transcribe — unified audio transcription endpoint.
+
+v2 unifies the v1 `/transcribe` (multipart) and `/transcribe-raw` (raw body) routes
+into a single endpoint that dispatches on Content-Type per the design decision
+"Unify POST /transcribe-raw into POST /transcribe via Content-Type dispatch".
+"""
+
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request
+from starlette.datastructures import UploadFile
 
 from app.config import config
 from app.services.converter import audio_converter
@@ -13,178 +21,142 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# Maps a Content-Type seen on a raw audio body to the suffix used for the
+# temp input file (so libmagic / ffmpeg can pick the right decoder).
+_RAW_BODY_EXTENSION_MAP = {
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/flac": ".flac",
+    "audio/ogg": ".ogg",
+    "audio/aac": ".aac",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/m4a": ".m4a",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "application/octet-stream": ".audio",
+}
+
+
+def _normalize_content_type(raw: str | None) -> str:
+    """Strip parameters (e.g. ;boundary=...) and lowercase the base type."""
+    if not raw:
+        return ""
+    return raw.split(";", 1)[0].strip().lower()
+
+
+def _is_supported_dispatch_type(content_type: str) -> bool:
+    if content_type == "multipart/form-data":
+        return True
+    if content_type.startswith("audio/"):
+        return True
+    if content_type == "application/octet-stream":
+        return True
+    return False
+
+
+async def _read_multipart_audio(request: Request) -> tuple[bytes, str]:
+    """Return (body_bytes, suffix) from a multipart form upload."""
+    form = await request.form()
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        raise HTTPException(status_code=400, detail="Missing form field 'file'")
+    body = await upload.read()
+    filename = upload.filename or "audio.unknown"
+    suffix = Path(filename).suffix or ".audio"
+    return body, suffix
+
+
+async def _read_raw_audio(request: Request, content_type: str) -> tuple[bytes, str]:
+    body = await request.body()
+    suffix = _RAW_BODY_EXTENSION_MAP.get(content_type, ".audio")
+    return body, suffix
+
+
 @router.post("/transcribe")
-async def transcribe_audio(
+async def transcribe(
     request: Request,
-    file: UploadFile = File(...),
-    language: str = Query("auto", description="Spoken language code (e.g., 'en', 'zh') or 'auto' for detection"),
-    prompt: Optional[str] = Query(None, description="Initial prompt to guide transcription style and punctuation"),
-) -> Dict[str, Any]:
+    language: str = Query(
+        "auto",
+        description="Spoken language code (e.g. 'en', 'zh') or 'auto' for detection",
+    ),
+    prompt: Optional[str] = Query(
+        None,
+        description="Initial prompt seed forwarded to the model to bias punctuation and style",
+    ),
+) -> dict[str, Any]:
+    """Transcribe an audio body.
+
+    Dispatches on `Content-Type`:
+      - `multipart/form-data` → reads the `file` field
+      - `audio/*` or `application/octet-stream` → reads `request.body()` as raw audio
+      - anything else → HTTP 415
+
+    The `language` and `prompt` query parameters apply to every supported body shape.
     """
-    Transcribe an audio file to text.
+    content_type = _normalize_content_type(request.headers.get("content-type"))
 
-    Accepts any audio/video format and returns JSON transcription.
-    """
-    temp_input_file = None
-    temp_wav_file = None
-
-    try:
-        # Validate file presence and set default filename if missing
-        filename = file.filename or "audio.unknown"
-        if not filename.strip():
-            filename = "audio.unknown"
-
-        # Create temporary file for uploaded content
-        temp_input_file = file_manager.create_temp_file(suffix=Path(filename).suffix)
-
-        # Save uploaded file
-        with open(temp_input_file, "wb") as f:
-            content = await file.read()
-            f.write(content)
-
-        # Validate file size
-        if not file_manager.validate_file_size(temp_input_file):
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large. Maximum size: {config.MAX_FILE_SIZE_MB}MB",
-            )
-
-        # Validate file type with debug info
-        detected_mime = file_manager.detect_mime_type(temp_input_file)
-        logger.info(
-            f"Original endpoint - File: {filename}, Detected MIME: {detected_mime}, Size: {temp_input_file.stat().st_size} bytes"
-        )
-
-        if not file_manager.is_audio_file(temp_input_file):
-            logger.error(
-                f"Original endpoint - Unsupported format: {detected_mime} for file: {filename}"
-            )
-            raise HTTPException(
-                status_code=415,
-                detail=f"Unsupported file format. Detected: {detected_mime}. Please provide an audio or video file.",
-            )
-
-        # Convert to WAV format
-        temp_wav_file = audio_converter.convert_to_wav(temp_input_file)
-
-        whisper_client = request.app.state.whisper_client
-        transcription = await whisper_client.transcribe(
-            temp_wav_file, language=language, initial_prompt=prompt
-        )
-
-        # Return the transcription result
-        return transcription
-
-    except HTTPException:
-        raise
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-    except Exception as e:
+    if not _is_supported_dispatch_type(content_type):
         raise HTTPException(
-            status_code=500, detail=f"Internal server error: {str(e)}"
-        ) from e
+            status_code=415,
+            detail=f"Unsupported Content-Type: {content_type or '<missing>'}",
+        )
 
-    finally:
-        # Cleanup temporary files
-        if temp_input_file:
-            file_manager.cleanup_file(temp_input_file)
-        if temp_wav_file:
-            file_manager.cleanup_file(temp_wav_file)
+    if content_type == "multipart/form-data":
+        body, suffix = await _read_multipart_audio(request)
+    else:
+        body, suffix = await _read_raw_audio(request, content_type)
 
+    if not body:
+        raise HTTPException(status_code=400, detail="Empty audio body")
 
-@router.post("/transcribe-raw")
-async def transcribe_raw_audio(
-    request: Request,
-    language: str = Query("auto", description="Spoken language code (e.g., 'en', 'zh') or 'auto' for detection"),
-    prompt: Optional[str] = Query(None, description="Initial prompt to guide transcription style and punctuation"),
-) -> Dict[str, Any]:
-    """
-    Transcribe raw audio data from request body.
-
-    Alternative endpoint for iOS Shortcuts that sends raw binary data.
-    Content-Type should indicate the audio format (e.g., audio/mp3, audio/wav).
-    """
-    temp_input_file = None
-    temp_wav_file = None
-
+    temp_input = file_manager.create_temp_file(suffix=suffix)
+    temp_wav = None
     try:
-        # Read raw body data
-        body = await request.body()
-        if not body:
-            raise HTTPException(status_code=400, detail="No audio data provided")
-
-        # Get content type to determine file extension
-        content_type = request.headers.get("content-type", "audio/unknown")
-
-        # Map content types to file extensions
-        extension_map = {
-            "audio/mpeg": ".mp3",
-            "audio/mp3": ".mp3",
-            "audio/wav": ".wav",
-            "audio/x-wav": ".wav",
-            "audio/flac": ".flac",
-            "audio/ogg": ".ogg",
-            "audio/aac": ".aac",
-            "audio/mp4": ".m4a",
-            "audio/x-m4a": ".m4a",
-            "video/mp4": ".mp4",
-            "video/quicktime": ".mov",
-        }
-
-        extension = extension_map.get(content_type, ".audio")
-
-        # Create temporary file
-        temp_input_file = file_manager.create_temp_file(suffix=extension)
-
-        # Write raw data to file
-        with open(temp_input_file, "wb") as f:
+        with open(temp_input, "wb") as f:
             f.write(body)
 
-        # Validate file size
-        if not file_manager.validate_file_size(temp_input_file):
+        if not file_manager.validate_file_size(temp_input):
             raise HTTPException(
                 status_code=413,
                 detail=f"File too large. Maximum size: {config.MAX_FILE_SIZE_MB}MB",
             )
 
-        # Validate file type with debug info (this will detect actual format regardless of extension)
-        detected_mime = file_manager.detect_mime_type(temp_input_file)
+        detected_mime = file_manager.detect_mime_type(temp_input)
         logger.info(
-            f"Raw endpoint - Content-Type header: {content_type}, Extension: {extension}, Detected MIME: {detected_mime}, Size: {len(body)} bytes"
+            "Transcribe: ct=%s, detected_mime=%s, bytes=%d",
+            content_type,
+            detected_mime,
+            len(body),
         )
 
-        if not file_manager.is_audio_file(temp_input_file):
-            logger.error(
-                f"Raw endpoint - Unsupported format: {detected_mime} (Content-Type: {content_type}, Extension: {extension})"
-            )
+        if not file_manager.is_audio_file(temp_input):
             raise HTTPException(
                 status_code=415,
-                detail=f"Unsupported file format. Header: {content_type}, Detected: {detected_mime}. Please provide an audio or video file.",
+                detail=f"Unsupported file format. Detected: {detected_mime}",
             )
 
-        # Convert to WAV format
-        temp_wav_file = audio_converter.convert_to_wav(temp_input_file)
+        temp_wav = audio_converter.convert_to_wav(temp_input)
 
         whisper_client = request.app.state.whisper_client
-        transcription = await whisper_client.transcribe(
-            temp_wav_file, language=language, initial_prompt=prompt
+        return await whisper_client.transcribe(
+            temp_wav, language=language, initial_prompt=prompt
         )
-
-        # Return the transcription result
-        return transcription
 
     except HTTPException:
         raise
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Internal server error: {str(e)}"
+            status_code=500, detail=f"Internal server error: {e}"
         ) from e
-
     finally:
-        # Cleanup temporary files
-        if temp_input_file:
-            file_manager.cleanup_file(temp_input_file)
-        if temp_wav_file:
-            file_manager.cleanup_file(temp_wav_file)
+        if temp_input:
+            file_manager.cleanup_file(temp_input)
+        if temp_wav:
+            file_manager.cleanup_file(temp_wav)
