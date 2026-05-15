@@ -61,7 +61,7 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 - [x] 8.1 Write failing test `tests/test_whisper_cpp.py::test_compile_emits_per_second_progress` (skipped on Linux) using a fake slow encoder load that takes ≥3 s, asserting at least three INFO log lines naming the encoder path and elapsed seconds are emitted, plus one final "compile complete in Ns" line — covering Decision 5: Block lifespan on first-run Core ML encoder compile; verify the test fails until the progress-logging coroutine is added.
 - [x] 8.2 Implement the per-second progress logger inside `PyWhisperCppBackend.__init__` so the "First-run Core ML encoder compile blocks lifespan" requirement holds; verify by running `tests/test_whisper_cpp.py::test_compile_emits_per_second_progress` to green and by manually starting the server against a freshly downloaded ggml variant on macOS to observe the logs.
-- [ ] 8.3 Validate empirically that the cached `.mlmodelc` skip path holds: start the server twice on the same host and capture both startup durations; verify the second start completes within the existing CT2 model-load time budget (no per-second compile logs).
+- [x] 8.3 Validate empirically that the cached `.mlmodelc` skip path holds: start the server twice on the same host and capture both startup durations; verify the second start completes within the existing CT2 model-load time budget (no per-second compile logs).
 
 ### 9. Model manager CLI for variants
 
@@ -101,8 +101,8 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 ### 14. Real-hardware latency check (manual verification)
 
-- [ ] 14.1 Record a v2 baseline manually on the target Mac mini by checking out `feat/v2-server-redesign`, starting the server, streaming 30 s of Mandarin through `WS /listen`, and capturing median partial latency (timestamp diff between PCM-frame submission and corresponding `partial` event); verify by storing the result in `openspec/changes/v2-1-whisper-cpp-backend/verification-notes.md` with the host model identifier and the measured median.
-- [ ] 14.2 Repeat the latency capture on the same Mac mini with v2.1 head (ggml variant active); verify by storing the v2.1 measured median next to the v2 baseline in `verification-notes.md` and confirming v2.1 ≤ v2/3 (i.e. ≥3× improvement) per the proposal's success criterion.
+- [x] 14.1 Record a v2 baseline manually on the target Mac mini by checking out `feat/v2-server-redesign`, starting the server, streaming 30 s of Mandarin through `WS /listen`, and capturing median partial latency (timestamp diff between PCM-frame submission and corresponding `partial` event); verify by storing the result in `openspec/changes/v2-1-whisper-cpp-backend/verification-notes.md` with the host model identifier and the measured median.
+- [x] 14.2 Repeat the latency capture on the same Mac mini with v2.1 head (ggml variant active); verify by storing the v2.1 measured median next to the v2 baseline in `verification-notes.md` and confirming v2.1 ≤ v2/3 (i.e. ≥3× improvement) per the proposal's success criterion.
 
 ### 15. Documentation finalisation
 
@@ -111,4 +111,4 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 ### Phase 2 done criterion
 
-- [ ] 15.3 Run `make test && make lint` on macOS with v2.1 head; verify all tests pass including `tests/test_stream_consensus.py::test_partial_count_ratio_le_half` and that `verification-notes.md` documents both the regression ratio and the manual latency ≥3× improvement, satisfying the proposal's success criteria.
+- [x] 15.3 Run `make test && make lint` on macOS with v2.1 head; verify all tests pass including `tests/test_stream_consensus.py::test_partial_count_ratio_le_half` and that `verification-notes.md` documents both the regression ratio and the manual latency ≥3× improvement, satisfying the proposal's success criteria.
