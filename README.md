@@ -1,8 +1,15 @@
 # whisper-wrap
 
-Single-process FastAPI server for **in-process audio transcription, live captioning, and Gemini-backed Q&A**. v2 swaps the previous `whisper.cpp` + `whisper-server` subprocess for [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) running CTranslate2 models directly in the FastAPI process.
+Single-process FastAPI server for **in-process audio transcription, live captioning, and Gemini-backed Q&A**.
 
-> v2.0 is a breaking release. Migrating from v1? See the **[v2.0.0 migration guide in CHANGELOG.md](CHANGELOG.md#200--unreleased)**.
+v2.1 ships two Whisper backends in the same codebase and picks one at startup based on the host OS:
+
+- **macOS** — [`pywhispercpp`](https://github.com/absadiki/pywhispercpp) (whisper.cpp binding) with Core ML encoder on the Apple Neural Engine. Decision rationale: CTranslate2 has no Metal/Core ML path so it falls back to CPU; same Mac mini reaches 5-7× real-time via ANE.
+- **Linux** — [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) (CTranslate2). Keeps the GPU/CUDA path open for the future PVE deployment.
+
+Both backends conform to the same `WhisperBackend` Protocol; the `/transcribe`, `/ask`, and `WS /listen` endpoints don't know which one is loaded. Override the auto-selection with `BACKEND_FORMAT=ct2` or `BACKEND_FORMAT=ggml`.
+
+> v2 was never released externally, so v2.1 carries no migration. The `registry/models.yaml` schema is new (variants list per model).
 
 ## 🚀 Quick Start
 
@@ -20,12 +27,12 @@ curl -X POST http://localhost:8000/transcribe \
 
 ## ✨ Features
 
-- **In-process backend**: `faster-whisper` + CTranslate2 — no subprocess, no second port, no startup-sleep gymnastics.
+- **Dual in-process backend** (v2.1): pywhispercpp + Core ML/ANE on macOS, faster-whisper + CTranslate2 on Linux. No subprocess, no second port. `WS /listen` partial latency drops from ~3-5 s to <1 s on Mac mini via Apple Neural Engine.
 - **Unified `/transcribe`**: Content-Type dispatch handles multipart uploads, raw `audio/*` bodies, and `application/octet-stream` from iOS Shortcuts in one endpoint.
 - **`/ask` with optional SSE streaming**: audio or text in, Gemini answer out. `?stream=true` returns `text/event-stream` with `transcript` → `token*` → `done` events.
-- **`/listen` WebSocket**: live captioning — 16 kHz mono `pcm_s16le` frames in, timestamped `partial`/`final` events out.
+- **`/listen` WebSocket**: live captioning — 16 kHz mono `pcm_s16le` frames in, timestamped `partial`/`final` events out. v2.1 adds a partial-consensus filter (simplified LocalAgreement-2) so `partial` text no longer thrashes between inferences.
 - **Rich `/status`**: loaded model details, runtime device, compute type, Gemini configuration, uptime — useful for distinguishing Mac mini vs GPU deployments at a glance.
-- **CT2 model registry**: `registry/models.yaml` ships **Breeze ASR 25** (default, Taiwanese Mandarin + EN code-switching) and `large-v3-turbo` (multilingual fallback).
+- **Variants-aware model registry** (v2.1): `registry/models.yaml` ships `breeze-asr-25` with both a `ct2` and a `ggml` variant (`q6_k` quantisation + bundled `.mlmodelc` Core ML encoder), plus `large-v3-turbo` as the multilingual fallback. `make download-model MODEL=<name>` fetches every variant for that model.
 - **iOS Shortcuts ready**: bundled shortcut for one-tap voice transcription.
 
 ## 🏗️ Architecture

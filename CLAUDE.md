@@ -161,10 +161,13 @@ API_PORT=8000
 API_HOST=0.0.0.0
 
 # Model
-MODEL_NAME=breeze-asr-25         # Registry key → ./models/<entry.local_dir>
-# MODEL_DIR=/abs/path            # Bypass registry; loaded verbatim
+MODEL_NAME=breeze-asr-25         # Registry key → variants resolved by platform
+# MODEL_DIR=/abs/path            # Bypass registry; layout inferred (CT2 vs ggml)
 
-# CTranslate2 runtime
+# Backend selection (v2.1)
+# BACKEND_FORMAT=                # ct2 | ggml; unset = platform default (darwin→ggml, linux→ct2)
+
+# CTranslate2 runtime (applies when active variant is `ct2`)
 COMPUTE_TYPE=default             # On Apple Silicon CPU this MUST be "default"
 DEVICE=auto                      # "cuda" forces GPU; "cpu" forces CPU
 
@@ -180,11 +183,23 @@ LOG_LEVEL=INFO
 UPLOAD_TIMEOUT_SECONDS=30
 ```
 
+### v2.1 development workflow (Phase 1 / Phase 2)
+
+The `v2-1-whisper-cpp-backend` change is structured as two phases inside one
+Spectra change (Decision 7: Phase 1 / Phase 2 boundary inside one change).
+Phase 1 swaps the backend (dual-backend + Protocol abstraction + variants
+schema); Phase 2 adds the partial-consensus filter on top. Tasks 1.x-11.x
+are Phase 1; tasks 12.x-15.x are Phase 2.
+
+The registry now uses a `variants:` list per model (Decision 3: variants
+schema). Each variant declares `format: ct2|ggml`, format-specific fields,
+and optional `default_on: [darwin|linux]` for per-platform routing.
+
 ### Deprecated env vars (v1)
 
-The v2 server detects these still present in the environment at startup and
-emits a one-line WARNING per detected key (then proceeds — startup does not
-fail). Remove them from `.env` to silence the warnings:
+v2.1 silently ignores any v1-era env vars that may still be in `.env`. The
+v1 → v2 warning shim was removed because v2 was never released externally.
+Affected keys (safe to delete from `.env`):
 `WHISPER_SERVER_HOST/PORT/URL`, `WHISPER_AUTO_RESTART`,
 `WHISPER_BINARY_PATH`, `WHISPER_MAX_RETRIES`, `MODEL_PATH`.
 

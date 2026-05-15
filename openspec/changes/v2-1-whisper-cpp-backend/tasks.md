@@ -106,8 +106,8 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 ### 15. Documentation finalisation
 
-- [ ] 15.1 [P] Update `README.md` to describe the new dual-backend story (macOS uses ggml + ANE by default; Linux uses ct2; `BACKEND_FORMAT` overrides) — referencing Decision 1: pywhispercpp over WhisperKit and MLX-Whisper; verify by content review against the design.md Goals section.
-- [ ] 15.2 [P] Update `CLAUDE.md` development guidance with the new variants schema (referencing Decision 3) and Phase 1/Phase 2 development workflow (referencing Decision 7: Phase 1 / Phase 2 boundary inside one change); verify by content review and by confirming the file's "Configuration" section lists `BACKEND_FORMAT`.
+- [x] 15.1 [P] Update `README.md` to describe the new dual-backend story (macOS uses ggml + ANE by default; Linux uses ct2; `BACKEND_FORMAT` overrides) — referencing Decision 1: pywhispercpp over WhisperKit and MLX-Whisper; verify by content review against the design.md Goals section.
+- [x] 15.2 [P] Update `CLAUDE.md` development guidance with the new variants schema (referencing Decision 3) and Phase 1/Phase 2 development workflow (referencing Decision 7: Phase 1 / Phase 2 boundary inside one change); verify by content review and by confirming the file's "Configuration" section lists `BACKEND_FORMAT`.
 
 ### Phase 2 done criterion
 
