@@ -10,6 +10,46 @@ Complete setup guide for whisper-wrap with system requirements and dependencies.
 > or place the service behind a VPN / Tailscale boundary. Bind to `127.0.0.1`
 > (not `0.0.0.0`) when the host has a public network interface.
 
+## Backend selection (v2.1)
+
+whisper-wrap v2.1 ships two backends and picks one at startup:
+
+| Platform     | Default backend         | Variant `format` | Acceleration                |
+| ------------ | ----------------------- | ---------------- | --------------------------- |
+| macOS        | `pywhispercpp`          | `ggml`           | Apple Neural Engine (Core ML) |
+| Linux        | `faster-whisper`        | `ct2`            | CPU / CUDA via CTranslate2  |
+
+Override with `BACKEND_FORMAT=ct2` or `BACKEND_FORMAT=ggml`:
+
+- `BACKEND_FORMAT=ct2` is supported on every platform.
+- `BACKEND_FORMAT=ggml` is supported only on macOS — the `pywhispercpp`
+  dependency carries a `sys_platform == 'darwin'` marker, so Linux installs
+  cannot resolve the ggml backend and startup fails with a clear error.
+
+### Core ML first-run compile (macOS, ggml backend)
+
+The first time a Core ML encoder loads on a given host, the runtime compiles
+the bundled `.mlmodelc` to ANE-optimised form. This typically takes 10-30 s.
+The lifespan blocks startup until the compile finishes and emits one INFO log
+line per second showing elapsed seconds. Subsequent starts on the same host
+reuse the cached compiled encoder and reach ready state within the normal
+CT2 model-load time budget.
+
+### Building pywhispercpp with Core ML
+
+The published `pywhispercpp` wheels for macOS include Core ML support out of
+the box. If you build from source (for example on a custom Python build) set
+the `WHISPER_COREML=1` environment variable so the underlying `libwhisper`
+is compiled with the Core ML encoder path enabled:
+
+```bash
+WHISPER_COREML=1 uv sync
+```
+
+Without that flag, importing the package on macOS still succeeds, but the
+ggml backend silently falls back to CPU-only ggml decode and emits a single
+WARNING log line naming the reason.
+
 ## Model Directory Layout (v2)
 
 Models live in `./models/<entry.local_dir>/` as CTranslate2 directories. The directory

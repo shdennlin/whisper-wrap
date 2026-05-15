@@ -17,6 +17,7 @@ dependencies = [
     "faster-whisper>=1.0.0",
     "google-genai>=0.3.0",
     "PyYAML>=6.0",
+    "pywhispercpp>=1.2,<2.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]
