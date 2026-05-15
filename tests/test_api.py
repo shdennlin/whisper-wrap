@@ -9,7 +9,13 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def stubbed_app(monkeypatch, tmp_path):
     """Boot app with mocked model + stubbed file pipeline so tests exercise only dispatch."""
-    monkeypatch.setattr("app.main.load_model", lambda *a, **kw: MagicMock(name="WhisperModel"))
+    monkeypatch.setattr(
+        "app.main._build_backend",
+        lambda **kw: (MagicMock(name="WhisperBackend"), {
+            "backend": "ctranslate2", "format": "ct2",
+            "compute_type": "default", "local_dir": "/fake",
+        }),
+    )
 
     wav_path = tmp_path / "out.wav"
     wav_path.write_bytes(b"WAV")
@@ -25,20 +31,25 @@ def stubbed_app(monkeypatch, tmp_path):
     return app
 
 
+CAPTURED_KWARGS: dict = {}
+
+
 @pytest.fixture
 def client(stubbed_app):
-    """TestClient context (runs lifespan) with a fake whisper_client.transcribe response."""
+    """TestClient context (runs lifespan) with a fake whisper.transcribe response."""
+
+    from app.services._whisper_backend import TranscriptionResult
+
+    CAPTURED_KWARGS.clear()
 
     async def fake_transcribe(*a, **kw):
-        return {
-            "text": "hello world",
-            "language": "en",
-            "segments": [],
-            "_kw": kw,  # let tests inspect language/initial_prompt forwarding
-        }
+        CAPTURED_KWARGS.update(kw)
+        return TranscriptionResult(
+            text="hello world", segments=[], language="en", duration_seconds=0.0
+        )
 
     with TestClient(stubbed_app) as c:
-        stubbed_app.state.whisper_client.transcribe = fake_transcribe
+        stubbed_app.state.whisper.transcribe = fake_transcribe
         yield c
 
 
@@ -108,10 +119,10 @@ def test_raw_zero_byte_body_returns_400(client):
 
 
 def _captured_kwargs(client, **request_args) -> dict:
-    """POST and return the kwargs whisper_client.transcribe was called with."""
+    """POST and return the kwargs whisper.transcribe was called with."""
     resp = client.post("/transcribe", **request_args)
     assert resp.status_code == 200, resp.text
-    return resp.json()["_kw"]
+    return dict(CAPTURED_KWARGS)
 
 
 def test_language_default_is_auto_on_multipart(client, tmp_path):
@@ -192,7 +203,7 @@ def test_pipeline_error_returns_500(stubbed_app):
         raise RuntimeError("kaboom")
 
     with TestClient(stubbed_app) as c:
-        stubbed_app.state.whisper_client.transcribe = boom
+        stubbed_app.state.whisper.transcribe = boom
         resp = c.post(
             "/transcribe",
             headers={"Content-Type": "audio/wav"},

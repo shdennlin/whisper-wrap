@@ -1,13 +1,35 @@
-"""Resolve the active ASR model directory and validate `registry/models.yaml`.
+"""Resolve the active ASR model variant and validate `registry/models.yaml`.
 
-Implements the design decision "Resolve the active model via MODEL_DIR override and
-MODEL_NAME registry lookup" plus the spec requirements for the v2 registry schema:
+v2.1 schema: each model entry has a `variants` list. Each variant declares a
+`format` discriminator (`ct2` or `ggml`), format-specific fields, and optional
+`default_on` per-platform routing hints.
 
-- Required fields: `repo_id`, `format` (only `"ct2"`), `compute_type`, `local_dir`,
-  `size`, `languages`, `description`.
-- Optional fields: `subfolder`, `revision`, `default`.
-- Exactly one entry SHALL set `default: true`.
+Top-level entry fields (required):
+  - `description` (string)
+  - `languages` (list of strings)
+  - `variants` (non-empty list of variant maps)
+
+Top-level entry fields (optional):
+  - `size` (string, applies to model as a whole)
+  - `default` (bool, exactly one entry across the registry SHALL set this to true)
+
+Variant fields (required for every variant):
+  - `format` (string, one of `"ct2"` or `"ggml"`)
+  - `local_dir` (string, path relative to `./models/`)
+
+Variant fields (ct2-specific):
+  - `compute_type` (string, required)
+
+Variant fields (ggml-specific):
+  - `quant` (string, required)
+  - `filename` (string, required — ggml `.bin` inside `local_dir`)
+  - `coreml_encoder` (string, required — `.mlmodelc` directory inside `local_dir`)
+
+Variant fields (optional, any format):
+  - `repo_id`, `subfolder`, `revision`, `default_on`
 """
+
+from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -21,26 +43,23 @@ logger = logging.getLogger(__name__)
 HARDCODED_FALLBACK_MODEL_NAME = "breeze-asr-25"
 DEFAULT_MODELS_ROOT = Path("models")
 DEFAULT_REGISTRY_PATH = Path("registry/models.yaml")
-ACCEPTED_FORMAT = "ct2"
+ACCEPTED_FORMATS: tuple[str, ...] = ("ct2", "ggml")
+PLATFORM_TAGS: tuple[str, ...] = ("darwin", "linux")
 
-REQUIRED_ENTRY_FIELDS = (
-    "repo_id",
-    "format",
-    "compute_type",
-    "local_dir",
-    "size",
-    "languages",
-    "description",
-)
+REQUIRED_ENTRY_FIELDS: tuple[str, ...] = ("description", "languages", "variants")
+REQUIRED_VARIANT_FIELDS: tuple[str, ...] = ("format", "local_dir")
+REQUIRED_CT2_FIELDS: tuple[str, ...] = ("compute_type",)
+REQUIRED_GGML_FIELDS: tuple[str, ...] = ("quant", "filename", "coreml_encoder")
 
 
 class RegistryError(RuntimeError):
-    """Raised when `registry/models.yaml` is missing required fields, has the wrong
-    format discriminator, or violates the exactly-one-default invariant."""
+    """Raised when `registry/models.yaml` is malformed, has an unsupported variant
+    format, violates the exactly-one-default invariant, or platform variant
+    resolution finds no match."""
 
 
 def load_registry(path: Path | str | None = None) -> dict[str, dict[str, Any]]:
-    """Read and validate the registry. Returns the {name: entry} mapping."""
+    """Read and validate the variants-schema registry. Returns {name: entry}."""
     p = Path(path) if path else DEFAULT_REGISTRY_PATH
     if not p.exists():
         raise RegistryError(f"Registry file not found: {p}")
@@ -62,15 +81,7 @@ def load_registry(path: Path | str | None = None) -> dict[str, dict[str, Any]]:
     for name, entry in entries.items():
         if not isinstance(entry, dict):
             raise RegistryError(f"Entry '{name}' must be a mapping")
-        missing = [f for f in REQUIRED_ENTRY_FIELDS if f not in entry]
-        if missing:
-            raise RegistryError(
-                f"Entry '{name}' is missing required field(s): {', '.join(missing)}"
-            )
-        if entry["format"] != ACCEPTED_FORMAT:
-            raise RegistryError(
-                f"Entry '{name}' has format='{entry['format']}'; only 'ct2' is accepted in v2"
-            )
+        _validate_entry(name, entry)
         if entry.get("default") is True:
             defaults.append(name)
 
@@ -87,34 +98,136 @@ def load_registry(path: Path | str | None = None) -> dict[str, dict[str, Any]]:
     return entries
 
 
+def _validate_entry(name: str, entry: dict[str, Any]) -> None:
+    missing = [f for f in REQUIRED_ENTRY_FIELDS if f not in entry]
+    if missing:
+        raise RegistryError(
+            f"Entry '{name}' is missing required field(s): {', '.join(missing)}"
+        )
+    variants = entry["variants"]
+    if not isinstance(variants, list):
+        raise RegistryError(f"Entry '{name}' field `variants` SHALL be a list")
+    if len(variants) == 0:
+        raise RegistryError(
+            f"Entry '{name}' SHALL declare at least one variant (got empty list)"
+        )
+    for idx, variant in enumerate(variants):
+        if not isinstance(variant, dict):
+            raise RegistryError(
+                f"Entry '{name}' variant #{idx} must be a mapping"
+            )
+        _validate_variant(name, idx, variant)
+
+
+def _validate_variant(
+    entry_name: str, idx: int, variant: dict[str, Any]
+) -> None:
+    missing = [f for f in REQUIRED_VARIANT_FIELDS if f not in variant]
+    if missing:
+        raise RegistryError(
+            f"Entry '{entry_name}' variant #{idx} is missing required field(s): "
+            f"{', '.join(missing)}"
+        )
+    fmt = variant["format"]
+    if fmt not in ACCEPTED_FORMATS:
+        raise RegistryError(
+            f"Entry '{entry_name}' variant #{idx} has format={fmt!r}; "
+            f"accepted values: {', '.join(ACCEPTED_FORMATS)}"
+        )
+    fmt_required = REQUIRED_CT2_FIELDS if fmt == "ct2" else REQUIRED_GGML_FIELDS
+    fmt_missing = [f for f in fmt_required if f not in variant]
+    if fmt_missing:
+        raise RegistryError(
+            f"Entry '{entry_name}' variant #{idx} (format={fmt}) is missing "
+            f"required field(s): {', '.join(fmt_missing)}"
+        )
+
+
 def default_model_name(path: Path | str | None = None) -> str:
     """Return the name of the entry flagged `default: true`."""
     entries = load_registry(path)
     for name, entry in entries.items():
         if entry.get("default") is True:
             return name
-    # load_registry would have raised already, but appease mypy.
     raise RegistryError("No default entry found")  # pragma: no cover
 
 
-def resolve_model_dir(model_name: str | None, model_dir_override: str | None) -> str:
-    """Resolve the on-disk CT2 model directory to load at startup.
+def resolve_variant(
+    entry: dict[str, Any],
+    *,
+    platform: str,
+    backend_format: str | None,
+) -> dict[str, Any]:
+    """Pick the variant of `entry` that matches the current platform / override.
 
     Precedence:
-        1. `MODEL_DIR` env override (verbatim).
-        2. `MODEL_NAME` registry lookup → `./models/<entry.local_dir>` (silently
-           falls back to `./models/<MODEL_NAME>` if the registry can't be parsed).
-        3. Hard-coded `./models/breeze-asr-25` fallback when MODEL_NAME is unset.
+      1. `backend_format` argument (from `BACKEND_FORMAT` env var) — choose the
+         first variant with that `format`. Fail if no variant matches.
+      2. Otherwise, choose the first variant whose `default_on` list contains
+         `platform`. Fail if no variant matches.
+
+    Raises `RegistryError` when resolution finds zero matching variants.
+    """
+    variants = entry["variants"]
+
+    if backend_format is not None:
+        if backend_format not in ACCEPTED_FORMATS:
+            raise RegistryError(
+                f"BACKEND_FORMAT={backend_format!r} is not one of "
+                f"{', '.join(ACCEPTED_FORMATS)}"
+            )
+        if backend_format == "ggml" and platform != "darwin":
+            raise RegistryError(
+                f"BACKEND_FORMAT=ggml is not available on {platform}; "
+                "pywhispercpp ships only on darwin. Set BACKEND_FORMAT=ct2 or "
+                "leave it unset."
+            )
+        matching = [v for v in variants if v["format"] == backend_format]
+        if not matching:
+            raise RegistryError(
+                f"BACKEND_FORMAT={backend_format!r} requested but the active "
+                f"model has no variant with that format"
+            )
+        return matching[0]
+
+    matching = [v for v in variants if platform in v.get("default_on", [])]
+    if not matching:
+        raise RegistryError(
+            f"No variant of the active model targets platform={platform!r}. "
+            f"Set BACKEND_FORMAT=<{ '|'.join(ACCEPTED_FORMATS) }> to choose explicitly."
+        )
+    return matching[0]
+
+
+def resolve_model_dir(
+    model_name: str | None,
+    model_dir_override: str | None,
+    *,
+    platform: str | None = None,
+    backend_format: str | None = None,
+) -> str:
+    """Resolve the on-disk model directory to load at startup.
+
+    Precedence:
+        1. `MODEL_DIR` env override (verbatim path).
+        2. Registry lookup with platform-aware variant resolution.
+        3. Hard-coded `./models/<MODEL_NAME>` fallback when registry parse fails.
     """
     if model_dir_override:
         return model_dir_override
+    import sys
+
     name = model_name or HARDCODED_FALLBACK_MODEL_NAME
+    host_platform = platform or sys.platform  # "darwin", "linux", etc.
 
     try:
         entries = load_registry()
         entry = entries.get(name)
-        if entry and "local_dir" in entry:
-            return str(DEFAULT_MODELS_ROOT / entry["local_dir"])
+        if entry:
+            variant = resolve_variant(
+                entry, platform=host_platform, backend_format=backend_format
+            )
+            return str(DEFAULT_MODELS_ROOT / variant["local_dir"])
     except RegistryError as e:
         logger.warning("Falling back to ./models/%s — %s", name, e)
 

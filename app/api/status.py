@@ -35,6 +35,23 @@ def _resolve_model_name(model_dir: str) -> str:
 async def status(request: Request) -> dict[str, Any]:
     state = request.app.state
     model_dir = getattr(state, "model_dir", None) or ""
+    metadata = getattr(state, "backend_metadata", {}) or {}
+
+    backend_block: dict[str, Any] = {
+        "backend": metadata.get("backend", "ctranslate2"),
+        "format": metadata.get("format", "ct2"),
+    }
+    if metadata.get("format") == "ct2":
+        backend_block["compute_type"] = metadata.get(
+            "compute_type", config.COMPUTE_TYPE
+        )
+    if metadata.get("format") == "ggml":
+        if "quant" in metadata:
+            backend_block["quant"] = metadata["quant"]
+        backend_block["coreml_encoder_compiled"] = metadata.get(
+            "coreml_encoder_compiled", False
+        )
+
     return {
         "status": "ok",
         "version": __version__,
@@ -47,6 +64,7 @@ async def status(request: Request) -> dict[str, Any]:
             "loaded": True,
             "load_time_ms": getattr(state, "load_time_ms", 0),
         },
+        "backend": backend_block,
         "gemini": {
             "configured": state.llm_client.configured,
             "model": state.llm_client.model,

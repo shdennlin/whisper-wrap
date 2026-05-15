@@ -42,10 +42,11 @@ async def _send_error_and_close(ws: WebSocket, message: str) -> None:
 async def listen(ws: WebSocket) -> None:
     await ws.accept()
 
-    whisper_client = ws.app.state.whisper_client
+    whisper = ws.app.state.whisper
 
     async def transcribe_fn(samples) -> str:
-        return await whisper_client.transcribe_pcm(samples)
+        result = await whisper.transcribe_pcm(samples)
+        return result.text
 
     async def send_event(event: dict[str, Any]) -> None:
         await ws.send_text(json.dumps(event, ensure_ascii=False))

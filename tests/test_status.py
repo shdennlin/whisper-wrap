@@ -11,7 +11,11 @@ from app.services.llm import LLMClient
 @pytest.fixture
 def stubbed_app(monkeypatch):
     monkeypatch.setattr(
-        "app.main.load_model", lambda *a, **kw: MagicMock(name="WhisperModel")
+        "app.main._build_backend",
+        lambda **kw: (MagicMock(name="WhisperBackend"), {
+            "backend": "ctranslate2", "format": "ct2",
+            "compute_type": "default", "local_dir": "/fake",
+        }),
     )
     from app.main import app
 
@@ -48,7 +52,11 @@ def test_status_returns_full_payload(stubbed_app):
 def test_status_model_name_is_path_when_model_dir_override(monkeypatch, stubbed_app):
     """When MODEL_DIR is set, model.name SHALL be the resolved path (not MODEL_NAME)."""
     monkeypatch.setattr(
-        "app.main.resolve_model_dir", lambda *a, **kw: "/opt/breeze-ct2"
+        "app.main._build_backend",
+        lambda **kw: (MagicMock(name="WhisperBackend"), {
+            "backend": "ctranslate2", "format": "ct2",
+            "compute_type": "default", "local_dir": "/opt/breeze-ct2",
+        }),
     )
     monkeypatch.setattr("app.config.config.MODEL_DIR", "/opt/breeze-ct2")
     with TestClient(stubbed_app) as c:
@@ -105,3 +113,43 @@ def test_root_lists_all_v2_endpoints(stubbed_app):
         # Each entry has a description
         for e in entries:
             assert isinstance(e["description"], str) and e["description"]
+
+
+# ---------- v2.1: backend metadata block ----------
+
+
+def test_status_includes_backend_block_ct2(stubbed_app):
+    """Per `/status surfaces backend metadata`: a `backend` object SHALL be present."""
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+        assert "backend" in body
+        assert body["backend"]["backend"] == "ctranslate2"
+        assert body["backend"]["format"] == "ct2"
+        assert body["backend"]["compute_type"] == "default"
+        # ct2 variant SHALL NOT carry quant / coreml_encoder_compiled fields
+        assert "quant" not in body["backend"]
+        assert "coreml_encoder_compiled" not in body["backend"]
+
+
+def test_status_includes_backend_block_ggml(monkeypatch, stubbed_app):
+    """When the active variant is ggml, the backend block SHALL carry quant + coreml_encoder_compiled."""
+    monkeypatch.setattr(
+        "app.main._build_backend",
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "pywhispercpp",
+                "format": "ggml",
+                "quant": "q6_k",
+                "coreml_encoder_compiled": True,
+                "local_dir": "models/breeze-asr-25-ggml",
+            },
+        ),
+    )
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+        assert body["backend"]["backend"] == "pywhispercpp"
+        assert body["backend"]["format"] == "ggml"
+        assert body["backend"]["quant"] == "q6_k"
+        assert body["backend"]["coreml_encoder_compiled"] is True
+        assert "compute_type" not in body["backend"]

@@ -215,7 +215,11 @@ def test_frame_duration_ms_matches_audio_duration():
 def ws_client(monkeypatch):
     """TestClient with WhisperClient.transcribe_pcm stubbed; used for protocol tests."""
     monkeypatch.setattr(
-        "app.main.load_model", lambda *a, **kw: MagicMock(name="WhisperModel")
+        "app.main._build_backend",
+        lambda **kw: (MagicMock(name="WhisperBackend"), {
+            "backend": "ctranslate2", "format": "ct2",
+            "compute_type": "default", "local_dir": "/fake",
+        }),
     )
 
     async def fake(samples, **kw):
@@ -224,7 +228,7 @@ def ws_client(monkeypatch):
     from app.main import app
 
     with TestClient(app) as c:
-        app.state.whisper_client.transcribe_pcm = fake
+        app.state.whisper.transcribe_pcm = fake
         yield c
 
 

@@ -12,7 +12,11 @@ from app.services.llm import LLMClient, LLMUpstreamError
 @pytest.fixture
 def stubbed_app(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "app.main.load_model", lambda *a, **kw: MagicMock(name="WhisperModel")
+        "app.main._build_backend",
+        lambda **kw: (MagicMock(name="WhisperBackend"), {
+            "backend": "ctranslate2", "format": "ct2",
+            "compute_type": "default", "local_dir": "/fake",
+        }),
     )
 
     wav_path = tmp_path / "out.wav"
@@ -64,9 +68,13 @@ def _install_whisper(app, *, transcript="hello world", error=None):
     async def fake_transcribe(*a, **kw):
         if error:
             raise error
-        return {"text": transcript, "language": "en", "segments": []}
+        from app.services._whisper_backend import TranscriptionResult
 
-    app.state.whisper_client.transcribe = fake_transcribe
+        return TranscriptionResult(
+            text=transcript, segments=[], language="en", duration_seconds=0.0
+        )
+
+    app.state.whisper.transcribe = fake_transcribe
 
 
 # =========================================================================

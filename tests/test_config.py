@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import Config, warn_obsolete_env_vars
+from app.config import Config
 
 OBSOLETE_V1_KEYS = (
     "WHISPER_SERVER_HOST",
@@ -137,29 +137,13 @@ def test_validate_port_ok():
     c.validate_port()  # does not raise
 
 
-@pytest.mark.parametrize("obsolete_key", OBSOLETE_V1_KEYS)
-def test_obsolete_v1_key_emits_warning(clean_env, caplog, obsolete_key):
-    """Each removed v1 env var SHALL trigger exactly one WARNING when present."""
-    clean_env.setenv(obsolete_key, "anything")
-
+def test_v1_keys_are_silently_ignored(clean_env, caplog):
+    """Per v2.1 model-management REMOVED Requirements: v1 keys SHALL not log."""
+    import logging
+    clean_env.setenv("WHISPER_SERVER_HOST", "localhost")
+    clean_env.setenv("MODEL_PATH", "./old.bin")
     with caplog.at_level(logging.WARNING, logger="app.config"):
-        warn_obsolete_env_vars()
-
-    matches = [r for r in caplog.records if obsolete_key in r.getMessage()]
-    assert len(matches) == 1, f"Expected 1 WARNING for {obsolete_key}, got {len(matches)}"
-    assert matches[0].levelno == logging.WARNING
-
-
-def test_no_warning_when_clean(clean_env, caplog):
-    """When zero obsolete vars are set, no obsolete-key WARNING fires."""
-    with caplog.at_level(logging.WARNING, logger="app.config"):
-        warn_obsolete_env_vars()
-    assert not any("Obsolete v1 env var" in r.getMessage() for r in caplog.records)
-
-
-def test_warn_obsolete_returns_detected_keys(clean_env):
-    """The helper returns the detected keys list (for downstream observability/testing)."""
-    clean_env.setenv("WHISPER_SERVER_HOST", "x")
-    clean_env.setenv("MODEL_PATH", "y")
-    detected = warn_obsolete_env_vars()
-    assert set(detected) == {"WHISPER_SERVER_HOST", "MODEL_PATH"}
+        Config()
+    # Config construction SHALL NOT emit any log line naming the v1 keys.
+    msgs = [r.getMessage() for r in caplog.records]
+    assert not any("WHISPER_SERVER_HOST" in m or "MODEL_PATH" in m for m in msgs)

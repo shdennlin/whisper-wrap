@@ -1,47 +1,61 @@
 # =============================================================================
-# Model Registry for whisper-wrap v2
+# Model Registry for whisper-wrap v2.1
 # =============================================================================
 #
-# Required fields:
-#   repo_id:      Hugging Face repository ID (e.g. "shdennlin/breeze-asr-25-ct2")
-#   format:       Format discriminator. v2 ONLY accepts "ct2" (CTranslate2).
-#                 Reserved for future formats — other values are rejected.
-#   compute_type: Default compute type for the variant (e.g. "int8_float16").
-#                 NOTE: On Apple Silicon CPU, set COMPUTE_TYPE=default in .env so
-#                 CT2 auto-picks the runtime path. This field is metadata only.
-#   local_dir:    Subdirectory under ./models/ to download into.
-#   size:         Approximate disk footprint (informational).
-#   languages:    List of supported languages or [multilingual].
-#   description:  Brief description.
+# Schema:
+#   Each top-level key under `models:` is a kebab-case model identifier with:
+#     - `description`: brief human-readable description (required)
+#     - `languages`:  list of supported language tags (required)
+#     - `variants`:   non-empty list of backend-specific packagings (required)
+#     - `size`:       approximate disk footprint summed over installed variants (optional)
+#     - `default`:    exactly one entry across the registry SHALL be `true` (optional)
 #
-# Optional fields:
-#   subfolder:    Subfolder within the HF repo (use when the repo publishes
-#                 multiple quantisation variants under one repository).
-#   revision:     Commit SHA or branch name for reproducible pins.
-#   default:      Exactly one entry SHALL set this to true. `make setup`
-#                 downloads the default entry.
+#   Each variant in the `variants:` list declares:
+#     - `format`:     "ct2" or "ggml" (required)
+#     - `local_dir`:  subdirectory under ./models/ (required)
+#     - format-specific fields:
+#         ct2:   `compute_type` (e.g. "int8_float16")
+#         ggml:  `quant` (e.g. "q6_k"), `filename` (.bin name), `coreml_encoder` (.mlmodelc dir)
+#     - optional:     `repo_id`, `revision`, `subfolder`, `default_on` (list of
+#                     "darwin" / "linux"; controls per-platform default selection
+#                     when BACKEND_FORMAT is not set)
 #
-# To add a custom model, append an entry under "models:" following the format
-# below. Models are referenced by their key name (e.g. "large-v3-turbo").
+# Backend selection precedence (see app/services/registry.py):
+#   1. MODEL_DIR override → load directly, registry not consulted.
+#   2. BACKEND_FORMAT env var → pick variant with matching `format`.
+#   3. Otherwise → pick variant whose `default_on` contains the host platform.
+#
+# To add a custom model, append a top-level entry following the same shape.
 # =============================================================================
 
 models:
   breeze-asr-25:
-    default: true
-    repo_id: "shdennlin/breeze-asr-25-ct2"
-    format: ct2
-    subfolder: int8_float16
-    compute_type: int8_float16
-    local_dir: breeze-asr-25
-    size: "1.5GB"
+    description: "MediaTek Breeze ASR 25 — Taiwanese Mandarin + English code-switching"
     languages: [zh-TW, en]
-    description: "MediaTek Breeze ASR 25 (CTranslate2 int8_float16) — Taiwanese Mandarin + English code-switching"
+    default: true
+    size: "1.5-2.0 GB"
+    variants:
+      - format: ct2
+        repo_id: "shdennlin/breeze-asr-25-ct2"
+        subfolder: int8_float16
+        compute_type: int8_float16
+        local_dir: breeze-asr-25-ct2
+        default_on: [linux]
+      - format: ggml
+        repo_id: "shdennlin/breeze-asr-25-ggml"
+        quant: q6_k
+        filename: ggml-breeze-asr-25-q6_k.bin
+        coreml_encoder: ggml-breeze-asr-25-encoder.mlmodelc
+        local_dir: breeze-asr-25-ggml
+        default_on: [darwin]
 
   large-v3-turbo:
-    repo_id: "Systran/faster-whisper-large-v3-turbo"
-    format: ct2
-    compute_type: int8_float16
-    local_dir: large-v3-turbo
-    size: "1.6GB"
+    description: "OpenAI Whisper large-v3-turbo — multilingual fallback"
     languages: [multilingual]
-    description: "OpenAI Whisper large-v3-turbo (CTranslate2 int8_float16) — multilingual fallback"
+    size: "1.6 GB"
+    variants:
+      - format: ct2
+        repo_id: "Systran/faster-whisper-large-v3-turbo"
+        compute_type: int8_float16
+        local_dir: large-v3-turbo
+        default_on: [linux, darwin]

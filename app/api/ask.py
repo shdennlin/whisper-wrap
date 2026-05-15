@@ -118,11 +118,11 @@ async def _run_audio_pipeline(
             )
 
         temp_wav = audio_converter.convert_to_wav(temp_input)
-        whisper_client = request.app.state.whisper_client
-        result = await whisper_client.transcribe(
+        whisper = request.app.state.whisper
+        result = await whisper.transcribe(
             temp_wav, language=language, initial_prompt=prompt
         )
-        return result.get("text", "")
+        return result.text
     finally:
         if temp_input:
             file_manager.cleanup_file(temp_input)

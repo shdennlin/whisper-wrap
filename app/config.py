@@ -20,33 +20,9 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
-OBSOLETE_V1_KEYS: tuple[str, ...] = (
-    "WHISPER_SERVER_HOST",
-    "WHISPER_SERVER_PORT",
-    "WHISPER_SERVER_URL",
-    "WHISPER_AUTO_RESTART",
-    "WHISPER_BINARY_PATH",
-    "WHISPER_MAX_RETRIES",
-    "MODEL_PATH",
-)
-
-
 def load_env_file(path: str = ".env") -> None:
     """Load environment variables from `.env`. Must be called by the entry point."""
     load_dotenv(path)
-
-
-def warn_obsolete_env_vars() -> list[str]:
-    """Emit a WARNING for each v1 env var still present in the environment."""
-    detected: list[str] = []
-    for key in OBSOLETE_V1_KEYS:
-        if key in os.environ:
-            logger.warning(
-                "Obsolete v1 env var %s detected — ignored in v2 (see CHANGELOG for migration)",
-                key,
-            )
-            detected.append(key)
-    return detected
 
 
 class Config:
@@ -66,6 +42,11 @@ class Config:
         # map 1:1 to a CPU compute path.
         self.COMPUTE_TYPE: str = os.getenv("COMPUTE_TYPE", "default")
         self.DEVICE: str = os.getenv("DEVICE", "auto")
+
+        # v2.1 backend override. When set ("ct2" | "ggml"), the lifespan SHALL pick
+        # the matching variant of the active model. When unset, platform-based
+        # `default_on` resolves the variant.
+        self.BACKEND_FORMAT: str | None = os.environ.get("BACKEND_FORMAT") or None
 
         # LLM (Gemini for /ask). Preserve unset (None) vs empty ("") so llm.py can
         # implement the spec's "unset = silent default, empty = warn + default" policy.

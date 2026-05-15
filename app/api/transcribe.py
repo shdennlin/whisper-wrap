@@ -140,10 +140,18 @@ async def transcribe(
 
         temp_wav = audio_converter.convert_to_wav(temp_input)
 
-        whisper_client = request.app.state.whisper_client
-        return await whisper_client.transcribe(
+        whisper = request.app.state.whisper
+        result = await whisper.transcribe(
             temp_wav, language=language, initial_prompt=prompt
         )
+        return {
+            "text": result.text,
+            "language": result.language,
+            "segments": [
+                {"text": s.text, "start": s.start, "end": s.end}
+                for s in result.segments
+            ],
+        }
 
     except HTTPException:
         raise
