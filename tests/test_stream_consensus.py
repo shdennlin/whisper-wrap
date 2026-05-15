@@ -6,52 +6,62 @@ in the transcribe-stream spec and Decision 6: Simplified LocalAgreement-2.
 
 
 
-def test_two_stable_inferences_emit_partial():
-    """Window N='今天' then N+1='今天天氣' SHALL emit partial with text='今天'."""
+def test_first_inference_emits_verbatim():
+    """First inference of an utterance SHALL emit verbatim — no "wait for consensus"
+    delay before the user sees any partial. Subsequent inferences then apply
+    LCP-truncation + dedup."""
     from app.services.stream import PartialConsensusFilter
 
     f = PartialConsensusFilter()
-    # First inference: no consensus possible yet
-    assert f.update("今天") is None
-    # Second inference: LCP at word boundary = "今天" (whole CJK is no whitespace; spec says punctuation OR whitespace; CJK without whitespace falls back to LCP truncated empty UNLESS we treat CJK as character-boundary-safe)
-    emitted = f.update("今天天氣")
-    assert emitted == "今天"
+    # First call: emit verbatim
+    assert f.update("今天") == "今天"
+    # Second call: LCP "今天" with curr[2]="天" CJK boundary → truncated = "今天",
+    # equal to last_emitted → suppressed
+    assert f.update("今天天氣") is None
+    # Third call: LCP "今天天氣" (now prev), curr extends with "不錯" → truncated
+    # = "今天天氣", differs from last_emitted "今天" → emit
+    assert f.update("今天天氣不錯") == "今天天氣"
 
 
 def test_unstable_emissions_suppressed():
-    """Window N='今天' then N+1='明天天氣很好' SHALL emit no partial (no shared prefix)."""
+    """First inference emits verbatim; subsequent inference with no shared
+    prefix at a word boundary SHALL suppress."""
     from app.services.stream import PartialConsensusFilter
 
     f = PartialConsensusFilter()
-    assert f.update("今天") is None
+    assert f.update("今天") == "今天"  # first emits verbatim
+    # No common prefix at boundary → suppressed (and differs from last_emitted "今天"
+    # so dedup also doesn't apply)
     assert f.update("明天天氣很好") is None
 
 
 def test_idempotent_partial_suppressed():
-    """Same prefix emitted twice in a row SHALL only emit once."""
+    """Same prefix emitted twice in a row SHALL only emit once (dedup)."""
     from app.services.stream import PartialConsensusFilter
 
     f = PartialConsensusFilter()
-    assert f.update("hello world") is None  # primer
-    assert f.update("hello world there") == "hello world"
-    # Next inference produces a longer transcript that still truncates back to "hello world"
-    # because no consensus past "hello world " stabilises yet.
-    assert f.update("hello world friends") is None  # LCP="hello world " truncates to "hello world"
-    # ... and trying to emit the same prefix again SHALL be suppressed.
+    # First: emit verbatim "hello world" (and dedup state remembers it)
+    assert f.update("hello world") == "hello world"
+    # Second: LCP("hello world", "hello world there") = "hello world" — equals
+    # last_emitted → dedup suppress
+    assert f.update("hello world there") is None
+    # Third: LCP("hello world there", "hello world friends") = "hello world " →
+    # trims to "hello world" → still equals last_emitted → suppress
+    assert f.update("hello world friends") is None
 
 
-def test_final_still_emitted_with_no_partial():
-    """An utterance with only one inference SHALL still emit final.
+def test_final_path_does_not_consult_filter():
+    """The StreamSession final-event code path SHALL NOT call the filter at all.
 
-    The filter SHALL NOT apply to the final-event code path: that path passes
-    the full transcript verbatim regardless of whether a partial ever stabilised.
+    The filter governs `partial` events only; `final` events emit the full
+    transcript verbatim regardless of consensus state. This test documents
+    that the filter object itself is stateless w.r.t. final events.
     """
     from app.services.stream import PartialConsensusFilter
 
     f = PartialConsensusFilter()
-    assert f.update("好") is None
-    # No partial emission happened; the StreamSession's final-event code does
-    # not consult the filter — see test_stream_final_bypasses_consensus.
+    # First inference now emits verbatim (was None in the old "wait for consensus" mode).
+    assert f.update("好") == "好"
 
 
 def test_lcp_truncation_table():

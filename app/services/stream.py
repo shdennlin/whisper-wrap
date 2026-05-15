@@ -152,12 +152,27 @@ class PartialConsensusFilter:
         self._last_emitted: str | None = None
 
     def update(self, current: str) -> str | None:
-        """Return the partial text to emit, or None to suppress."""
+        """Return the partial text to emit, or None to suppress.
+
+        First inference of an utterance: emit current verbatim — "no previous
+        to disagree with" is treated as "trivially agrees", so users see
+        feedback immediately instead of waiting one extra inference window.
+        Subsequent inferences apply the LCP-at-word-boundary truncation +
+        dedup against the most recently emitted partial.
+        """
         prev = self._prev
         self._prev = current
-        if prev is None:
-            # First inference of the utterance — no consensus possible yet.
+        if not current:
             return None
+        if prev is None:
+            # First inference: emit verbatim (no consensus needed yet).
+            # Trim trailing whitespace so the displayed text has no dangling
+            # boundary characters — same shape downstream consumers expect.
+            text = current.rstrip()
+            if not text or text == self._last_emitted:
+                return None
+            self._last_emitted = text
+            return text
         truncated = compute_lcp_at_word_boundary(prev, current)
         if not truncated or truncated == self._last_emitted:
             return None
