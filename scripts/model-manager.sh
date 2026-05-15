@@ -1,10 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# Model Manager for whisper-wrap v2 (CTranslate2 + Hugging Face)
+# Model Manager for whisper-wrap v2.1 (CTranslate2 + ggml/Core ML via variants)
 #
-# Drives `hf download` against `registry/models.yaml`. YAML parsing is delegated
-# to the project's Python (PyYAML), keeping this script focused on download/
-# install/activate/delete flows.
+# Drives `hf download` against `registry/models.yaml`. The v2.1 schema declares
+# one or more `variants:` per model — this script iterates the variants list
+# for download / list / set / delete, so a single `make download-model MODEL=x`
+# fetches every variant of x (typically both a ct2 and a ggml packaging).
+#
+# YAML parsing is delegated to the project's Python (app.services.registry).
 # =============================================================================
 
 set -euo pipefail
@@ -23,11 +26,10 @@ usage() {
 Usage: $0 <command> [args]
 
 Commands:
-  list                       List registry entries and download status
-  download <name>            Download a model by name (CT2 directory)
-  download <url>             REJECTED in v2: URL-based downloads are not supported
-  set <name>                 Set MODEL_NAME=<name> in .env (only if installed)
-  delete <name>              Delete a downloaded model (refuses if active)
+  list                       List registry models with per-variant install status
+  download <name>            Download every variant declared on <name>
+  set <name>                 Set MODEL_NAME=<name> in .env (requires ≥1 installed variant)
+  delete <name>              Delete every variant's local_dir (refuses if active)
   default                    Print the default model name from the registry
 
 Environment overrides:
@@ -40,9 +42,21 @@ EOF
 
 die() { echo "Error: $*" >&2; exit 1; }
 
+# Run python against the registry path with the optional model name as argv[2].
+# Stdin: a python snippet that imports load_registry / default_model_name and
+# writes to stdout. The snippet receives sys.argv = [<script>, <registry>, <name?>].
+py_registry() {
+    local extra_arg="${1:-}"
+    if [ -n "$extra_arg" ]; then
+        PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE" "$extra_arg"
+    else
+        PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE"
+    fi
+}
+
 # Validate the registry yaml. Exits non-zero on error.
 validate_registry() {
-    PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE" <<'PY'
+    py_registry <<'PY'
 import sys
 from app.services.registry import load_registry, RegistryError
 try:
@@ -53,10 +67,10 @@ except RegistryError as e:
 PY
 }
 
-# Emit a JSON dict for one entry (or fail with exit 3 if not found).
-get_entry_json() {
+# Print JSON for an entry's variants list (validating registry first).
+get_variants_json() {
     local name="$1"
-    PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE" "$name" <<'PY'
+    py_registry "$name" <<'PY'
 import json, sys
 from app.services.registry import load_registry, RegistryError
 try:
@@ -68,8 +82,79 @@ name = sys.argv[2]
 if name not in entries:
     print(f"Unknown model: {name}", file=sys.stderr)
     sys.exit(3)
-print(json.dumps(entries[name]))
+print(json.dumps(entries[name].get("variants", [])))
 PY
+}
+
+# variant_installed <variant_local_dir> <variant_format> [variant_filename] [variant_coreml]
+#   Returns 0 (true) if the variant's on-disk artefacts satisfy the format's
+#   "installed" definition; non-zero otherwise.
+variant_installed() {
+    local local_dir="$1" fmt="$2" filename="${3:-}" coreml="${4:-}"
+    local base="$MODELS_DIR/$local_dir"
+    [ -d "$base" ] || return 1
+    case "$fmt" in
+        ct2)
+            [ -f "$base/model.bin" ] || return 1
+            { [ -f "$base/tokenizer.json" ] || [ -f "$base/vocabulary.json" ]; } || return 1
+            ;;
+        ggml)
+            [ -n "$filename" ] || return 1
+            [ -f "$base/$filename" ] || return 1
+            [ -n "$coreml" ] || return 1
+            [ -d "$base/$coreml" ] || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# True when at least one variant of <name> is installed.
+any_variant_installed() {
+    local name="$1"
+    local variants_json
+    variants_json="$(get_variants_json "$name")"
+    "$PYTHON_BIN" - "$variants_json" <<'PY'
+import json, sys
+print(len(json.loads(sys.argv[1])))
+PY
+    local count
+    count="$("$PYTHON_BIN" -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$variants_json")"
+    [ "$count" -gt 0 ] || return 1
+    for i in $(seq 0 $((count - 1))); do
+        local fmt local_dir filename coreml
+        fmt="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])]['format'])" "$variants_json" "$i")"
+        local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])]['local_dir'])" "$variants_json" "$i")"
+        filename="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])].get('filename',''))" "$variants_json" "$i")"
+        coreml="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])].get('coreml_encoder',''))" "$variants_json" "$i")"
+        if variant_installed "$local_dir" "$fmt" "$filename" "$coreml"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# True when *all* variants of <name> are installed (used by the download skip path).
+all_variants_installed() {
+    local name="$1"
+    local variants_json
+    variants_json="$(get_variants_json "$name")"
+    local count
+    count="$("$PYTHON_BIN" -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$variants_json")"
+    [ "$count" -gt 0 ] || return 1
+    for i in $(seq 0 $((count - 1))); do
+        local fmt local_dir filename coreml
+        fmt="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])]['format'])" "$variants_json" "$i")"
+        local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])]['local_dir'])" "$variants_json" "$i")"
+        filename="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])].get('filename',''))" "$variants_json" "$i")"
+        coreml="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])].get('coreml_encoder',''))" "$variants_json" "$i")"
+        if ! variant_installed "$local_dir" "$fmt" "$filename" "$coreml"; then
+            return 1
+        fi
+    done
+    return 0
 }
 
 list_entries() {
@@ -82,16 +167,49 @@ except RegistryError as e:
     print(f"Registry validation failed: {e}", file=sys.stderr)
     sys.exit(2)
 models_dir = sys.argv[2]
-print(f"{'NAME':<22} {'DEFAULT':<8} {'INSTALLED':<10} {'SIZE':<8} REPO")
+
+
+def variant_label(v: dict) -> str:
+    if v["format"] == "ct2":
+        return f"ct2 ({v.get('compute_type', '?')})"
+    if v["format"] == "ggml":
+        return f"ggml ({v.get('quant', '?')})"
+    return v["format"]
+
+
+def variant_installed(v: dict) -> bool:
+    base = os.path.join(models_dir, v["local_dir"])
+    if not os.path.isdir(base):
+        return False
+    if v["format"] == "ct2":
+        return os.path.isfile(os.path.join(base, "model.bin")) and (
+            os.path.isfile(os.path.join(base, "tokenizer.json"))
+            or os.path.isfile(os.path.join(base, "vocabulary.json"))
+        )
+    if v["format"] == "ggml":
+        return os.path.isfile(os.path.join(base, v.get("filename", ""))) and os.path.isdir(
+            os.path.join(base, v.get("coreml_encoder", ""))
+        )
+    return False
+
+
+print(f"{'MODEL':<22} {'DEFAULT':<8} {'VARIANT':<22} {'INSTALLED':<10} REPO")
 for name, e in entries.items():
-    local = os.path.join(models_dir, e["local_dir"])
-    model_bin = os.path.join(local, "model.bin")
-    tokenizer = os.path.join(local, "tokenizer.json")
-    vocab = os.path.join(local, "vocabulary.json")
-    installed = os.path.isfile(model_bin) and (os.path.isfile(tokenizer) or os.path.isfile(vocab))
-    default = "*" if e.get("default") else ""
-    flag = "yes" if installed else ""
-    print(f"{name:<22} {default:<8} {flag:<10} {e['size']:<8} {e['repo_id']}")
+    default_flag = "*" if e.get("default") else ""
+    variants = e.get("variants", [])
+    if not variants:
+        print(f"{name:<22} {default_flag:<8} (no variants)")
+        continue
+    for idx, v in enumerate(variants):
+        # Only the first variant of each model carries the model name + default flag;
+        # subsequent variants show under an indented continuation line for clarity.
+        model_col = name if idx == 0 else ""
+        default_col = default_flag if idx == 0 else ""
+        flag = "yes" if variant_installed(v) else ""
+        repo = v.get("repo_id", "")
+        print(
+            f"{model_col:<22} {default_col:<8} {variant_label(v):<22} {flag:<10} {repo}"
+        )
 PY
 }
 
@@ -102,31 +220,42 @@ cmd_list() {
 
 cmd_default() {
     validate_registry
-    PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE" <<'PY'
+    py_registry <<'PY'
 import sys
 from app.services.registry import default_model_name
 print(default_model_name(sys.argv[1]))
 PY
 }
 
-cmd_download() {
-    [ $# -ge 1 ] || die "download requires <name>"
-    local target="$1"
+# Internal: download a single variant given its JSON encoding.
+download_variant() {
+    local variant_json="$1" target_name="$2" variant_index="$3"
 
-    # Reject URL form explicitly (v2 removes URL-based downloads).
-    if [[ "$target" =~ ^https?:// ]]; then
-        die "URL-based downloads were removed in v2. Add an entry to registry/models.yaml and run: $0 download <name>"
+    local fmt local_dir repo_id subfolder revision filename coreml
+    fmt="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])['format'])" "$variant_json")"
+    local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])['local_dir'])" "$variant_json")"
+    repo_id="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('repo_id',''))" "$variant_json")"
+    subfolder="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('subfolder',''))" "$variant_json")"
+    revision="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('revision',''))" "$variant_json")"
+    filename="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('filename',''))" "$variant_json")"
+    coreml="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('coreml_encoder',''))" "$variant_json")"
+
+    local label
+    case "$fmt" in
+        ct2)  label="ct2";;
+        ggml) label="ggml";;
+        *)    die "Unknown variant format '$fmt' on $target_name#$variant_index";;
+    esac
+
+    echo
+    echo "==> [$target_name] variant #$variant_index ($label) — local_dir=$local_dir"
+
+    if variant_installed "$local_dir" "$fmt" "$filename" "$coreml"; then
+        echo "    already installed, skipping."
+        return 0
     fi
 
-    validate_registry
-    local entry_json
-    entry_json="$(get_entry_json "$target")"
-
-    local repo_id local_dir subfolder revision
-    repo_id="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])['repo_id'])" "$entry_json")"
-    local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])['local_dir'])" "$entry_json")"
-    subfolder="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('subfolder',''))" "$entry_json")"
-    revision="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1]).get('revision',''))" "$entry_json")"
+    [ -n "$repo_id" ] || die "variant #$variant_index of '$target_name' has no repo_id"
 
     local dest="$MODELS_DIR/$local_dir"
     mkdir -p "$MODELS_DIR"
@@ -139,7 +268,7 @@ cmd_download() {
         hf_args+=(--revision "$revision")
     fi
 
-    echo "Downloading $target from $repo_id into $dest"
+    echo "    fetching from $repo_id"
     if command -v hf >/dev/null 2>&1; then
         hf "${hf_args[@]}"
     elif command -v huggingface-cli >/dev/null 2>&1; then
@@ -149,9 +278,9 @@ cmd_download() {
     fi
 
     # If we downloaded with a subfolder, hf places files under $dest/$subfolder/.
-    # Move them up to $dest/ so the resolver finds model.bin at the canonical path.
+    # Hoist them up so resolver finds artefacts at the canonical path.
     if [ -n "$subfolder" ] && [ -d "$dest/$subfolder" ]; then
-        echo "Hoisting $subfolder/* up to $dest/"
+        echo "    hoisting $subfolder/* up to $dest/"
         ( shopt -s dotglob nullglob
           for f in "$dest/$subfolder"/*; do
               mv -f "$f" "$dest/"
@@ -159,7 +288,38 @@ cmd_download() {
         rmdir "$dest/$subfolder" 2>/dev/null || true
     fi
 
-    echo "OK: $target installed at $dest"
+    echo "    installed at $dest"
+}
+
+cmd_download() {
+    [ $# -ge 1 ] || die "download requires <name>"
+    local target="$1"
+
+    # Reject URL form explicitly (v2 removed URL-based downloads).
+    if [[ "$target" =~ ^https?:// ]]; then
+        die "URL-based downloads were removed in v2. Add an entry to registry/models.yaml and run: $0 download <name>"
+    fi
+
+    validate_registry
+    local variants_json
+    variants_json="$(get_variants_json "$target")"
+
+    local count
+    count="$("$PYTHON_BIN" -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$variants_json")"
+    if [ "$count" -eq 0 ]; then
+        die "Model '$target' declares zero variants (registry should have caught this)."
+    fi
+
+    echo "Downloading $count variant(s) of '$target' into $MODELS_DIR/"
+
+    for i in $(seq 0 $((count - 1))); do
+        local variant_json
+        variant_json="$("$PYTHON_BIN" -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])[int(sys.argv[2])]))" "$variants_json" "$i")"
+        download_variant "$variant_json" "$target" "$i"
+    done
+
+    echo
+    echo "OK: '$target' installed (all variants present)"
 }
 
 cmd_set() {
@@ -167,18 +327,13 @@ cmd_set() {
     local name="$1"
 
     validate_registry
-    local entry_json
-    entry_json="$(get_entry_json "$name")"
+    # get_variants_json validates that <name> exists; ignore the actual value.
+    get_variants_json "$name" >/dev/null
 
-    local local_dir
-    local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])['local_dir'])" "$entry_json")"
-    local dest="$MODELS_DIR/$local_dir"
-
-    if [ ! -f "$dest/model.bin" ]; then
-        die "Model '$name' is not installed at $dest. Run: $0 download $name"
+    if ! any_variant_installed "$name"; then
+        die "Model '$name' has no installed variants. Run: $0 download $name"
     fi
 
-    # Update or append MODEL_NAME in .env atomically (portable across BSD/GNU sed).
     [ -f "$ENV_FILE" ] || die ".env file not found at $ENV_FILE"
     if grep -qE '^MODEL_NAME=' "$ENV_FILE"; then
         local tmp
@@ -196,8 +351,8 @@ cmd_delete() {
     local name="$1"
 
     validate_registry
-    local entry_json
-    entry_json="$(get_entry_json "$name")"
+    local variants_json
+    variants_json="$(get_variants_json "$name")"
 
     # Refuse to delete the model currently active in .env.
     local active=""
@@ -208,15 +363,29 @@ cmd_delete() {
         die "Refusing to delete the active model '$name'. Switch with: $0 set <other> first."
     fi
 
-    local local_dir
-    local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])['local_dir'])" "$entry_json")"
-    local dest="$MODELS_DIR/$local_dir"
-    if [ ! -d "$dest" ]; then
-        echo "Nothing to delete: $dest does not exist."
-        return 0
+    local count
+    count="$("$PYTHON_BIN" -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$variants_json")"
+    if [ "$count" -eq 0 ]; then
+        die "Model '$name' declares zero variants (nothing to delete)."
     fi
-    rm -rf "$dest"
-    echo "OK: removed $dest"
+
+    local removed_any=0
+    for i in $(seq 0 $((count - 1))); do
+        local local_dir
+        local_dir="$("$PYTHON_BIN" -c "import json,sys; print(json.loads(sys.argv[1])[int(sys.argv[2])]['local_dir'])" "$variants_json" "$i")"
+        local dest="$MODELS_DIR/$local_dir"
+        if [ -d "$dest" ]; then
+            rm -rf "$dest"
+            echo "OK: removed $dest"
+            removed_any=1
+        else
+            echo "Nothing to delete at $dest"
+        fi
+    done
+
+    if [ "$removed_any" -eq 0 ]; then
+        echo "No variant directories existed for '$name' — nothing removed."
+    fi
 }
 
 main() {

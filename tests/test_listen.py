@@ -102,8 +102,10 @@ async def test_voice_then_silence_emits_partial_then_final(captured_session):
 
 
 async def test_partial_event_shape_matches_spec(captured_session):
+    """v2.1: consensus filter suppresses the first inference, so we need ≥2
+    inferences to see a partial. 6 voice frames (1.5 s) trigger 2 inferences."""
     session, events, _ = captured_session
-    for _ in range(4):
+    for _ in range(6):
         await session.feed_frame(voice_frame(250))
     partials = [e for e in events if e["type"] == "partial"]
     assert partials, "Expected at least one partial event"
