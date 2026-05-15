@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -87,7 +88,10 @@ class PyWhisperCppBackend:
         self._extra_params = extra_params
 
         # First-run Core ML encoder compile (~10-30 s on a fresh host) happens
-        # synchronously inside Model() construction. Lifespan logs progress.
+        # synchronously inside Model() construction. Run the load in a background
+        # thread and emit one INFO log per second of elapsed wall-clock so
+        # operators see progress (and aren't confused that startup hung).
+        # Decision 5: Block lifespan on first-run Core ML encoder compile.
         t0 = time.monotonic()
         logger.info(
             "Loading pywhispercpp model %s (coreml=%s, n_threads=%d)",
@@ -95,23 +99,49 @@ class PyWhisperCppBackend:
             "yes" if coreml_encoder else "no",
             n_threads,
         )
-        try:
-            self._model = Model(
-                model=self._model_path,
-                n_threads=n_threads,
-                print_progress=False,
-                print_realtime=False,
-                print_timestamps=False,
-                **extra_params,
-            )
-        except Exception as e:
-            raise WhisperLoadError(
-                f"Failed to load pywhispercpp Model from {model_path}: {e}"
-            ) from e
 
+        result: dict[str, Any] = {}
+        done_event = threading.Event()
+        encoder_label = coreml_encoder or "(cpu-only)"
+
+        def _load_worker() -> None:
+            try:
+                result["model"] = Model(
+                    model=self._model_path,
+                    n_threads=n_threads,
+                    print_progress=False,
+                    print_realtime=False,
+                    print_timestamps=False,
+                    **extra_params,
+                )
+            except BaseException as exc:  # noqa: BLE001 — surface anything load fails with
+                result["error"] = exc
+            finally:
+                done_event.set()
+
+        loader = threading.Thread(target=_load_worker, daemon=True)
+        loader.start()
+
+        # Tick every 1 s until load completes.
+        while not done_event.wait(timeout=1.0):
+            elapsed_int = int(time.monotonic() - t0)
+            logger.info(
+                "compiling Core ML encoder %s ... (%ds elapsed)",
+                encoder_label,
+                elapsed_int,
+            )
+
+        loader.join()
+
+        if "error" in result:
+            raise WhisperLoadError(
+                f"Failed to load pywhispercpp Model from {model_path}: {result['error']}"
+            ) from result["error"]
+
+        self._model = result["model"]
         elapsed = time.monotonic() - t0
         logger.info(
-            "pywhispercpp model ready in %.1fs (coreml=%s)",
+            "pywhispercpp compile complete in %.1fs (coreml=%s)",
             elapsed,
             "yes" if coreml_encoder else "no",
         )

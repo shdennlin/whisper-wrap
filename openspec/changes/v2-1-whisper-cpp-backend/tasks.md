@@ -59,8 +59,8 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 ### 8. Core ML first-run compile lifecycle (TDD)
 
-- [ ] 8.1 Write failing test `tests/test_whisper_cpp.py::test_compile_emits_per_second_progress` (skipped on Linux) using a fake slow encoder load that takes ≥3 s, asserting at least three INFO log lines naming the encoder path and elapsed seconds are emitted, plus one final "compile complete in Ns" line — covering Decision 5: Block lifespan on first-run Core ML encoder compile; verify the test fails until the progress-logging coroutine is added.
-- [ ] 8.2 Implement the per-second progress logger inside `PyWhisperCppBackend.__init__` so the "First-run Core ML encoder compile blocks lifespan" requirement holds; verify by running `tests/test_whisper_cpp.py::test_compile_emits_per_second_progress` to green and by manually starting the server against a freshly downloaded ggml variant on macOS to observe the logs.
+- [x] 8.1 Write failing test `tests/test_whisper_cpp.py::test_compile_emits_per_second_progress` (skipped on Linux) using a fake slow encoder load that takes ≥3 s, asserting at least three INFO log lines naming the encoder path and elapsed seconds are emitted, plus one final "compile complete in Ns" line — covering Decision 5: Block lifespan on first-run Core ML encoder compile; verify the test fails until the progress-logging coroutine is added.
+- [x] 8.2 Implement the per-second progress logger inside `PyWhisperCppBackend.__init__` so the "First-run Core ML encoder compile blocks lifespan" requirement holds; verify by running `tests/test_whisper_cpp.py::test_compile_emits_per_second_progress` to green and by manually starting the server against a freshly downloaded ggml variant on macOS to observe the logs.
 - [ ] 8.3 Validate empirically that the cached `.mlmodelc` skip path holds: start the server twice on the same host and capture both startup durations; verify the second start completes within the existing CT2 model-load time budget (no per-second compile logs).
 
 ### 9. Model manager CLI for variants
@@ -76,9 +76,9 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 ### 11. Active-model resolution behaviour
 
-- [ ] 11.1 Write failing tests `tests/test_lifespan_integration.py::test_model_dir_override_ggml` and `tests/test_lifespan_integration.py::test_model_dir_override_ct2` asserting that `MODEL_DIR` short-circuits the registry and selects the correct backend by inspecting the directory layout — covering the "Lifespan selects backend based on resolved variant format" requirement (MODEL_DIR precedence rule); verify each fails before override logic exists.
-- [ ] 11.2 Implement `MODEL_DIR` layout inspection inside the lifespan startup path so the two failing tests pass; verify by running both tests to green.
-- [ ] 11.3 Write failing test `tests/test_lifespan_integration.py::test_default_model_fallback_with_no_installed_variant` asserting the lifespan exits with a clear error directing the user to `make download-model MODEL=breeze-asr-25` when no variant of the default model is installed; verify the test fails until the diagnostic is added and then passes.
+- [x] 11.1 Write failing tests `tests/test_lifespan_integration.py::test_model_dir_override_ggml` and `tests/test_lifespan_integration.py::test_model_dir_override_ct2` asserting that `MODEL_DIR` short-circuits the registry and selects the correct backend by inspecting the directory layout — covering the "Lifespan selects backend based on resolved variant format" requirement (MODEL_DIR precedence rule); verify each fails before override logic exists.
+- [x] 11.2 Implement `MODEL_DIR` layout inspection inside the lifespan startup path so the two failing tests pass; verify by running both tests to green.
+- [x] 11.3 Write failing test `tests/test_lifespan_integration.py::test_default_model_fallback_with_no_installed_variant` asserting the lifespan exits with a clear error directing the user to `make download-model MODEL=breeze-asr-25` when no variant of the default model is installed; verify the test fails until the diagnostic is added and then passes.
 
 ### Phase 1 done criterion
 

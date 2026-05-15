@@ -204,3 +204,57 @@ def test_import_raises_load_error_on_non_darwin():
     sys.modules.pop("app.services.whisper_cpp", None)
     with pytest.raises(WhisperLoadError, match=r"pywhispercpp is not available"):
         import app.services.whisper_cpp  # noqa: F401
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="pywhispercpp is macOS-only")
+def test_compile_emits_per_second_progress(ggml_model_dir, caplog):
+    """A fake slow Model() taking ≥3 s SHALL produce per-second progress logs
+    naming the encoder path, plus one final completion line.
+
+    Covers Decision 5: Block lifespan on first-run Core ML encoder compile.
+    """
+    import logging
+    import time
+
+    slow_load_delay = 3.2  # seconds — enough for 3+ tick lines
+
+    class SlowFakeModel:
+        def __init__(self, *args, **kwargs):
+            time.sleep(slow_load_delay)
+
+    with patch("app.services.whisper_cpp.Model", SlowFakeModel):
+        from app.services.whisper_cpp import PyWhisperCppBackend
+
+        with caplog.at_level(logging.INFO, logger="app.services.whisper_cpp"):
+            t0 = time.monotonic()
+            PyWhisperCppBackend(
+                model_path=str(ggml_model_dir / "ggml-breeze-asr-25-q6_k.bin"),
+                coreml_encoder=str(
+                    ggml_model_dir / "ggml-breeze-asr-25-encoder.mlmodelc"
+                ),
+                n_threads=4,
+            )
+            wall = time.monotonic() - t0
+
+        # Sanity: construction actually waited for the fake load
+        assert wall >= slow_load_delay - 0.1
+
+        # Progress lines: at least 3 (one per second of slow_load_delay) naming "encoder"
+        progress = [
+            r
+            for r in caplog.records
+            if "encoder" in r.getMessage() and "elapsed" in r.getMessage()
+        ]
+        assert len(progress) >= 3, (
+            f"Expected ≥3 per-second progress lines, got {len(progress)}: "
+            f"{[r.getMessage() for r in caplog.records]}"
+        )
+
+        # Completion line: one final summary naming the total compile duration
+        completion = [
+            r
+            for r in caplog.records
+            if "compile complete" in r.getMessage().lower()
+            or "ready in" in r.getMessage().lower()
+        ]
+        assert completion, "Expected one final compile-complete log line"
