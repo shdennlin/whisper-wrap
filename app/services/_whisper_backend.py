@@ -65,11 +65,14 @@ class WhisperBackend(Protocol):
         *,
         language: str,
         initial_prompt: str | None,
+        task: str = "transcribe",
     ) -> TranscriptionResult:
         """Transcribe a WAV file at `wav_path`.
 
         `language="auto"` triggers backend-side language detection. `initial_prompt`
-        is an optional bias string forwarded to the underlying model.
+        is an optional bias string forwarded to the underlying model. `task` is
+        `"transcribe"` (default) or `"translate"`; the latter routes through the
+        underlying model's translation mode and the output language is English.
 
         Raises `WhisperTranscriptionError` on inference failure and the standard
         `FileNotFoundError` when `wav_path` does not exist.

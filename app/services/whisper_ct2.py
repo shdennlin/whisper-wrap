@@ -58,10 +58,11 @@ def _run_inference(
     *,
     language: str | None,
     initial_prompt: str | None,
+    task: str = "transcribe",
 ) -> tuple[list, Any]:
     """Run the synchronous model inference and materialise segments inside a thread."""
     segments, info = model.transcribe(
-        media, language=language, initial_prompt=initial_prompt
+        media, language=language, initial_prompt=initial_prompt, task=task
     )
     return list(segments), info
 
@@ -108,8 +109,13 @@ class CTranslate2Backend:
         *,
         language: str = "auto",
         initial_prompt: str | None = None,
+        task: str = "transcribe",
     ) -> TranscriptionResult:
-        """Transcribe a WAV file. Returns a `TranscriptionResult` dataclass."""
+        """Transcribe a WAV file. Returns a `TranscriptionResult` dataclass.
+
+        `task="translate"` invokes faster-whisper's translation mode (output
+        in English). Default `task="transcribe"` preserves prior behaviour.
+        """
         if not wav_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_path}")
 
@@ -122,6 +128,7 @@ class CTranslate2Backend:
                 str(wav_path),
                 language=model_language,
                 initial_prompt=initial_prompt,
+                task=task,
             )
         except Exception as e:
             raise WhisperTranscriptionError(f"{e}") from e

@@ -113,6 +113,30 @@ def test_root_lists_all_v2_endpoints(stubbed_app):
             assert isinstance(e["description"], str) and e["description"]
 
 
+# ---------- v2.3 Task 5.1: catalogue advertises OpenAI-compat routes ----------
+
+
+def test_discovery_lists_openai_compat_routes(stubbed_app):
+    """API discovery endpoint lists every registered route — the catalogue
+    SHALL include the three OpenAI-compatibility routes with non-empty
+    descriptions so operators can see at a glance that the compat layer is mounted.
+    """
+    with TestClient(stubbed_app) as c:
+        body = c.get("/").json()
+        entries = body["endpoints"]
+        by_route = {(e["method"], e["path"]): e for e in entries}
+        for method, path in (
+            ("POST", "/v1/audio/transcriptions"),
+            ("POST", "/v1/audio/translations"),
+            ("GET", "/v1/models"),
+        ):
+            assert (method, path) in by_route, f"missing entry for {method} {path}"
+            entry = by_route[(method, path)]
+            assert isinstance(entry["description"], str) and entry["description"], (
+                f"entry for {method} {path} has empty description"
+            )
+
+
 # ---------- v2.1: backend metadata block ----------
 
 

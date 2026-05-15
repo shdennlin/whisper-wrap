@@ -101,5 +101,20 @@ async def root() -> dict[str, Any]:
                 "path": "/",
                 "description": "This endpoint catalogue",
             },
+            {
+                "method": "POST",
+                "path": "/v1/audio/transcriptions",
+                "description": "OpenAI-compatible audio transcription endpoint",
+            },
+            {
+                "method": "POST",
+                "path": "/v1/audio/translations",
+                "description": "OpenAI-compatible audio translation endpoint (output: English)",
+            },
+            {
+                "method": "GET",
+                "path": "/v1/models",
+                "description": "OpenAI-compatible model catalogue (lists the active whisper-wrap model)",
+            },
         ]
     }

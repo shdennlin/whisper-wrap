@@ -8,33 +8,8 @@ when picked up. Order is recommended priority (highest CP at top).
 ## v2.2 — Streaming quality + ecosystem integration
 
 > **silero-vad has been promoted to a Spectra change.** See `openspec/changes/v2-2-silero-vad/` (currently parked).
-
-
-### 1. OpenAI Whisper API compatibility — `POST /v1/audio/transcriptions`
-
-**Problem.** Several LLM client tools (LibreChat, Continue.dev, open-webui,
-OpenAI-compatible CLIs) expect the OpenAI Whisper API shape. Today they cannot
-talk to whisper-wrap because our `/transcribe` endpoint uses a different request
-and response schema.
-
-**Proposed change.** Add a thin compatibility layer that wraps the existing
-in-process backend:
-
-- `POST /v1/audio/transcriptions` — accepts `multipart/form-data` with `file`,
-  `model`, `language`, `prompt`, `response_format`, `temperature` (latter two
-  optional). Returns `{"text": "..."}` for `response_format=json` (default),
-  raw text for `text`, plus SRT / VTT generation from segments for those
-  formats.
-- `POST /v1/audio/translations` (English-only output) — same shape; routes
-  through Whisper's `task=translate` mode under the hood.
-- Reject unsupported `model` values with a clear error so clients see why
-  their `whisper-1` / `gpt-4o-transcribe` request is being rejected.
-
-**Effort.** ~half day.
-**Risk.** Very low — pure wrapper, no behaviour change to the live backend.
-**Verification.** `tests/test_openai_compat.py` covers each response format
-plus the unsupported-model error. Manual: point LibreChat / open-webui at
-`http://localhost:8000/v1` and confirm a sample transcription round-trips.
+>
+> **OpenAI Whisper API compatibility has been promoted to a Spectra change.** See `openspec/changes/v2-3-openai-compat/` (currently parked).
 
 ---
 

@@ -90,6 +90,33 @@ curl -X POST "http://localhost:8000/transcribe" \
 }
 ```
 
+### OpenAI Whisper-compatible surface (v2.3)
+
+For drop-in use with any OpenAI-Whisper-compatible client
+(open-webui, LibreChat, the OpenAI SDK, etc.) whisper-wrap exposes:
+
+| Method | Path                          | Description                                                              |
+| ------ | ----------------------------- | ------------------------------------------------------------------------ |
+| POST   | `/v1/audio/transcriptions`    | OpenAI-compatible audio transcription endpoint                           |
+| POST   | `/v1/audio/translations`      | OpenAI-compatible audio translation endpoint (output: English)           |
+| GET    | `/v1/models`                  | OpenAI-compatible model catalogue (lists the active whisper-wrap model)  |
+
+`response_format` accepts `json` (default), `text`, `srt`, `verbose_json`,
+and `vtt`. The `model` request field is advisory — whisper-wrap loads
+exactly one model per process; any non-empty value is accepted, with a
+WARNING log when it doesn't match an OpenAI alias or the active model.
+
+```bash
+# Drop-in OpenAI SDK example (Python)
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="any")
+with open("audio.mp3", "rb") as f:
+    print(client.audio.transcriptions.create(model="whisper-1", file=f).text)
+```
+
+See [`docs/INSTALLATION.md`](docs/INSTALLATION.md#openai-compatible-front-ends-open-webui)
+for the open-webui Docker recipe.
+
 ## 🤖 Model Management
 
 whisper-wrap includes a built-in model registry with 6 pre-configured models:

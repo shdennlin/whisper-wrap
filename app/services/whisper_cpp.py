@@ -163,12 +163,19 @@ class PyWhisperCppBackend:
         *,
         language: str = "auto",
         initial_prompt: str | None = None,
+        task: str = "transcribe",
     ) -> TranscriptionResult:
-        """Transcribe a WAV file. Returns a `TranscriptionResult`."""
+        """Transcribe a WAV file. Returns a `TranscriptionResult`.
+
+        `task="translate"` sets the whisper.cpp `translate` parameter so the
+        output is English regardless of source language.
+        """
         if not wav_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_path}")
 
-        params = self._build_params(language=language, initial_prompt=initial_prompt)
+        params = self._build_params(
+            language=language, initial_prompt=initial_prompt, task=task
+        )
         try:
             segments = await asyncio.to_thread(
                 self._model.transcribe, str(wav_path), **params
@@ -196,12 +203,18 @@ class PyWhisperCppBackend:
         return self._build_result(segments, requested_language=language)
 
     def _build_params(
-        self, *, language: str, initial_prompt: str | None
+        self,
+        *,
+        language: str,
+        initial_prompt: str | None,
+        task: str = "transcribe",
     ) -> dict[str, Any]:
         # pywhispercpp accepts `language` directly; "auto" is its sentinel too.
         params: dict[str, Any] = {"language": language}
         if initial_prompt is not None:
             params["initial_prompt"] = initial_prompt
+        if task == "translate":
+            params["translate"] = True
         return params
 
     def _build_result(

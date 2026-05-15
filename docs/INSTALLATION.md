@@ -195,6 +195,42 @@ curl -X POST "http://localhost:8000/transcribe" \
 curl http://localhost:8000/health
 ```
 
+## OpenAI-compatible front-ends (open-webui)
+
+whisper-wrap exposes an OpenAI Whisper-compatible surface at
+`POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, and
+`GET /v1/models`. Any OpenAI-Whisper-compatible client (LibreChat, open-webui,
+the OpenAI Python / TypeScript SDKs, curl recipes from the OpenAI docs) can use
+whisper-wrap as the STT backend by pointing its base URL at
+`http://<whisper-wrap-host>:8000/v1` — no per-tool adapter code needed.
+
+The canonical recipe uses [open-webui](https://github.com/open-webui/open-webui):
+
+```bash
+# Run open-webui in Docker, exposing it on http://localhost:3000
+docker run -p 3000:8080 ghcr.io/open-webui/open-webui:main
+```
+
+Then in open-webui:
+
+1. **Settings → Audio → Speech-to-Text → API Base URL** → set to
+   `http://<whisper-wrap-host>:8000/v1`
+2. **API Key** → any non-empty value works (whisper-wrap accepts but ignores
+   the `Authorization` header — see the security note below)
+3. **Model** → any value; whisper-wrap loads exactly one model per process,
+   so the request field is advisory. Reserved aliases (`whisper-1`,
+   `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`) are silently accepted; other
+   values log a single WARNING line server-side and still serve with the
+   active model.
+
+> **LAN-only by default.** whisper-wrap binds to `API_HOST=127.0.0.1` out of
+> the box. If open-webui runs on a different machine (or in a Docker container
+> on the same machine that reaches the host via a routable IP), set
+> `API_HOST=0.0.0.0` in `.env` so the server accepts connections from outside
+> localhost. The OpenAI compat layer does NOT enforce bearer-token
+> authentication — keep whisper-wrap behind a reverse proxy, VPN, or Tailscale
+> boundary if you expose it beyond a trusted LAN.
+
 ## Whisper Model Information
 
 **Model**: `ggml-large-v3-turbo-q8_0` (default)

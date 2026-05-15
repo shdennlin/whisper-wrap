@@ -151,6 +151,42 @@ model is loaded).
 ### GET /
 Endpoint catalogue: each entry has `method`, `path`, `description`.
 
+### POST /v1/audio/transcriptions  (v2.3, OpenAI-compat)
+
+OpenAI-Whisper-compatible transcription endpoint. Multipart `file`, `model`
+(required, non-empty), and optional `language`, `prompt`, `response_format`,
+`temperature` form fields. Reuses the in-process `WhisperBackend` — no extra
+model is loaded.
+
+- `response_format` (default `json`): one of `json`, `text`, `srt`,
+  `verbose_json`, `vtt`. Anything else returns HTTP 400 with the OpenAI error
+  envelope (`{"error": {"message", "type", "param", "code"}}`).
+- `model` is advisory. Reserved OpenAI aliases (`whisper-1`, `gpt-4o-transcribe`,
+  `gpt-4o-mini-transcribe`) and the active whisper-wrap model name pass
+  silently. Other non-empty values are accepted with a single WARNING log line
+  naming the requested and active model. Empty/missing `model` → 400 with
+  `param="model"`.
+- `Authorization` header is accepted (so the OpenAI SDK is quiet) but ignored
+  — whisper-wrap does not enforce bearer-token auth.
+- `verbose_json` always includes `tokens=[]`, `avg_logprob=null`,
+  `compression_ratio=null`, `no_speech_prob=null` because whisper.cpp does not
+  expose those values; the keys exist so SDK clients can rely on the shape.
+
+### POST /v1/audio/translations  (v2.3, OpenAI-compat)
+
+Same shape as `/v1/audio/transcriptions` except the `language` form field is
+rejected with HTTP 400 (output is always English per OpenAI's documented
+behaviour) and the underlying backend is invoked with the translate task.
+`verbose_json` responses carry `task="translate"` and `language="en"`.
+
+### GET /v1/models  (v2.3, OpenAI-compat)
+
+Returns the OpenAI list shape `{"object": "list", "data": [...]}` containing
+exactly one entry — the active whisper-wrap model. `id` matches the
+`/status` `model.name` field (the registry key when `MODEL_NAME` resolves it;
+the resolved path when `MODEL_DIR` overrides). `owned_by` is the literal
+string `"whisper-wrap"`; `created` is the server's startup unix-timestamp.
+
 ## Configuration
 
 Environment variables (`.env` file; see `.env.example` for the full list):
