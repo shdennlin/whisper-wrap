@@ -62,6 +62,7 @@ async def test_voice_frames_trigger_transcription(captured_session):
     # 4 × 250 ms voice = 1 s of speech (one partial fires at audio_ms=750)
     for _ in range(4):
         await session.feed_frame(voice_frame(250))
+    await session.drain()
     assert len(transcribe_calls) >= 1, "Expected at least one transcription call"
 
 
@@ -98,11 +99,12 @@ async def test_voice_then_silence_emits_partial_then_final(captured_session):
 
 
 async def test_partial_event_shape_matches_spec(captured_session):
-    """v2.1: consensus filter suppresses the first inference, so we need ≥2
-    inferences to see a partial. 6 voice frames (1.5 s) trigger 2 inferences."""
+    """v2.1: first inference emits verbatim, so 4 voice frames are enough to
+    trigger one partial cadence + one async inference completion."""
     session, events, _ = captured_session
-    for _ in range(6):
+    for _ in range(4):
         await session.feed_frame(voice_frame(250))
+    await session.drain()
     partials = [e for e in events if e["type"] == "partial"]
     assert partials, "Expected at least one partial event"
     p = partials[0]

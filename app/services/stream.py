@@ -13,6 +13,7 @@ that ends at a word boundary. Cuts partial-emission rate by ≥50% and removes
 the visible text-thrashing problem v2 had.
 """
 
+import asyncio
 import logging
 import string
 import struct
@@ -29,11 +30,13 @@ SAMPLE_RATE = 16_000
 BYTES_PER_SAMPLE = 2
 
 # Streaming knobs (per design decision; tuned for ~250 ms client frame cadence)
-SILENCE_RMS_THRESHOLD = 500.0  # int16 RMS — anything below is silence
-SILENCE_DURATION_MS = 700      # consecutive silence required to end an utterance
-PARTIAL_INTERVAL_MS = 500      # min interval between partials during active speech
+SILENCE_RMS_THRESHOLD = 500.0   # int16 RMS — anything below is silence
+SILENCE_DURATION_MS = 700       # consecutive silence required to end an utterance
+PARTIAL_INTERVAL_MS = 500       # min interval between partials during active speech
+PARTIAL_WINDOW_MS = 5000        # partial inference looks at last N ms of audio only (bounded cost)
 MAX_BUFFER_SECONDS = 30
 MAX_BUFFER_BYTES = MAX_BUFFER_SECONDS * SAMPLE_RATE * BYTES_PER_SAMPLE
+PARTIAL_WINDOW_BYTES = (PARTIAL_WINDOW_MS * SAMPLE_RATE * BYTES_PER_SAMPLE) // 1000
 
 
 TranscribeFn = Callable[[np.ndarray], Awaitable[str]]
@@ -230,9 +233,26 @@ class StreamSession:
         self._last_voice_ms = 0
         self._in_utterance = False
         self._overflow_warning_pending = False
+        # Async backpressure: when a partial inference is in flight, drop the
+        # next partial cadence rather than queueing more inference behind it.
+        self._partial_in_flight: asyncio.Task | None = None
 
     def elapsed_ms(self) -> int:
         return self._audio_ms
+
+    async def drain(self) -> None:
+        """Wait for any in-flight partial inference to complete.
+
+        Used by tests + clean shutdown so deterministic assertions can observe
+        the events that a fire-and-forget partial inference will eventually
+        emit. Production WS handlers do not need to call this — the WebSocket
+        loop drains naturally on disconnect.
+        """
+        if self._partial_in_flight is not None and not self._partial_in_flight.done():
+            try:
+                await self._partial_in_flight
+            except Exception:
+                logger.exception("Pending partial inference raised during drain")
 
     async def feed_frame(self, pcm: bytes) -> None:
         """Append a PCM frame and emit any cadence-triggered events."""
@@ -275,42 +295,88 @@ class StreamSession:
         final_due = (now_ms - self._last_voice_ms) >= SILENCE_DURATION_MS
         partial_due = (now_ms - self._last_partial_ms) >= PARTIAL_INTERVAL_MS
 
-        # When a final event is due, skip the partial that would otherwise fire
-        # in the same frame — the final already carries the full transcript and
-        # a partial-then-immediate-final pair is visual noise (and a wasted
-        # inference).
+        # Final supersedes partial: when a final is due, skip any partial that
+        # would otherwise fire on the same frame (the final carries the full
+        # transcript anyway, and a partial-then-final pair is visual noise).
         if partial_due and not final_due:
-            await self._emit_event("partial", now_ms)
-            self._last_partial_ms = now_ms
+            # Drop the cadence fire if a previous partial inference is still
+            # running. Better to skip a frame than queue inference and let
+            # latency accumulate while the user keeps speaking.
+            if self._partial_in_flight is None or self._partial_in_flight.done():
+                self._last_partial_ms = now_ms
+                self._partial_in_flight = asyncio.create_task(
+                    self._run_partial_inference(now_ms)
+                )
+            else:
+                logger.debug(
+                    "Partial cadence skipped at audio_ms=%d (inference still running)",
+                    now_ms,
+                )
 
         if final_due:
-            await self._emit_event("final", now_ms)
+            # Wait for any in-flight partial so emit order stays partial→final.
+            if self._partial_in_flight is not None and not self._partial_in_flight.done():
+                try:
+                    await self._partial_in_flight
+                except Exception:
+                    logger.exception("Pending partial inference failed before final")
+            await self._emit_final(now_ms)
             self._in_utterance = False
             self._utterance_buffer = bytearray()
             self.consensus_filter.reset()
+            self._partial_in_flight = None
 
-    async def _emit_event(self, event_type: str, end_ms: int) -> None:
+    async def _run_partial_inference(self, end_ms: int) -> None:
+        """Run a partial-window inference and emit (fire-and-forget from feed_frame).
+
+        Uses only the tail of the utterance buffer (last PARTIAL_WINDOW_MS) so
+        inference cost is bounded regardless of how long the utterance has been
+        running. Final-event inference still uses the full buffer for accuracy.
+        """
+        if not self._utterance_buffer:
+            return
+
+        # Tail-window: only look at the most recent PARTIAL_WINDOW_MS of audio.
+        if len(self._utterance_buffer) > PARTIAL_WINDOW_BYTES:
+            tail = bytes(self._utterance_buffer[-PARTIAL_WINDOW_BYTES:])
+            window_start_ms = max(self._utterance_start_ms, end_ms - PARTIAL_WINDOW_MS)
+        else:
+            tail = bytes(self._utterance_buffer)
+            window_start_ms = self._utterance_start_ms
+
+        samples = pcm_to_float32(tail)
+        try:
+            text = await self.transcribe_fn(samples)
+        except Exception as e:
+            logger.exception("Partial transcription failed: %s", e)
+            return
+
+        filtered = self.consensus_filter.update(text)
+        if filtered is None:
+            return
+
+        await self.send_event(
+            {
+                "type": "partial",
+                "text": filtered,
+                "start_ms": window_start_ms,
+                "end_ms": end_ms,
+            }
+        )
+
+    async def _emit_final(self, end_ms: int) -> None:
+        """Final event: transcribe the FULL utterance buffer for best accuracy."""
         if not self._utterance_buffer:
             return
         samples = pcm_to_float32(bytes(self._utterance_buffer))
         try:
             text = await self.transcribe_fn(samples)
         except Exception as e:
-            logger.exception("Streaming transcription failed: %s", e)
+            logger.exception("Final transcription failed: %s", e)
             return
-
-        # Consensus filter applies ONLY to partial events. Final events emit the
-        # full transcript verbatim regardless of consensus state (see
-        # transcribe-stream spec "Final still emits when no partial ever stabilised").
-        if event_type == "partial":
-            filtered = self.consensus_filter.update(text)
-            if filtered is None:
-                return
-            text = filtered
-
         await self.send_event(
             {
-                "type": event_type,
+                "type": "final",
                 "text": text,
                 "start_ms": self._utterance_start_ms,
                 "end_ms": end_ms,

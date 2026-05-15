@@ -122,12 +122,15 @@ def test_stream_emits_partial_with_consensus_filter_active(monkeypatch):
     import asyncio
 
     async def drive():
+        # Drain after each frame so the synchronous test driver observes every
+        # partial deterministically (production WS handler doesn't need this).
         for _ in range(6):
             await session.feed_frame(loud_pcm)
-        # Silence to trigger final
+            await session.drain()
         silence_pcm = b"\x00\x00" * samples_per_frame
         for _ in range(4):  # 4 * 250 ms = 1 s > SILENCE_DURATION_MS
             await session.feed_frame(silence_pcm)
+            await session.drain()
 
     asyncio.run(drive())
 
@@ -156,6 +159,9 @@ async def _replay_fixture_through(session, pcm_bytes: bytes, frame_bytes: int = 
         chunk = pcm_bytes[i : i + frame_bytes]
         if len(chunk) == frame_bytes:  # skip ragged final chunk
             await session.feed_frame(chunk)
+            # Drain after every frame so the synchronous test driver observes
+            # each partial deterministically (production use doesn't need this).
+            await session.drain()
 
 
 def _scripted_transcribe_fn(scripted):
