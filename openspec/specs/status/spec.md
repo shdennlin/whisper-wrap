@@ -151,79 +151,20 @@ tests:
 
 The system SHALL expose `GET /` returning a JSON document that lists every public HTTP and WebSocket route registered on the FastAPI app. Each entry SHALL include the HTTP method (or the literal string `"WS"` for WebSocket routes), the URL path, and a one-line `description`. The list SHALL be a single source of truth for clients discovering the API surface; documentation generators MAY read it. The response SHALL be reachable without authentication.
 
+The catalogue SHALL include the OpenAI-compatibility surface introduced by the `openai-compat` capability so operators can confirm at a glance that the compat layer is mounted.
+
 #### Scenario: Discovery payload shape
 
 - **WHEN** a client requests `GET /`
-- **THEN** the response SHALL be HTTP 200 with a JSON document of shape `{"endpoints": [{"method": "POST", "path": "/transcribe", "description": "..."}, ...]}` and SHALL include at least these entries: `POST /transcribe`, `WS /listen`, `POST /ask`, `GET /status`, `GET /`
+- **THEN** the response SHALL be HTTP 200 with a JSON document of shape `{"endpoints": [{"method": "POST", "path": "/transcribe", "description": "..."}, ...]}` and SHALL include at least these entries: `POST /transcribe`, `WS /listen`, `POST /ask`, `GET /status`, `GET /`, `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `GET /v1/models`
 
+##### Example: catalogue rows for OpenAI-compat routes
 
-<!-- @trace
-source: v2-server-redesign
-updated: 2026-05-15
-code:
-  - app/services/vad.py
-  - app/services/_whisper_backend.py
-  - scripts/bench-stream-latency.py
-  - docker-compose.yml
-  - app/config.py
-  - README.md
-  - app/__init__.py
-  - CHANGELOG.md
-  - app/api/ask.py
-  - app/services/converter.py
-  - .gitmodules
-  - app/services/registry.py
-  - pyproject.toml
-  - app/main.py
-  - app/api/status.py
-  - deploy/whisper-wrap.service
-  - tests/fixtures/vad/fan_noise.pcm
-  - whisper.cpp
-  - Dockerfile
-  - samples/.gitkeep
-  - tests/fixtures/vad/quiet_speech.pcm
-  - tests/fixtures/streaming/mandarin_10s.pcm
-  - app/api/transcribe.py
-  - app/services/stream.py
-  - Makefile
-  - docs/ROADMAP.md
-  - app/api/listen.py
-  - uv.lock
-  - scripts/model-manager.sh
-  - registry/models.yaml
-  - app/services/whisper.py
-  - docs/TROUBLESHOOTING.md
-  - scripts/live-caption.py
-  - CLAUDE.md
-  - scripts/record-and-transcribe.sh
-  - docs/INSTALLATION.md
-  - scripts/fetch-samples.sh
-  - .env.example
-  - docs/PRD-roadmap.md
-  - docs/API.md
-  - tests/fixtures/vad/clean_speech.pcm
-  - app/services/llm.py
-  - app/services/whisper_ct2.py
-  - app/services/whisper_cpp.py
-  - app/services/whisper_manager.py
-tests:
-  - tests/test_model_manager.py
-  - tests/test_listen.py
-  - tests/test_ask.py
-  - tests/test_status.py
-  - tests/test_whisper_ct2.py
-  - tests/test_lifespan_integration.py
-  - tests/test_registry_variants.py
-  - tests/test_vad.py
-  - tests/test_backend_protocol.py
-  - tests/test_stream_consensus.py
-  - tests/test_whisper_cpp.py
-  - tests/test_config.py
-  - tests/test_api.py
-  - tests/test_whisper.py
-  - tests/test_llm.py
-  - tests/test_main.py
--->
+| method | path | description (illustrative; exact wording is implementation-defined) |
+| ------ | ---- | --- |
+| POST | /v1/audio/transcriptions | OpenAI-compatible audio transcription endpoint |
+| POST | /v1/audio/translations | OpenAI-compatible audio translation endpoint (output: English) |
+| GET | /v1/models | OpenAI-compatible model catalogue (lists the active whisper-wrap model) |
 
 ---
 ### Requirement: Status replaces the removed health endpoint
