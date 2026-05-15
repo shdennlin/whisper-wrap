@@ -168,6 +168,21 @@ class PartialConsensusFilter:
         self._last_emitted = None
 
 
+class NullConsensusFilter:
+    """No-op filter — every inference passes through verbatim.
+
+    Used by the Phase 2 regression test (`test_partial_count_ratio_le_half`)
+    to measure the v2 baseline: how many `partial` events would fire if the
+    consensus filter were not present. Production code should never use this.
+    """
+
+    def update(self, current: str) -> str | None:
+        return current if current else None
+
+    def reset(self) -> None:
+        pass
+
+
 class StreamSession:
     """State for a single `WS /listen` session.
 
