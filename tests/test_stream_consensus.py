@@ -4,7 +4,6 @@ Covers the "Partial-consensus filter stabilises partial emissions" requirement
 in the transcribe-stream spec and Decision 6: Simplified LocalAgreement-2.
 """
 
-import pytest
 
 
 def test_two_stable_inferences_emit_partial():
@@ -79,8 +78,6 @@ def test_stream_emits_partial_with_consensus_filter_active(monkeypatch):
     import struct
 
     from app.services.stream import (
-        PARTIAL_INTERVAL_MS,
-        SILENCE_RMS_THRESHOLD,
         StreamSession,
     )
 

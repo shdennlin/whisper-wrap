@@ -49,7 +49,7 @@ def test_satisfies_protocol(ggml_model_dir, fake_segments):
     """PyWhisperCppBackend SHALL satisfy the WhisperBackend Protocol on macOS."""
     from app.services._whisper_backend import WhisperBackend
 
-    with patch("app.services.whisper_cpp.Model") as MockModel:
+    with patch("app.services.whisper_cpp.Model") as MockModel:  # noqa: N806
         instance = MagicMock()
         instance.transcribe.return_value = fake_segments((0, 100, "hello"))
         MockModel.return_value = instance
@@ -71,7 +71,7 @@ async def test_transcribe_returns_transcription_result(
     """transcribe() SHALL return a TranscriptionResult dataclass."""
     from app.services._whisper_backend import TranscriptionResult
 
-    with patch("app.services.whisper_cpp.Model") as MockModel:
+    with patch("app.services.whisper_cpp.Model") as MockModel:  # noqa: N806
         instance = MagicMock()
         instance.transcribe.return_value = fake_segments((0, 150, "hello world"))
         MockModel.return_value = instance
@@ -102,7 +102,7 @@ async def test_transcribe_pcm_returns_transcription_result(
 
     from app.services._whisper_backend import TranscriptionResult
 
-    with patch("app.services.whisper_cpp.Model") as MockModel:
+    with patch("app.services.whisper_cpp.Model") as MockModel:  # noqa: N806
         instance = MagicMock()
         instance.transcribe.return_value = fake_segments((0, 100, "hi"))
         MockModel.return_value = instance
@@ -177,7 +177,7 @@ async def test_transcribe_wraps_underlying_errors(
     """Underlying pywhispercpp errors SHALL surface as WhisperTranscriptionError."""
     from app.services._whisper_backend import WhisperTranscriptionError
 
-    with patch("app.services.whisper_cpp.Model") as MockModel:
+    with patch("app.services.whisper_cpp.Model") as MockModel:  # noqa: N806
         instance = MagicMock()
         instance.transcribe.side_effect = RuntimeError("ggml decode crashed")
         MockModel.return_value = instance

@@ -5,8 +5,6 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from app.services.llm import LLMClient
-
 
 @pytest.fixture
 def stubbed_app(monkeypatch):

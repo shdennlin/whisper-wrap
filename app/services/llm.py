@@ -13,7 +13,7 @@ Fallback policy (per spec):
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from google import genai
 from google.genai import types

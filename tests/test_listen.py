@@ -9,15 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.services.stream import (
-    MAX_BUFFER_BYTES,
-    PARTIAL_INTERVAL_MS,
     SAMPLE_RATE,
-    SILENCE_DURATION_MS,
     StreamSession,
     compute_rms,
     frame_duration_ms,
 )
-
 
 # ===========================================================================
 # Helpers
@@ -241,7 +237,7 @@ def test_non_binary_text_frame_rejected_with_close(ws_client):
         body = json.loads(msg)
         assert body == {"type": "error", "message": "binary PCM expected"}
         # Subsequent receive raises (socket closed).
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             ws.receive_text()
 
 

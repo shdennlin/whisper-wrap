@@ -4,11 +4,8 @@ Covers Decision 2: Abstract WhisperBackend Protocol up-front. The Protocol is th
 durable contract every Whisper backend implementation must conform to.
 """
 
-import asyncio
 import inspect
 from dataclasses import fields, is_dataclass
-
-import pytest
 
 
 def test_protocol_surface():

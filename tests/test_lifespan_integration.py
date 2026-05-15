@@ -40,7 +40,7 @@ def test_model_dir_override_ggml(tmp_path):
     """MODEL_DIR pointing at a directory with ggml-*.bin SHALL instantiate the pywhispercpp backend."""
     ggml_dir = _make_ggml_dir(tmp_path)
 
-    with patch("app.services.whisper_cpp.Model") as MockModel:
+    with patch("app.services.whisper_cpp.Model") as MockModel:  # noqa: N806
         MockModel.return_value = MagicMock()
         from app.main import _build_backend
 
@@ -63,7 +63,7 @@ def test_model_dir_override_ct2(tmp_path):
     """MODEL_DIR pointing at a directory with model.bin SHALL instantiate the CT2 backend."""
     ct2_dir = _make_ct2_dir(tmp_path)
 
-    with patch("app.services.whisper_ct2.WhisperModel") as MockModel:
+    with patch("app.services.whisper_ct2.WhisperModel") as MockModel:  # noqa: N806
         MockModel.return_value = MagicMock()
         from app.main import _build_backend
 
@@ -130,7 +130,7 @@ def test_macos_default_loads_pywhispercpp(monkeypatch, tmp_path):
     models_dir.mkdir()
     _make_ggml_dir(models_dir)  # creates models/breeze-asr-25-ggml/...
 
-    with patch("app.services.whisper_cpp.Model") as MockModel:
+    with patch("app.services.whisper_cpp.Model") as MockModel:  # noqa: N806
         MockModel.return_value = MagicMock()
         from app.main import _build_backend
 
@@ -156,7 +156,7 @@ def test_backend_format_override_picks_explicit_variant(monkeypatch, tmp_path):
     models_dir.mkdir()
     _make_ct2_dir(models_dir)  # creates models/breeze-asr-25-ct2/...
 
-    with patch("app.services.whisper_ct2.WhisperModel") as MockModel:
+    with patch("app.services.whisper_ct2.WhisperModel") as MockModel:  # noqa: N806
         MockModel.return_value = MagicMock()
         from app.main import _build_backend
 

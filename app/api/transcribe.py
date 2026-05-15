@@ -7,7 +7,7 @@ into a single endpoint that dispatches on Content-Type per the design decision
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.datastructures import UploadFile
@@ -82,7 +82,7 @@ async def transcribe(
         "auto",
         description="Spoken language code (e.g. 'en', 'zh') or 'auto' for detection",
     ),
-    prompt: Optional[str] = Query(
+    prompt: str | None = Query(
         None,
         description="Initial prompt seed forwarded to the model to bias punctuation and style",
     ),

@@ -230,7 +230,7 @@ def test_rejects_multiple_defaults(tmp_path):
 
 def test_built_in_entries(tmp_path):
     """The shipped registry SHALL contain `breeze-asr-25` (multi-variant) + `large-v3-turbo` (ct2)."""
-    from app.services.registry import load_registry, DEFAULT_REGISTRY_PATH
+    from app.services.registry import DEFAULT_REGISTRY_PATH, load_registry
 
     entries = load_registry(DEFAULT_REGISTRY_PATH)
 
@@ -331,7 +331,7 @@ def test_user_extensible_multi_variant(tmp_path):
 
 def test_variant_resolution_darwin_default(tmp_path, monkeypatch):
     """On darwin with no BACKEND_FORMAT, the ggml variant (default_on: [darwin]) SHALL win."""
-    from app.services.registry import resolve_variant, load_registry
+    from app.services.registry import load_registry, resolve_variant
 
     p = _write(tmp_path, _two_variant_entry())
     entries = load_registry(p)
@@ -342,7 +342,7 @@ def test_variant_resolution_darwin_default(tmp_path, monkeypatch):
 
 
 def test_variant_resolution_linux_default(tmp_path):
-    from app.services.registry import resolve_variant, load_registry
+    from app.services.registry import load_registry, resolve_variant
 
     p = _write(tmp_path, _two_variant_entry())
     entries = load_registry(p)
@@ -354,7 +354,7 @@ def test_variant_resolution_linux_default(tmp_path):
 
 def test_variant_resolution_backend_format_override(tmp_path):
     """BACKEND_FORMAT=ct2 on darwin SHALL choose the ct2 variant despite default_on=[linux]."""
-    from app.services.registry import resolve_variant, load_registry
+    from app.services.registry import load_registry, resolve_variant
 
     p = _write(tmp_path, _two_variant_entry())
     entries = load_registry(p)
@@ -368,8 +368,8 @@ def test_variant_resolution_no_match_fails(tmp_path):
     """When no variant's default_on matches the platform and no override is set, fail."""
     from app.services.registry import (
         RegistryError,
-        resolve_variant,
         load_registry,
+        resolve_variant,
     )
 
     p = _write(
@@ -400,8 +400,8 @@ def test_variant_resolution_ggml_on_linux_fails(tmp_path):
     """BACKEND_FORMAT=ggml on linux SHALL be rejected (pywhispercpp is darwin-only)."""
     from app.services.registry import (
         RegistryError,
-        resolve_variant,
         load_registry,
+        resolve_variant,
     )
 
     p = _write(tmp_path, _two_variant_entry())
@@ -416,8 +416,8 @@ def test_variant_resolution_backend_format_no_matching_variant(tmp_path):
     """BACKEND_FORMAT=<x> when the model has no variant with that format SHALL be rejected."""
     from app.services.registry import (
         RegistryError,
-        resolve_variant,
         load_registry,
+        resolve_variant,
     )
 
     p = _write(
@@ -463,7 +463,7 @@ def test_resolve_model_dir_returns_override_verbatim():
 
 def test_resolve_model_dir_picks_variant_local_dir(tmp_path, monkeypatch):
     """Resolution SHALL pick the platform-matched variant's local_dir."""
-    from app.services.registry import resolve_model_dir, DEFAULT_MODELS_ROOT
+    from app.services.registry import DEFAULT_MODELS_ROOT, resolve_model_dir
 
     p = _write(tmp_path, _two_variant_entry())
     monkeypatch.setattr("app.services.registry.DEFAULT_REGISTRY_PATH", p)
@@ -481,7 +481,7 @@ def test_resolve_model_dir_picks_variant_local_dir(tmp_path, monkeypatch):
 
 def test_resolve_model_dir_backend_format_override(tmp_path, monkeypatch):
     """BACKEND_FORMAT=ct2 on darwin SHALL pick the ct2 variant despite default_on."""
-    from app.services.registry import resolve_model_dir, DEFAULT_MODELS_ROOT
+    from app.services.registry import DEFAULT_MODELS_ROOT, resolve_model_dir
 
     p = _write(tmp_path, _two_variant_entry())
     monkeypatch.setattr("app.services.registry.DEFAULT_REGISTRY_PATH", p)
@@ -496,9 +496,9 @@ def test_resolve_model_dir_falls_back_to_hardcoded_when_registry_missing(
 ):
     """When registry is unreadable, resolver SHALL fall back to ./models/<name>."""
     from app.services.registry import (
-        resolve_model_dir,
         DEFAULT_MODELS_ROOT,
         HARDCODED_FALLBACK_MODEL_NAME,
+        resolve_model_dir,
     )
 
     monkeypatch.setattr(

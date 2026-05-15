@@ -9,7 +9,6 @@ returns `status="ok"` with `model.loaded=true`.
 """
 
 import time
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request

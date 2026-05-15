@@ -1,7 +1,6 @@
 """Tests for v2 Config (in-process faster-whisper backend)."""
 
 import logging
-from pathlib import Path
 
 import pytest
 
@@ -139,7 +138,6 @@ def test_validate_port_ok():
 
 def test_v1_keys_are_silently_ignored(clean_env, caplog):
     """Per v2.1 model-management REMOVED Requirements: v1 keys SHALL not log."""
-    import logging
     clean_env.setenv("WHISPER_SERVER_HOST", "localhost")
     clean_env.setenv("MODEL_PATH", "./old.bin")
     with caplog.at_level(logging.WARNING, logger="app.config"):

@@ -16,7 +16,8 @@ the visible text-thrashing problem v2 had.
 import logging
 import string
 import struct
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 import numpy as np
 

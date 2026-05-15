@@ -82,7 +82,7 @@ Phase 1 (Backend Swap) must complete before Phase 2 (Streaming Quality) starts: 
 
 ### Phase 1 done criterion
 
-- [ ] 11.4 Run `make test && make lint` on macOS with the ggml variant of `breeze-asr-25` installed and on Linux with the ct2 variant of `breeze-asr-25` installed; verify both runs complete green and that `/status` on each platform reports the expected backend metadata per the "/status surfaces backend metadata" requirement.
+- [x] 11.4 Run `make test && make lint` on macOS with the ggml variant of `breeze-asr-25` installed and on Linux with the ct2 variant of `breeze-asr-25` installed; verify both runs complete green and that `/status` on each platform reports the expected backend metadata per the "/status surfaces backend metadata" requirement.
 
 ## Phase 2: Streaming Quality
 

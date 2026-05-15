@@ -58,13 +58,13 @@ async def _read_text_body(request: Request) -> str:
     try:
         raw = await request.body()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read body: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to read body: {e}") from e
     if not raw:
         raise HTTPException(status_code=400, detail="Empty JSON body")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Malformed JSON: {e.msg}")
+        raise HTTPException(status_code=400, detail=f"Malformed JSON: {e.msg}") from e
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
     text = data.get("text")
@@ -177,9 +177,9 @@ async def ask(
         try:
             answer = await llm_client.ask(llm_input)
         except LLMConfigError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            raise HTTPException(status_code=502, detail=str(e)) from e
         except LLMUpstreamError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
         return {"transcript": transcript_for_response, "answer": answer}
 
