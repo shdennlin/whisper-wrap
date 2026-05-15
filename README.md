@@ -117,6 +117,28 @@ with open("audio.mp3", "rb") as f:
 See [`docs/INSTALLATION.md`](docs/INSTALLATION.md#openai-compatible-front-ends-open-webui)
 for the open-webui Docker recipe.
 
+### Built-in PWA: live captioning client (v2.4)
+
+A Vite-built, installable Progressive Web App ships with whisper-wrap at
+`/app/`. It captures the browser microphone, streams 16 kHz PCM to
+`WS /listen`, renders partial-to-final captions in real time, persists the
+last 20 sessions to `localStorage`, and lets you run pre-defined Action
+templates (defined in `registry/actions.yaml`, surfaced via `GET /actions`)
+against the transcript via `POST /ask`.
+
+| Method | Path | Description |
+| ------ | ---- | --- |
+| GET    | `/app/`    | PWA live-captioning client (open in browser, install to home screen) |
+| GET    | `/actions` | Action templates registry (consumed by the PWA's chip bar) |
+
+```bash
+make build-frontend     # one-time: produces app/static/app/
+make dev                # serves whisper-wrap + the PWA on http://localhost:8000/app/
+```
+
+Reach it from a phone over your tailnet by running `make dev-https` once you
+have a Tailscale cert — see [`docs/HTTPS-TAILSCALE.md`](docs/HTTPS-TAILSCALE.md).
+
 ## 🤖 Model Management
 
 whisper-wrap includes a built-in model registry with 6 pre-configured models:

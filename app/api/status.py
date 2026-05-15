@@ -116,5 +116,15 @@ async def root() -> dict[str, Any]:
                 "path": "/v1/models",
                 "description": "OpenAI-compatible model catalogue (lists the active whisper-wrap model)",
             },
+            {
+                "method": "GET",
+                "path": "/actions",
+                "description": "Prompt action templates registry (consumed by the PWA)",
+            },
+            {
+                "method": "GET",
+                "path": "/app/",
+                "description": "PWA live-captioning client",
+            },
         ]
     }

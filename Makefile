@@ -45,9 +45,23 @@ help:
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
-setup: install download-default-model
+setup: install download-default-model build-frontend
 	@echo ""
 	@echo "Setup complete. Start with: make dev"
+
+build-frontend:
+	@echo "Building PWA bundle into app/static/app/..."
+	@which node >/dev/null || (echo "  node: missing — install Node 20+ from https://nodejs.org" && exit 1)
+	@cd frontend && npm install --silent && npm run build
+	@echo "PWA bundle ready at app/static/app/. Visit http://localhost:8000/app/ after 'make dev'."
+
+dev-https:
+	@test -n "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT env var is unset; run 'tailscale cert <host>.<tailnet>.ts.net' first" && exit 1)
+	@test -n "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY env var is unset" && exit 1)
+	@test -f "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT path does not exist: $$WHISPER_CERT" && exit 1)
+	@test -f "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY path does not exist: $$WHISPER_KEY" && exit 1)
+	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+		--ssl-certfile $$WHISPER_CERT --ssl-keyfile $$WHISPER_KEY
 
 check-system-deps:
 	@echo "Checking required system dependencies..."

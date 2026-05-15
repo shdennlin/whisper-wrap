@@ -97,6 +97,9 @@ equivalent CT2 entry to your local `registry/models.yaml`. Suggested replacement
 - **ffmpeg**: Audio format conversion
 - **libmagic**: MIME detection
 - **hf** (or **huggingface-cli**): Pulled in as a Python dep; used by the model manager
+- **Node 20+** (build-time only): needed by `make build-frontend` to compile the
+  v2.4 PWA bundle. Not required at runtime; the bundle is shipped in
+  `app/static/app/` and served by FastAPI.
 
 ### Operating Systems
 - macOS 10.15+ (Intel/Apple Silicon)
@@ -230,6 +233,31 @@ Then in open-webui:
 > localhost. The OpenAI compat layer does NOT enforce bearer-token
 > authentication — keep whisper-wrap behind a reverse proxy, VPN, or Tailscale
 > boundary if you expose it beyond a trusted LAN.
+
+## Built-in PWA setup (v2.4 live-captioning client)
+
+`make setup` runs `make build-frontend` automatically. If you want to rebuild
+the PWA bundle without re-downloading models, use:
+
+```bash
+make build-frontend     # produces app/static/app/
+make dev                # then open http://localhost:8000/app/
+```
+
+The PWA works on localhost without HTTPS. To reach it from your phone over a
+tailnet, see [`HTTPS-TAILSCALE.md`](HTTPS-TAILSCALE.md). Short version:
+
+```bash
+# One time
+sudo tailscale cert mac-mini.tailXXXXX.ts.net
+
+# Each session
+export WHISPER_CERT="$PWD/mac-mini.tailXXXXX.ts.net.crt"
+export WHISPER_KEY="$PWD/mac-mini.tailXXXXX.ts.net.key"
+make dev-https          # serves https://mac-mini.tailXXXXX.ts.net:8000/app/
+```
+
+Manual verification steps are in `frontend/CHECKLIST.md`.
 
 ## Whisper Model Information
 

@@ -1,0 +1,42 @@
+# Prompt-action templates consumed by the PWA's Actions chip bar.
+#
+# Each entry maps to one clickable chip in the UI. When the user clicks a chip,
+# the PWA substitutes the literal `{transcript}` placeholder with the joined
+# transcript text and POSTs the wrapped prompt to /ask.
+#
+# Editing this file requires a server restart for the PWA to see the new list
+# (the PWA fetches /actions once per page load).
+
+actions:
+  - id: passthrough
+    label: 直接送
+    template: "{transcript}"
+
+  - id: cleanup
+    label: 加標點 / 改寫流暢
+    template: |
+      請把以下逐字稿加上適當的標點、修掉口語贅字（嗯、對、然後…），
+      但保持原意和語氣，不要重新組織段落。
+
+      {transcript}
+
+  - id: summarize
+    label: 整理會議重點
+    template: |
+      請把以下會議內容整理成條列式重點，每條一行，保留發言者口吻。
+
+      {transcript}
+
+  - id: translate-en
+    label: 翻譯成英文
+    template: |
+      Translate the following Chinese transcript to natural English:
+
+      {transcript}
+
+  - id: formalize
+    label: 改寫得更專業
+    template: |
+      請把以下口語逐字稿改寫成適合書面溝通的正式語氣，保留原意。
+
+      {transcript}

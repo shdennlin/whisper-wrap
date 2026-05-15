@@ -187,6 +187,34 @@ exactly one entry — the active whisper-wrap model. `id` matches the
 the resolved path when `MODEL_DIR` overrides). `owned_by` is the literal
 string `"whisper-wrap"`; `created` is the server's startup unix-timestamp.
 
+### GET /actions  (v2.4, prompt-actions)
+
+Returns `{"actions": [{"id", "label", "template"}, ...]}` — the templates
+loaded at startup from `registry/actions.yaml`. Each `template` contains the
+literal placeholder `{transcript}`. The PWA fetches this list once per page
+load and substitutes the placeholder client-side before POSTing the wrapped
+prompt to `/ask`. Editing actions = edit the YAML and restart the server.
+The shipped registry has five templates: `passthrough`, `cleanup`,
+`summarize`, `translate-en`, `formalize`.
+
+Validation contract: missing file → WARN + empty list (server starts);
+malformed YAML → WARN + empty list (server starts); duplicate `id` or
+missing `{transcript}` placeholder → raises, server refuses to start.
+
+### GET /app/  (v2.4, PWA)
+
+Static bundle of the PWA, built from `frontend/` via
+`make build-frontend`. The build emits to `app/static/app/` and FastAPI's
+`StaticFiles` mounts it at `/app/`. Run `make dev` and open
+`http://localhost:8000/app/`. For phone / iPad usage over a tailnet, run
+`make dev-https` after issuing a Tailscale cert (see
+`docs/HTTPS-TAILSCALE.md`).
+
+The PWA captures mic → WS `/listen` → renders partial/final captions →
+persists 20-session rolling history to `localStorage` → exports SRT/VTT/TXT
+client-side → invokes Action templates from `/actions` against the transcript
+via `/ask`. No new runtime Python dependency. Build-time only: Node 20+.
+
 ## Configuration
 
 Environment variables (`.env` file; see `.env.example` for the full list):

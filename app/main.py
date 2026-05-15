@@ -16,8 +16,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.api.actions import router as actions_router
 from app.api.ask import router as ask_router
 from app.api.listen import router as listen_router
 from app.api.openai_compat import router as openai_compat_router
@@ -25,6 +27,7 @@ from app.api.status import router as status_router
 from app.api.transcribe import router as transcribe_router
 from app.config import config, load_env_file
 from app.services._whisper_backend import WhisperBackend, WhisperLoadError
+from app.services.actions import load_actions
 from app.services.llm import LLMClient
 from app.services.registry import (
     HARDCODED_FALLBACK_MODEL_NAME,
@@ -189,6 +192,14 @@ async def lifespan(app: FastAPI):
     app.state.vad_factory = vad_factory
     logger.info("VAD backend: %s", app.state.vad_backend_name)
 
+    # v2.4: prompt-action templates registry, served at GET /actions.
+    # Read the path through the services module each call so test monkeypatching
+    # of DEFAULT_REGISTRY_PATH affects lifespan-time loading.
+    from app.services import actions as _actions_module
+
+    app.state.actions = load_actions(_actions_module.DEFAULT_REGISTRY_PATH)
+    logger.info("Prompt-actions registry: %d entries loaded", len(app.state.actions))
+
     app.state.llm_client = LLMClient(
         api_key=config.GEMINI_API_KEY,
         model=config.GEMINI_MODEL,
@@ -224,6 +235,14 @@ app.include_router(ask_router)
 app.include_router(status_router)
 app.include_router(listen_router)
 app.include_router(openai_compat_router)
+app.include_router(actions_router)
+
+# v2.4: PWA static bundle mounted at /app/. The bundle is produced by
+# `make build-frontend`; if it's missing (developer hasn't run the frontend
+# build yet) the mount silently no-ops so the rest of the API still works.
+_pwa_dir = Path(__file__).resolve().parent / "static" / "app"
+if _pwa_dir.is_dir():
+    app.mount("/app", StaticFiles(directory=str(_pwa_dir), html=True), name="app")
 
 
 if __name__ == "__main__":
