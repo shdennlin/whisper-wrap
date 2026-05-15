@@ -18,9 +18,12 @@ import logging
 import string
 import struct
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from app.services.vad import VadBackend
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +220,12 @@ class StreamSession:
         transcribe_fn: TranscribeFn,
         send_event: SendEventFn,
         consensus_filter: PartialConsensusFilter | None = None,
+        vad_backend: "VadBackend | None" = None,
     ) -> None:
+        # Late import keeps the stream module loadable even when torch / silero
+        # are not installed — relevant for the v2.1 ct2-only Linux path.
+        from app.services.vad import RmsVad
+
         self.transcribe_fn = transcribe_fn
         self.send_event = send_event
         # Default-on in v2.1; pass consensus_filter=None at construction to disable
@@ -226,6 +234,12 @@ class StreamSession:
             consensus_filter if consensus_filter is not None
             else PartialConsensusFilter()
         )
+        # v2.2: per-frame speech detection delegated to a pluggable VAD backend.
+        # Default to RmsVad for backward compatibility with tests that construct
+        # `StreamSession(transcribe_fn=..., send_event=...)` without specifying.
+        # Production callers (`app/api/listen.py`) construct via the lifespan
+        # factory so each WS session gets a fresh instance.
+        self.vad_backend = vad_backend if vad_backend is not None else RmsVad()
         self._audio_ms = 0
         self._utterance_buffer = bytearray()
         self._utterance_start_ms = 0
@@ -270,10 +284,9 @@ class StreamSession:
         self._utterance_buffer.extend(pcm)
         self._audio_ms += frame_duration_ms(pcm)
         now_ms = self._audio_ms
-        rms = compute_rms(pcm)
-
-        # Voice activity detection
-        if rms >= SILENCE_RMS_THRESHOLD:
+        # v2.2: per-frame voice/silence classification delegated to VadBackend.
+        # The accumulator logic (silence-duration → final) below is unchanged.
+        if self.vad_backend.is_speech(pcm):
             self._last_voice_ms = now_ms
             if not self._in_utterance:
                 # Start a new utterance — discard accumulated pre-roll silence and

@@ -51,7 +51,11 @@ async def listen(ws: WebSocket) -> None:
     async def send_event(event: dict[str, Any]) -> None:
         await ws.send_text(json.dumps(event, ensure_ascii=False))
 
-    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    session = StreamSession(
+        transcribe_fn=transcribe_fn,
+        send_event=send_event,
+        vad_backend=ws.app.state.vad_factory(),
+    )
 
     try:
         while True:

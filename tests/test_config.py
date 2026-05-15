@@ -36,6 +36,8 @@ def clean_env(monkeypatch):
         "TEMP_DIR",
         "UPLOAD_TIMEOUT_SECONDS",
         "LOG_LEVEL",
+        "BACKEND_FORMAT",
+        "VAD_BACKEND",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -145,3 +147,19 @@ def test_v1_keys_are_silently_ignored(clean_env, caplog):
     # Config construction SHALL NOT emit any log line naming the v1 keys.
     msgs = [r.getMessage() for r in caplog.records]
     assert not any("WHISPER_SERVER_HOST" in m or "MODEL_PATH" in m for m in msgs)
+
+
+def test_vad_backend_default_is_none(clean_env):
+    """Per v2.2: Config.VAD_BACKEND is None when env unset."""
+    c = Config()
+    assert c.VAD_BACKEND is None
+
+
+def test_vad_backend_explicit_silero(clean_env):
+    clean_env.setenv("VAD_BACKEND", "silero")
+    assert Config().VAD_BACKEND == "silero"
+
+
+def test_vad_backend_explicit_rms(clean_env):
+    clean_env.setenv("VAD_BACKEND", "rms")
+    assert Config().VAD_BACKEND == "rms"

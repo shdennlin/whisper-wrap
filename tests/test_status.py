@@ -151,3 +151,59 @@ def test_status_includes_backend_block_ggml(monkeypatch, stubbed_app):
         assert body["backend"]["quant"] == "q6_k"
         assert body["backend"]["coreml_encoder_compiled"] is True
         assert "compute_type" not in body["backend"]
+
+
+# ---------- v2.2: /status vad block ----------
+
+
+def test_status_includes_vad_block_silero(monkeypatch, stubbed_app):
+    """When the lifespan resolved a SileroVad backend, /status reports it."""
+    monkeypatch.setattr(
+        "app.main._build_backend",
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/fake",
+            },
+        ),
+    )
+    # Force the lifespan to pick silero
+    class FakeSilero:
+        pass
+    FakeSilero.__name__ = "SileroVad"
+    monkeypatch.setattr(
+        "app.services.vad.make_vad_backend",
+        lambda name: FakeSilero(),
+    )
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+        assert body["vad"] == {"backend": "silero"}
+
+
+def test_status_includes_vad_block_rms(monkeypatch, stubbed_app):
+    """Auto-fallback or explicit opt-out → /status reports rms."""
+    monkeypatch.setattr(
+        "app.main._build_backend",
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/fake",
+            },
+        ),
+    )
+    class FakeRms:
+        pass
+    FakeRms.__name__ = "RmsVad"
+    monkeypatch.setattr(
+        "app.services.vad.make_vad_backend",
+        lambda name: FakeRms(),
+    )
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+        assert body["vad"] == {"backend": "rms"}

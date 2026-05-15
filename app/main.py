@@ -173,6 +173,21 @@ async def lifespan(app: FastAPI):
     app.state.load_time_ms = load_time_ms
     app.state.lifespan_completed_at = time.time()
 
+    # v2.2: VAD backend resolved once at startup; factory returns a fresh
+    # instance per call so each WS session gets isolated state.
+    from app.services.vad import make_vad_backend
+
+    initial_vad = make_vad_backend(config.VAD_BACKEND)
+    app.state.vad_backend_name = (
+        "silero" if initial_vad.__class__.__name__ == "SileroVad" else "rms"
+    )
+
+    def vad_factory():
+        return make_vad_backend(config.VAD_BACKEND)
+
+    app.state.vad_factory = vad_factory
+    logger.info("VAD backend: %s", app.state.vad_backend_name)
+
     app.state.llm_client = LLMClient(
         api_key=config.GEMINI_API_KEY,
         model=config.GEMINI_MODEL,

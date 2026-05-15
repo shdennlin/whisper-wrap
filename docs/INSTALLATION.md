@@ -35,6 +35,19 @@ line per second showing elapsed seconds. Subsequent starts on the same host
 reuse the cached compiled encoder and reach ready state within the normal
 CT2 model-load time budget.
 
+### silero-vad model cache (v2.2)
+
+The first server start downloads a ~1 MB silero-vad TorchScript model to
+`~/.cache/torch/hub/snakers4_silero-vad/`. Subsequent starts read from the
+cache offline. On air-gapped hosts, prime the cache by running the server
+once with internet access (or copy the cache directory from another machine).
+
+If `silero-vad` is not installed at all, the server emits one INFO log line
+`silero-vad unavailable, falling back to rms` and continues with the v2.1
+RMS-energy detector. Set `VAD_BACKEND=rms` to opt out explicitly without
+the log line; set `VAD_BACKEND=silero` to fail fast if the package is
+missing (useful for production-config audits).
+
 ### Building pywhispercpp with Core ML
 
 The published `pywhispercpp` wheels for macOS include Core ML support out of

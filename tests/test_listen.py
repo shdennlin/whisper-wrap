@@ -268,3 +268,141 @@ def test_valid_silence_frame_accepted(ws_client):
         #  in TestClient, but if the server had errored it would have closed and the
         #  next operation would raise.)
         ws.close()
+
+
+# ---------- v2.2 silero-vad regression tests ----------
+
+
+async def test_fan_noise_emits_zero_events_with_silero(tmp_path):
+    """Fan-noise fixture SHALL NOT emit any partial or final events with silero.
+
+    Documents the v2.1 RMS failure mode that silero exists to fix.
+    """
+    from pathlib import Path
+
+    from app.services.stream import StreamSession
+    from app.services.vad import SileroVad
+
+    fixture = Path(__file__).resolve().parent / "fixtures/vad/fan_noise.pcm"
+    pcm = fixture.read_bytes()
+    assert len(pcm) == 160_000
+
+    events: list = []
+
+    async def fake_transcribe(samples):
+        return "should not be called"
+
+    async def send_event(e):
+        events.append(e)
+
+    session = StreamSession(
+        transcribe_fn=fake_transcribe,
+        send_event=send_event,
+        vad_backend=SileroVad(),
+    )
+
+    chunk_bytes = 8_000  # 250 ms client frames
+    for i in range(0, len(pcm), chunk_bytes):
+        chunk = pcm[i : i + chunk_bytes]
+        if len(chunk) == chunk_bytes:
+            await session.feed_frame(chunk)
+            await session.drain()
+
+    assert events == [], (
+        f"fan noise should produce zero events; got {len(events)}: "
+        f"{[e.get('type') for e in events]}"
+    )
+
+
+async def test_quiet_speech_captures_utterance_with_silero(tmp_path):
+    """Quiet-speech fixture SHALL produce at least one partial + one final
+    with silero, even though its RMS is below the v2.1 threshold."""
+    from pathlib import Path
+
+    from app.services.stream import StreamSession
+    from app.services.vad import SileroVad
+
+    fixture = Path(__file__).resolve().parent / "fixtures/vad/quiet_speech.pcm"
+    pcm = fixture.read_bytes()
+    assert len(pcm) == 160_000
+
+    events: list = []
+
+    async def fake_transcribe(samples):
+        return "(transcribed)"
+
+    async def send_event(e):
+        events.append(e)
+
+    session = StreamSession(
+        transcribe_fn=fake_transcribe,
+        send_event=send_event,
+        vad_backend=SileroVad(),
+    )
+
+    # Feed the fixture
+    chunk_bytes = 8_000
+    for i in range(0, len(pcm), chunk_bytes):
+        chunk = pcm[i : i + chunk_bytes]
+        if len(chunk) == chunk_bytes:
+            await session.feed_frame(chunk)
+            await session.drain()
+
+    # After the fixture ends, feed 4 silent frames so VAD finalises
+    silence_pcm = b"\x00\x00" * 4_000
+    for _ in range(4):
+        await session.feed_frame(silence_pcm)
+        await session.drain()
+
+    types = [e.get("type") for e in events]
+    assert "partial" in types or "final" in types, (
+        f"quiet speech should produce events; got: {types}"
+    )
+    finals = [e for e in events if e["type"] == "final"]
+    assert len(finals) >= 1, f"expected ≥1 final, got {len(finals)}"
+
+
+@pytest.mark.skip(reason="Documents v2.1 failure mode silero-vad fixes")
+async def test_rms_baseline_documents_failure_modes():
+    """Executable documentation of the v2.1 RMS failure modes silero-vad fixes.
+
+    Skipped so it doesn't break the suite. Un-skip to verify regression.
+    """
+    from pathlib import Path
+
+    from app.services.stream import StreamSession
+    from app.services.vad import RmsVad
+
+    fan = Path(__file__).resolve().parent / "fixtures/vad/fan_noise.pcm"
+    quiet = Path(__file__).resolve().parent / "fixtures/vad/quiet_speech.pcm"
+
+    async def run_fixture(pcm_bytes, vad_backend):
+        events: list = []
+
+        async def fake_transcribe(samples):
+            return "x"
+
+        async def send(e):
+            events.append(e)
+
+        session = StreamSession(
+            transcribe_fn=fake_transcribe,
+            send_event=send,
+            vad_backend=vad_backend,
+        )
+        chunk_bytes = 8_000
+        for i in range(0, len(pcm_bytes), chunk_bytes):
+            chunk = pcm_bytes[i : i + chunk_bytes]
+            if len(chunk) == chunk_bytes:
+                await session.feed_frame(chunk)
+                await session.drain()
+        return events
+
+    # Fan noise with RMS: at least 1 partial (BUG — fixed in v2.2 silero)
+    fan_events = await run_fixture(fan.read_bytes(), RmsVad())
+    fan_partials = [e for e in fan_events if e["type"] == "partial"]
+    assert len(fan_partials) >= 1, "RMS should over-trigger on fan noise"
+
+    # Quiet speech with RMS: zero events (BUG — fixed in v2.2 silero)
+    quiet_events = await run_fixture(quiet.read_bytes(), RmsVad())
+    assert quiet_events == [], "RMS should miss quiet speech entirely"

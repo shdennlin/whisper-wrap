@@ -48,6 +48,11 @@ class Config:
         # `default_on` resolves the variant.
         self.BACKEND_FORMAT: str | None = os.environ.get("BACKEND_FORMAT") or None
 
+        # v2.2 VAD selector. When set ("silero" | "rms"), the lifespan opts in
+        # explicitly. When unset, lifespan tries silero-vad first and falls
+        # back to rms with one INFO log line if import fails.
+        self.VAD_BACKEND: str | None = os.environ.get("VAD_BACKEND") or None
+
         # LLM (Gemini for /ask). Preserve unset (None) vs empty ("") so llm.py can
         # implement the spec's "unset = silent default, empty = warn + default" policy.
         self.GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")

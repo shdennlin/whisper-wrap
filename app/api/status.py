@@ -64,6 +64,7 @@ async def status(request: Request) -> dict[str, Any]:
             "load_time_ms": getattr(state, "load_time_ms", 0),
         },
         "backend": backend_block,
+        "vad": {"backend": getattr(state, "vad_backend_name", "rms")},
         "gemini": {
             "configured": state.llm_client.configured,
             "model": state.llm_client.model,

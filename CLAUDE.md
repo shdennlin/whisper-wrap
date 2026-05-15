@@ -164,6 +164,9 @@ API_HOST=0.0.0.0
 MODEL_NAME=breeze-asr-25         # Registry key → variants resolved by platform
 # MODEL_DIR=/abs/path            # Bypass registry; layout inferred (CT2 vs ggml)
 
+# VAD selection (v2.2)
+# VAD_BACKEND=                   # silero | rms; unset = try silero with rms fallback
+
 # Backend selection (v2.1)
 # BACKEND_FORMAT=                # ct2 | ggml; unset = platform default (darwin→ggml, linux→ct2)
 
