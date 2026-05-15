@@ -7,42 +7,10 @@ when picked up. Order is recommended priority (highest CP at top).
 
 ## v2.2 — Streaming quality + ecosystem integration
 
-### 1. silero-vad replacing RMS-energy VAD
+> **silero-vad has been promoted to a Spectra change.** See `openspec/changes/v2-2-silero-vad/` (currently parked).
 
-**Problem.** `app/services/stream.py` currently uses a fixed RMS-energy threshold
-(`SILENCE_RMS_THRESHOLD = 500.0` on int16 samples) plus a 700 ms silence-duration
-check to endpoint utterances. Known failure modes on real-world audio:
 
-- **Environmental noise** (fan, traffic, keyboard typing) keeps RMS above
-  threshold → `_in_utterance` never finalises → buffer grows indefinitely → the
-  partial-cost-grows-with-buffer problem the v2.1 sliding window only partially
-  fixes.
-- **Quiet speech** (mumbling, far-mic) falls under threshold → speech frames
-  are treated as silence → start-of-utterance missed.
-- **Mid-utterance pauses** (thinking, breath) that exceed 700 ms get split into
-  two utterances when they should be one.
-
-**Proposed change.** Replace the RMS check with [`silero-vad`](https://github.com/snakers4/silero-vad)
-— a small (~1 MB) neural VAD that returns per-frame speech probability.
-
-- Add `silero-vad` (or `pysilero-vad` wrapper) to `pyproject.toml`. Loads as a
-  TorchScript model on the same in-process Python — no extra subprocess.
-- New `app/services/vad.py` exposes a `SileroVAD` class with `is_speech(pcm: bytes) -> bool`.
-- `stream.py` swaps the `compute_rms` call for `vad.is_speech(pcm)`; the
-  `SILENCE_DURATION_MS` semantics stay the same (consecutive non-speech frames
-  for N ms → finalise).
-- Add `VAD_BACKEND` env var (`rms` | `silero`) so users on constrained hosts
-  can fall back to the cheap RMS path.
-
-**Effort.** ~1 day.
-**Risk.** Low. silero-vad is widely used (WhisperLive, WhisperLiveKit) and
-small enough to run on CPU even when ggml/Metal owns the GPU.
-**Verification.** Add a `tests/test_vad.py` fixture set: a clean speech clip
-(both backends should agree it's voice), a fan-noise clip (silero should say
-silence; RMS may say voice), and a quiet-speech clip (silero should say voice;
-RMS may say silence). Plus a manual mic check via `scripts/live-caption.py`.
-
-### 2. OpenAI Whisper API compatibility — `POST /v1/audio/transcriptions`
+### 1. OpenAI Whisper API compatibility — `POST /v1/audio/transcriptions`
 
 **Problem.** Several LLM client tools (LibreChat, Continue.dev, open-webui,
 OpenAI-compatible CLIs) expect the OpenAI Whisper API shape. Today they cannot
