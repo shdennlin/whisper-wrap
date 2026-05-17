@@ -1,11 +1,15 @@
 /**
  * whisper-wrap PWA application entry.
  *
- * Wires the capture pipeline (Live via WS /listen or Batch via MediaRecorder +
- * POST /transcribe), transcript view, mode switcher, actions bar, settings
- * panel, history panel, and service worker registration. Surfaces documented
- * failure modes: mic permission denied, insecure origin (non-HTTPS,
- * non-localhost), WebSocket connect exhausted.
+ * UX: two large ModeCards in the idle state. Tapping a card both picks the
+ * capture mode (Batch via MediaRecorder + POST /transcribe; Live via WS
+ * /listen) and begins recording in one click. While a recording is active,
+ * the cards swap for a RecordingBar with stop button + tenths-of-second
+ * timer + (for Live) the connection indicator. A HealthMonitor pings
+ * GET /status on load, on visibility-change, every 30 s, and right before
+ * each record click; the cards disable themselves whenever the backend
+ * isn't reachable so we never record audio with nowhere to send it. Batch
+ * uploads that fail surface a retry/download prompt so the blob isn't lost.
  */
 
 import "./style.css";
@@ -18,13 +22,15 @@ import {
   saveCaptureMode,
   type CaptureMode,
 } from "./capture/mode-store";
+import { HealthMonitor } from "./health/health-monitor";
 import { TranscriptView } from "./ui/transcript-view";
 import { ConnectionIndicator } from "./ui/connection-indicator";
 import { ActionsBar, type ActionTemplate } from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
 import { HistoryPanel } from "./ui/history-panel";
-import { ModeSwitcher } from "./ui/mode-switcher";
-import { RecordButton } from "./ui/record-button";
+import { ModeCard } from "./ui/mode-card";
+import { RecordingBar } from "./ui/recording-bar";
+import { BackendIndicator } from "./ui/backend-indicator";
 import {
   HistoryStore,
   MIN_USABLE_DURATION_MS,
@@ -44,10 +50,13 @@ header.append(title, indicatorHost, settingsToggle);
 
 const main = el("main", "main-pane");
 
-const controls = el("div", "controls");
-const modeHost = el("div");
-const recordHost = el("div");
-controls.append(modeHost, recordHost);
+const captureHost = el("section", "capture-host");
+const cardsHost = el("div", "mode-cards");
+const recordingHost = el("div", "recording-active");
+recordingHost.hidden = true;
+const uploadRetryHost = el("div", "upload-retry");
+uploadRetryHost.hidden = true;
+captureHost.append(cardsHost, recordingHost, uploadRetryHost);
 
 const settingsHost = el("section");
 settingsHost.hidden = true;
@@ -55,7 +64,7 @@ const transcriptHost = el("section");
 const actionsHost = el("section");
 const answerHost = el("section", "answer-pane");
 answerHost.textContent = "（按下停止後選一個 AI 動作，回應會出現在這）";
-main.append(controls, settingsHost, transcriptHost, actionsHost, answerHost);
+main.append(captureHost, settingsHost, transcriptHost, actionsHost, answerHost);
 
 const aside = el("aside", "aside");
 const historyHost = el("section");
@@ -77,9 +86,8 @@ const store = new HistoryStore();
 store.setRetention(settings0.retention);
 
 const transcript = new TranscriptView(transcriptHost);
-const indicator = new ConnectionIndicator(indicatorHost, () => {
-  if (mode === "live") void startRecording().catch(reportError);
-});
+
+const backendIndicator = new BackendIndicator(indicatorHost);
 
 const settingsPanel = new SettingsPanel({
   root: settingsHost,
@@ -118,27 +126,31 @@ const actionsBar = new ActionsBar({
 });
 void actionsBar.load();
 
-// ---- Mode + record-button wiring ------------------------------------------
-let mode: CaptureMode = loadCaptureMode();
-const modeSwitcher = new ModeSwitcher({
-  root: modeHost,
-  initial: mode,
-  onChange: (next) => {
-    mode = next;
-    saveCaptureMode(next);
-    indicator.setState("idle");
-  },
+// ---- Mode cards ------------------------------------------------------------
+const batchCard = new ModeCard({
+  mode: "batch",
+  icon: "●",
+  label: "Batch",
+  description: "錄完一次轉錄，準確度高",
+  onClick: () => startRecording("batch").catch(reportError),
+});
+const liveCard = new ModeCard({
+  mode: "live",
+  icon: "◉",
+  label: "Live",
+  description: "邊講邊出字幕",
+  onClick: () => startRecording("live").catch(reportError),
+});
+cardsHost.append(batchCard.root, liveCard.root);
+
+// ---- Recording bar (replaces cards while recording) ------------------------
+const recordingBar = new RecordingBar({
+  root: recordingHost,
+  onStop: () => stopRecording().catch(reportError),
 });
 
-const recordButton = new RecordButton({
-  root: recordHost,
-  onClick: () => {
-    if (recordButton.getState() === "idle") {
-      startRecording().catch(reportError);
-    } else if (recordButton.getState() === "recording") {
-      stopRecording().catch(reportError);
-    }
-  },
+const wsIndicator = new ConnectionIndicator(recordingBar.slot, () => {
+  if (currentMode === "live") void startRecording("live").catch(reportError);
 });
 
 settingsToggle.addEventListener("click", () => {
@@ -146,17 +158,40 @@ settingsToggle.addEventListener("click", () => {
   settingsHost.classList.toggle("is-open", !settingsHost.hidden);
 });
 
+// ---- Health monitor --------------------------------------------------------
+const healthMonitor = new HealthMonitor({
+  url: backendUrl("/status"),
+  onStateChange: (state) => {
+    backendIndicator.setState(state);
+    const disabled = state !== "ok";
+    const title = disabled ? "後端未連線；恢復後可重試" : undefined;
+    batchCard.setDisabled(disabled, title);
+    liveCard.setDisabled(disabled, title);
+  },
+});
+healthMonitor.start();
+
 // ---- Recording lifecycle ---------------------------------------------------
 let mic: MicPipeline | null = null;
 let sock: ListenSocket | null = null;
 let batch: BatchRecorder | null = null;
 let currentSessionId: string | null = null;
+let currentMode: CaptureMode = loadCaptureMode();
 let recordingStartedAt = 0;
 const settings = settingsPanel.getSettings();
 
-async function startRecording(): Promise<void> {
-  recordButton.setState("recording");
-  modeSwitcher.setDisabled(true);
+async function startRecording(mode: CaptureMode): Promise<void> {
+  // Final pre-flight before we open the mic.
+  const health = await healthMonitor.checkNow();
+  if (health !== "ok") {
+    toast("後端離線，無法開始錄音");
+    return;
+  }
+
+  currentMode = mode;
+  saveCaptureMode(mode);
+  showRecordingBar(mode);
+  hideRetryPrompt();
   transcript.clear();
   answerHost.textContent = "";
   recordingStartedAt = Date.now();
@@ -164,6 +199,8 @@ async function startRecording(): Promise<void> {
   if (mode === "live") {
     currentSessionId = store.startSession();
     history.render();
+    wsIndicator.root.hidden = false;
+    wsIndicator.setState("idle");
     const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProto}//${window.location.host}/listen`;
     sock = new ListenSocket({ url: wsUrl, onEvent: handleListenEvent });
@@ -179,9 +216,8 @@ async function startRecording(): Promise<void> {
       await stopRecording();
     }
   } else {
-    // Batch: record fully on-device, transcribe on stop.
     currentSessionId = null;
-    indicator.setState("idle");
+    wsIndicator.root.hidden = true;
     try {
       batch = new BatchRecorder({
         deviceId: settings.deviceId ?? undefined,
@@ -191,13 +227,13 @@ async function startRecording(): Promise<void> {
       await batch.start();
     } catch (e) {
       micPermissionModal(e instanceof Error ? e.message : String(e));
-      resetIdleSync();
+      hideRecordingBar();
     }
   }
 }
 
 async function stopRecording(): Promise<void> {
-  if (mode === "live") {
+  if (currentMode === "live") {
     await mic?.stop();
     mic = null;
     sock?.stop();
@@ -218,57 +254,123 @@ async function stopRecording(): Promise<void> {
       history.render();
     }
     currentSessionId = null;
-    resetIdleSync();
+    hideRecordingBar();
     return;
   }
 
   if (!batch) {
-    resetIdleSync();
+    hideRecordingBar();
     return;
   }
-  recordButton.setState("processing");
+  recordingBar.showProcessing();
   let recording;
   try {
     recording = await batch.stop();
   } catch (e) {
     toast(`錄音失敗：${e instanceof Error ? e.message : String(e)}`);
     batch = null;
-    resetIdleSync();
+    hideRecordingBar();
     return;
   }
   batch = null;
   if (recording.durationMs < MIN_USABLE_DURATION_MS) {
     toast(`錄音過短（${formatBriefDuration(recording.durationMs)}），未儲存`);
-    resetIdleSync();
+    hideRecordingBar();
     return;
   }
 
+  await processBatchRecording(recording.blob, recording.mimeType, recording.durationMs);
+}
+
+async function processBatchRecording(
+  blob: Blob,
+  mimeType: string,
+  durationMs: number,
+): Promise<void> {
   try {
-    const text = await uploadForTranscription(recording.blob, recording.mimeType);
+    const text = await uploadForTranscription(blob, mimeType);
     const sessionId = store.startSession();
     store.appendFinal(sessionId, {
       text,
       start_ms: 0,
-      end_ms: recording.durationMs,
+      end_ms: durationMs,
     });
     store.stopSession(sessionId);
     transcript.appendFinal({
       text,
       start_ms: 0,
-      end_ms: recording.durationMs,
+      end_ms: durationMs,
     });
     currentSessionId = sessionId;
     history.render();
+    hideRecordingBar();
+    hideRetryPrompt();
   } catch (e) {
-    toast(`轉錄失敗：${e instanceof Error ? e.message : String(e)}`);
-  } finally {
-    resetIdleSync();
+    hideRecordingBar();
+    showRetryPrompt({
+      blob,
+      mimeType,
+      durationMs,
+      errorMessage: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 
-function resetIdleSync(): void {
-  recordButton.setState("idle");
-  modeSwitcher.setDisabled(false);
+interface PendingUpload {
+  blob: Blob;
+  mimeType: string;
+  durationMs: number;
+  errorMessage: string;
+}
+
+let pendingUpload: PendingUpload | null = null;
+
+function showRetryPrompt(p: PendingUpload): void {
+  pendingUpload = p;
+  uploadRetryHost.replaceChildren();
+
+  const message = el("span", "msg");
+  message.textContent = `轉錄失敗（${formatBriefDuration(p.durationMs)} 錄音）：${p.errorMessage}`;
+  const retryBtn = button("重試");
+  retryBtn.addEventListener("click", async () => {
+    if (!pendingUpload) return;
+    const p = pendingUpload;
+    hideRetryPrompt();
+    showRecordingBar(currentMode);
+    recordingBar.showProcessing();
+    await processBatchRecording(p.blob, p.mimeType, p.durationMs);
+  });
+  const downloadBtn = button("下載 .webm");
+  downloadBtn.addEventListener("click", () => {
+    if (!pendingUpload) return;
+    downloadBlob(
+      pendingUpload.blob,
+      `whisper-wrap-failed-${Date.now()}.${mimeToExt(pendingUpload.mimeType)}`,
+    );
+  });
+  const dismissBtn = button("略過");
+  dismissBtn.addEventListener("click", () => hideRetryPrompt());
+
+  uploadRetryHost.append(message, retryBtn, downloadBtn, dismissBtn);
+  uploadRetryHost.hidden = false;
+}
+
+function hideRetryPrompt(): void {
+  pendingUpload = null;
+  uploadRetryHost.hidden = true;
+  uploadRetryHost.replaceChildren();
+}
+
+function showRecordingBar(mode: CaptureMode): void {
+  cardsHost.hidden = true;
+  recordingHost.hidden = false;
+  recordingBar.start(mode);
+}
+
+function hideRecordingBar(): void {
+  recordingBar.reset();
+  recordingHost.hidden = true;
+  cardsHost.hidden = false;
 }
 
 async function uploadForTranscription(
@@ -288,7 +390,7 @@ async function uploadForTranscription(
 function handleListenEvent(e: ListenEvent): void {
   switch (e.type) {
     case "state":
-      indicator.setState(e.state);
+      wsIndicator.setState(e.state);
       break;
     case "partial":
       if (loadSettings().showPartials) transcript.setPartial(e.text);
@@ -367,6 +469,24 @@ function formatBriefDuration(ms: number): string {
   const sec = Math.floor(tenths / 10);
   const dec = tenths % 10;
   return `${sec}.${dec}s`;
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = el("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function mimeToExt(mime: string): string {
+  if (mime.startsWith("audio/webm")) return "webm";
+  if (mime.startsWith("audio/mp4")) return "m4a";
+  if (mime.startsWith("audio/ogg")) return "ogg";
+  return "bin";
 }
 
 function reportError(e: unknown): void {

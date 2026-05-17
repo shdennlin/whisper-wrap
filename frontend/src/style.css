@@ -61,84 +61,136 @@ body { min-height: 100vh; }
 .main-pane { grid-area: main; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 .aside { grid-area: aside; padding: 1rem; border-left: 1px solid var(--border); overflow-y: auto; }
 
-.controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-
-/* iOS-style segmented control (mode switcher) */
-.segmented {
+/* ---- Backend health indicator (header) ---- */
+.backend-indicator {
   display: inline-flex;
-  background: rgba(120, 120, 128, 0.16);
-  border-radius: 9px;
-  padding: 2px;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.85rem;
-  user-select: none;
+  color: var(--muted);
 }
-.segmented button {
-  flex: 1;
-  min-width: 4rem;
-  padding: 0.3rem 0.9rem;
-  border: none;
+.backend-indicator .dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--grey);
+}
+.backend-indicator[data-state="ok"] .dot { background: var(--green); }
+.backend-indicator[data-state="down"] .dot { background: var(--red); }
+.backend-indicator[data-state="checking"] .dot {
+  background: var(--yellow);
+  animation: bi-pulse 1s ease-in-out infinite;
+}
+@keyframes bi-pulse { 50% { opacity: 0.4; } }
+
+/* ---- One-click mode cards ---- */
+.capture-host { display: flex; flex-direction: column; gap: 0.75rem; }
+.mode-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 600px) {
+  .mode-cards { grid-template-columns: 1fr; }
+}
+.mode-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   background: transparent;
   color: inherit;
-  border-radius: 7px;
   cursor: pointer;
-  font-weight: 500;
-  transition: background 0.15s ease, box-shadow 0.15s ease;
+  text-align: left;
+  font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.05s ease;
 }
-.segmented button[aria-pressed="true"] {
-  background: var(--bg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+.mode-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.08);
 }
-.segmented button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* Big circular record button + tenths-of-second timer */
-.record-controls { display: inline-flex; align-items: center; gap: 0.75rem; }
-.record-button {
-  width: 56px;
-  height: 56px;
+.mode-card:active:not(:disabled) { transform: scale(0.98); }
+.mode-card:disabled { opacity: 0.45; cursor: not-allowed; }
+.mode-card .icon {
+  width: 2.4rem;
+  height: 2.4rem;
   border-radius: 50%;
-  border: 2px solid var(--border);
-  background: var(--bg);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  background: var(--red);
+  color: white;
+  font-size: 0.95rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.mode-card[data-mode="live"] .icon { background: var(--green); }
+.mode-card .info { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.mode-card .label { font-weight: 600; font-size: 1rem; }
+.mode-card .desc { font-size: 0.8rem; color: var(--muted); }
+
+/* ---- Active-recording bar (replaces cards while recording) ---- */
+.recording-active {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.recording-active .stop-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid var(--red);
+  background: rgba(220, 38, 38, 0.12);
   cursor: pointer;
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.05s ease;
 }
-.record-button:hover:not(:disabled) { transform: scale(1.03); }
-.record-button:active:not(:disabled) { transform: scale(0.97); }
-.record-button:disabled { opacity: 0.6; cursor: progress; }
-.record-button .dot {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--red);
-  transition: border-radius 0.2s ease, width 0.2s ease, height 0.2s ease;
-}
-.record-button[data-state="recording"] {
-  border-color: var(--red);
-  background: rgba(220, 38, 38, 0.12);
-}
-.record-button[data-state="recording"] .dot {
-  border-radius: 4px;
+.recording-active .stop-btn:hover:not(:disabled) { transform: scale(1.03); }
+.recording-active .stop-btn:active:not(:disabled) { transform: scale(0.97); }
+.recording-active .stop-btn:disabled { opacity: 0.75; cursor: progress; }
+.recording-active .stop-btn .dot {
   width: 18px;
   height: 18px;
+  background: var(--red);
+  border-radius: 4px;
   animation: record-pulse 1.2s ease-in-out infinite;
 }
-.record-button[data-state="processing"] { border-color: var(--accent); }
-.record-button[data-state="processing"] .dot {
+.recording-active .stop-btn[data-state="processing"] {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.12);
+}
+.recording-active .stop-btn[data-state="processing"] .dot {
   background: var(--accent);
-  width: 18px;
-  height: 18px;
   border-radius: 50%;
   animation: record-spin 0.9s linear infinite;
 }
-.record-timer {
-  font-variant-numeric: tabular-nums;
-  font-size: 0.95rem;
-  color: var(--muted);
-  min-width: 5.5em;
+.recording-active .info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
 }
+.recording-active .timer {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.15rem;
+  font-weight: 500;
+}
+.recording-active .mode-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.recording-active .slot { flex-shrink: 0; }
+
 @keyframes record-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50%      { transform: scale(0.82); opacity: 0.7; }
@@ -147,6 +199,30 @@ body { min-height: 100vh; }
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* ---- Batch upload-failed retry prompt ---- */
+.upload-retry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--yellow);
+  border-radius: 8px;
+  background: rgba(217, 119, 6, 0.08);
+  font-size: 0.9rem;
+}
+.upload-retry .msg { flex: 1; min-width: 12rem; color: var(--fg); }
+.upload-retry button {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.upload-retry button:hover { border-color: var(--accent); }
 
 .conn-indicator { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 .conn-indicator .conn-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--grey); }
