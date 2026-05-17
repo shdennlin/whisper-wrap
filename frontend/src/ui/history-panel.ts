@@ -4,7 +4,12 @@
  * Exports trigger a browser download via blob URLs; no backend round-trip.
  */
 
-import { HistoryStore, type SessionRecord } from "../storage/history-store";
+import {
+  HistoryStore,
+  formatSessionDuration,
+  sessionDurationMs,
+  type SessionRecord,
+} from "../storage/history-store";
 import { exportSrt, exportVtt, exportTxt } from "../export/subtitle-export";
 
 export interface HistoryPanelOptions {
@@ -46,7 +51,7 @@ export class HistoryPanel {
     meta.textContent =
       formatDate(s.started_at) +
       " · " +
-      (s.ended_at ? formatDuration(s.ended_at - s.started_at) : "錄音中") +
+      (s.ended_at ? formatSessionDuration(sessionDurationMs(s)) : "錄音中") +
       " · " +
       countWords(s) +
       " 字";
@@ -147,13 +152,6 @@ function formatDateForFilename(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const mm = Math.floor(totalSec / 60);
-  const ss = totalSec % 60;
-  return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
 function countWords(s: SessionRecord): number {

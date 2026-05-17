@@ -1,28 +1,37 @@
 /**
  * whisper-wrap PWA application entry.
  *
- * Wires together the capture pipeline, transcript view, actions bar, settings
- * panel, history panel, and service worker registration. Surfaces three
- * documented failure modes:
- *   - mic permission denied → modal
- *   - insecure origin (non-HTTPS, non-localhost) → top-of-page banner
- *   - WebSocket connect exhausted → red indicator + Retry button
+ * Wires the capture pipeline (Live via WS /listen or Batch via MediaRecorder +
+ * POST /transcribe), transcript view, mode switcher, actions bar, settings
+ * panel, history panel, and service worker registration. Surfaces documented
+ * failure modes: mic permission denied, insecure origin (non-HTTPS,
+ * non-localhost), WebSocket connect exhausted.
  */
 
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
 import { MicPipeline } from "./capture/mic-pipeline";
 import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
+import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
+import {
+  loadCaptureMode,
+  saveCaptureMode,
+  type CaptureMode,
+} from "./capture/mode-store";
 import { TranscriptView } from "./ui/transcript-view";
 import { ConnectionIndicator } from "./ui/connection-indicator";
 import { ActionsBar, type ActionTemplate } from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
 import { HistoryPanel } from "./ui/history-panel";
-import { HistoryStore } from "./storage/history-store";
+import { ModeSwitcher } from "./ui/mode-switcher";
+import { RecordButton } from "./ui/record-button";
+import {
+  HistoryStore,
+  MIN_USABLE_DURATION_MS,
+} from "./storage/history-store";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("missing #app root");
-
 root.replaceChildren();
 
 // ---- Layout shell ----------------------------------------------------------
@@ -34,11 +43,11 @@ const settingsToggle = button("⚙︎ 設定");
 header.append(title, indicatorHost, settingsToggle);
 
 const main = el("main", "main-pane");
+
 const controls = el("div", "controls");
-const recordBtn = button("⏺ 開始錄音");
-const stopBtn = button("⏹ 停止");
-stopBtn.disabled = true;
-controls.append(recordBtn, stopBtn);
+const modeHost = el("div");
+const recordHost = el("div");
+controls.append(modeHost, recordHost);
 
 const settingsHost = el("section");
 settingsHost.hidden = true;
@@ -69,8 +78,7 @@ store.setRetention(settings0.retention);
 
 const transcript = new TranscriptView(transcriptHost);
 const indicator = new ConnectionIndicator(indicatorHost, () => {
-  // Manual retry after exhaustion: re-create the socket.
-  startRecording().catch(reportError);
+  if (mode === "live") void startRecording().catch(reportError);
 });
 
 const settingsPanel = new SettingsPanel({
@@ -110,58 +118,171 @@ const actionsBar = new ActionsBar({
 });
 void actionsBar.load();
 
-// ---- Recording lifecycle ---------------------------------------------------
-let mic: MicPipeline | null = null;
-let sock: ListenSocket | null = null;
-let currentSessionId: string | null = null;
-const settings = settingsPanel.getSettings();
+// ---- Mode + record-button wiring ------------------------------------------
+let mode: CaptureMode = loadCaptureMode();
+const modeSwitcher = new ModeSwitcher({
+  root: modeHost,
+  initial: mode,
+  onChange: (next) => {
+    mode = next;
+    saveCaptureMode(next);
+    indicator.setState("idle");
+  },
+});
 
-recordBtn.addEventListener("click", () => startRecording().catch(reportError));
-stopBtn.addEventListener("click", () => stopRecording().catch(reportError));
+const recordButton = new RecordButton({
+  root: recordHost,
+  onClick: () => {
+    if (recordButton.getState() === "idle") {
+      startRecording().catch(reportError);
+    } else if (recordButton.getState() === "recording") {
+      stopRecording().catch(reportError);
+    }
+  },
+});
+
 settingsToggle.addEventListener("click", () => {
   settingsHost.hidden = !settingsHost.hidden;
   settingsHost.classList.toggle("is-open", !settingsHost.hidden);
 });
 
+// ---- Recording lifecycle ---------------------------------------------------
+let mic: MicPipeline | null = null;
+let sock: ListenSocket | null = null;
+let batch: BatchRecorder | null = null;
+let currentSessionId: string | null = null;
+let recordingStartedAt = 0;
+const settings = settingsPanel.getSettings();
+
 async function startRecording(): Promise<void> {
-  recordBtn.disabled = true;
-  stopBtn.disabled = false;
+  recordButton.setState("recording");
+  modeSwitcher.setDisabled(true);
   transcript.clear();
   answerHost.textContent = "";
-  currentSessionId = store.startSession();
-  history.render();
+  recordingStartedAt = Date.now();
 
-  const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${wsProto}//${window.location.host}/listen`;
-  sock = new ListenSocket({
-    url: wsUrl,
-    onEvent: handleListenEvent,
-  });
-  sock.start();
-
-  try {
-    mic = new MicPipeline({
-      deviceId: settings.deviceId ?? undefined,
-      onFrame: (frame) => sock?.send(frame),
-    });
-    await mic.start();
-  } catch (e) {
-    micPermissionModal(e instanceof Error ? e.message : String(e));
-    await stopRecording();
+  if (mode === "live") {
+    currentSessionId = store.startSession();
+    history.render();
+    const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${wsProto}//${window.location.host}/listen`;
+    sock = new ListenSocket({ url: wsUrl, onEvent: handleListenEvent });
+    sock.start();
+    try {
+      mic = new MicPipeline({
+        deviceId: settings.deviceId ?? undefined,
+        onFrame: (frame) => sock?.send(frame),
+      });
+      await mic.start();
+    } catch (e) {
+      micPermissionModal(e instanceof Error ? e.message : String(e));
+      await stopRecording();
+    }
+  } else {
+    // Batch: record fully on-device, transcribe on stop.
+    currentSessionId = null;
+    indicator.setState("idle");
+    try {
+      batch = new BatchRecorder({
+        deviceId: settings.deviceId ?? undefined,
+        maxDurationMs: DEFAULT_MAX_DURATION_MS,
+        onAutoStop: () => toast("已達 10 分鐘上限，自動停止錄音"),
+      });
+      await batch.start();
+    } catch (e) {
+      micPermissionModal(e instanceof Error ? e.message : String(e));
+      resetIdleSync();
+    }
   }
 }
 
 async function stopRecording(): Promise<void> {
-  recordBtn.disabled = false;
-  stopBtn.disabled = true;
-  await mic?.stop();
-  mic = null;
-  sock?.stop();
-  sock = null;
-  if (currentSessionId) {
-    store.stopSession(currentSessionId);
-    history.render();
+  if (mode === "live") {
+    await mic?.stop();
+    mic = null;
+    sock?.stop();
+    sock = null;
+    if (currentSessionId) {
+      store.stopSession(currentSessionId);
+      const session = store.list().find((s) => s.id === currentSessionId);
+      const dur = Date.now() - recordingStartedAt;
+      if (
+        session &&
+        session.ended_at !== null &&
+        dur < MIN_USABLE_DURATION_MS &&
+        session.finals.length === 0
+      ) {
+        store.deleteSession(currentSessionId);
+        toast(`錄音過短（${formatBriefDuration(dur)}），未儲存`);
+      }
+      history.render();
+    }
+    currentSessionId = null;
+    resetIdleSync();
+    return;
   }
+
+  if (!batch) {
+    resetIdleSync();
+    return;
+  }
+  recordButton.setState("processing");
+  let recording;
+  try {
+    recording = await batch.stop();
+  } catch (e) {
+    toast(`錄音失敗：${e instanceof Error ? e.message : String(e)}`);
+    batch = null;
+    resetIdleSync();
+    return;
+  }
+  batch = null;
+  if (recording.durationMs < MIN_USABLE_DURATION_MS) {
+    toast(`錄音過短（${formatBriefDuration(recording.durationMs)}），未儲存`);
+    resetIdleSync();
+    return;
+  }
+
+  try {
+    const text = await uploadForTranscription(recording.blob, recording.mimeType);
+    const sessionId = store.startSession();
+    store.appendFinal(sessionId, {
+      text,
+      start_ms: 0,
+      end_ms: recording.durationMs,
+    });
+    store.stopSession(sessionId);
+    transcript.appendFinal({
+      text,
+      start_ms: 0,
+      end_ms: recording.durationMs,
+    });
+    currentSessionId = sessionId;
+    history.render();
+  } catch (e) {
+    toast(`轉錄失敗：${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    resetIdleSync();
+  }
+}
+
+function resetIdleSync(): void {
+  recordButton.setState("idle");
+  modeSwitcher.setDisabled(false);
+}
+
+async function uploadForTranscription(
+  blob: Blob,
+  mimeType: string,
+): Promise<string> {
+  const r = await fetch(backendUrl("/transcribe"), {
+    method: "POST",
+    headers: { "content-type": mimeType || "application/octet-stream" },
+    body: blob,
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body = (await r.json()) as { text: string };
+  return body.text ?? "";
 }
 
 function handleListenEvent(e: ListenEvent): void {
@@ -239,6 +360,13 @@ function micPermissionModal(detail: string): void {
   const modal = el("div", "banner");
   modal.textContent = `麥克風存取失敗：${detail}。請在瀏覽器設定允許麥克風後重試。`;
   root!.insertBefore(modal, root!.firstChild);
+}
+
+function formatBriefDuration(ms: number): string {
+  const tenths = Math.floor(ms / 100);
+  const sec = Math.floor(tenths / 10);
+  const dec = tenths % 10;
+  return `${sec}.${dec}s`;
 }
 
 function reportError(e: unknown): void {

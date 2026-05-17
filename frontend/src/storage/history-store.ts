@@ -15,6 +15,38 @@ export const STORAGE_KEY = "whisper-wrap.sessions";
 export const DEFAULT_RETENTION = 20;
 const SCHEMA_VERSION = 1;
 
+/**
+ * Recordings shorter than this are treated as accidental taps and discarded
+ * without going into history. 500 ms = 2 AudioWorklet frames, enough that the
+ * user actually intended to record but small enough to never lose a real
+ * utterance.
+ */
+export const MIN_USABLE_DURATION_MS = 500;
+
+/** Returns the recording duration in ms, or 0 if the session is still open. */
+export function sessionDurationMs(s: SessionRecord): number {
+  if (s.ended_at === null) return 0;
+  return Math.max(0, s.ended_at - s.started_at);
+}
+
+/**
+ * Format a duration with one decimal place under 60 s, mm:ss for longer takes.
+ * Used in the history list so users can eyeball which sessions were
+ * accidental clicks vs real recordings.
+ */
+export function formatSessionDuration(ms: number): string {
+  if (ms < 60_000) {
+    const tenths = Math.floor(ms / 100);
+    const sec = Math.floor(tenths / 10);
+    const decimal = tenths % 10;
+    return `${sec}.${decimal}s`;
+  }
+  const totalSec = Math.floor(ms / 1000);
+  const mm = Math.floor(totalSec / 60);
+  const ss = totalSec % 60;
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
 export interface SessionFinal {
   text: string;
   start_ms: number;
