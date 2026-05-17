@@ -23,7 +23,7 @@ help:
 	@echo "  check-system-deps  - Verify required system dependencies"
 	@echo "  install-system-deps - Auto-install ffmpeg/libmagic"
 	@echo "  install            - Install Python dependencies (uv sync)"
-	@echo "  build-frontend     - Build the PWA bundle into app/static/app/ (requires Node 20+)"
+	@echo "  build-frontend     - Build the PWA bundle into app/static/app/ (requires Bun 1.1+)"
 	@echo "  setup              - Full first-time setup: install + download default model + build-frontend"
 	@echo ""
 	@echo "Models:"
@@ -53,8 +53,8 @@ setup: install download-default-model build-frontend
 
 build-frontend:
 	@echo "Building PWA bundle into app/static/app/..."
-	@which node >/dev/null || (echo "  node: missing — install Node 20+ from https://nodejs.org" && exit 1)
-	@cd frontend && npm install --silent && npm run build
+	@which bun >/dev/null || (echo "  bun: missing — install Bun 1.1+ from https://bun.sh (curl -fsSL https://bun.sh/install | bash)" && exit 1)
+	@cd frontend && bun install --silent && bun run build
 	@echo "PWA bundle ready at app/static/app/. Visit http://localhost:8000/app/ after 'make dev'."
 
 dev-https:

@@ -97,9 +97,10 @@ equivalent CT2 entry to your local `registry/models.yaml`. Suggested replacement
 - **ffmpeg**: Audio format conversion
 - **libmagic**: MIME detection
 - **hf** (or **huggingface-cli**): Pulled in as a Python dep; used by the model manager
-- **Node 20+** (build-time only): needed by `make build-frontend` to compile the
-  v2.4 PWA bundle. Not required at runtime; the bundle is shipped in
-  `app/static/app/` and served by FastAPI.
+- **Bun 1.1+** (build-time only): needed by `make build-frontend` to compile the
+  v2.4 PWA bundle (Vite + TypeScript). Install with
+  `curl -fsSL https://bun.sh/install | bash`. Not required at runtime; the
+  bundle is shipped in `app/static/app/` and served by FastAPI.
 
 ### Operating Systems
 - macOS 10.15+ (Intel/Apple Silicon)
