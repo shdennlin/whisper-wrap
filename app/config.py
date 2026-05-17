@@ -67,12 +67,29 @@ class Config:
         # Logging
         self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+        # v2.3 persistence. data_dir holds the SQLite db + audio blobs; both
+        # paths are created by lifespan before alembic upgrade runs. The
+        # database_url default is derived from data_dir at read time but env
+        # `DATABASE_URL` wins outright so tests can point at `:memory:`.
+        self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "data"))
+        self.DATABASE_URL: str = os.getenv(
+            "DATABASE_URL", f"sqlite:///{self.DATA_DIR}/history.db"
+        )
+
+    @property
+    def audio_dir(self) -> Path:
+        return self.DATA_DIR / "audio"
+
     @property
     def max_file_size_bytes(self) -> int:
         return self.MAX_FILE_SIZE_MB * 1024 * 1024
 
     def ensure_temp_dir(self) -> None:
         self.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+    def ensure_data_dirs(self) -> None:
+        self.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.audio_dir.mkdir(parents=True, exist_ok=True)
 
     def validate_port(self) -> None:
         if not (1 <= self.API_PORT <= 65535):
