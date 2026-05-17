@@ -85,6 +85,18 @@ def test_raw_octet_stream_returns_200(client):
     assert resp.json()["text"] == "hello world"
 
 
+def test_raw_webm_audio_returns_200(client):
+    """MediaRecorder's default on Chromium/Firefox is audio/webm;codecs=opus,
+    which the PWA Batch mode uploads directly to /transcribe."""
+    resp = client.post(
+        "/transcribe",
+        headers={"Content-Type": "audio/webm;codecs=opus"},
+        content=b"raw webm bytes",
+    )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "hello world"
+
+
 def test_unsupported_text_plain_returns_415(client):
     resp = client.post(
         "/transcribe",

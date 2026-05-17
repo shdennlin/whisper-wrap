@@ -34,8 +34,10 @@ _RAW_BODY_EXTENSION_MAP = {
     "audio/mp4": ".m4a",
     "audio/x-m4a": ".m4a",
     "audio/m4a": ".m4a",
+    "audio/webm": ".webm",
     "video/mp4": ".mp4",
     "video/quicktime": ".mov",
+    "video/webm": ".webm",
     "application/octet-stream": ".audio",
 }
 
