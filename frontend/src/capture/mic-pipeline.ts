@@ -18,6 +18,8 @@ export class MicPipeline {
   private stream: MediaStream | null = null;
   private node: AudioWorkletNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
+  /** When true, downsampled frames are dropped instead of being forwarded. */
+  private paused = false;
 
   constructor(private readonly options: MicPipelineOptions) {}
 
@@ -49,9 +51,28 @@ export class MicPipeline {
       channelCount: 1,
     });
     this.node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+      if (this.paused) return;
       this.options.onFrame(e.data);
     };
     this.source.connect(this.node);
+  }
+
+  /**
+   * Drop frames at the host edge (the worklet keeps running but its output is
+   * not forwarded to onFrame). The server-side /listen stream will see no new
+   * audio and will eventually emit any pending utterance as a final.
+   */
+  pause(): void {
+    this.paused = true;
+  }
+
+  /** Resume forwarding worklet output to onFrame. */
+  resume(): void {
+    this.paused = false;
+  }
+
+  isPaused(): boolean {
+    return this.paused;
   }
 
   async stop(): Promise<void> {

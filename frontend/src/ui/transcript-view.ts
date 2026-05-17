@@ -64,6 +64,11 @@ export class TranscriptView {
     this.partialEl.classList.toggle("is-active", text.length > 0);
   }
 
+  /** Returns the in-flight partial text (empty when no partial is showing). */
+  getPartial(): string {
+    return this.partialEl.textContent ?? "";
+  }
+
   clearPartial(): void {
     this.setPartial("");
   }

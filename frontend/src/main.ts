@@ -148,10 +148,10 @@ const liveCard = new ModeCard({
   icon: "◉",
   label: "Live",
   description: "邊講邊出字幕",
-  pauseSupported: false,
+  pauseSupported: true,
   onStart: () => startRecording("live").catch(reportError),
   onStop: () => stopRecording().catch(reportError),
-  onPauseResume: () => { /* not supported in Live */ },
+  onPauseResume: () => togglePause().catch(reportError),
   onDiscard: () => discardRecording().catch(reportError),
 });
 cardsHost.append(batchCard.root, liveCard.root);
@@ -253,10 +253,14 @@ async function startRecording(mode: CaptureMode): Promise<void> {
 }
 
 async function togglePause(): Promise<void> {
-  if (currentMode !== "batch" || !batch) return;
   const nextState = activeCard().togglePause();
-  if (nextState === "paused") batch.pause();
-  else if (nextState === "recording") batch.resume();
+  if (currentMode === "batch" && batch) {
+    if (nextState === "paused") batch.pause();
+    else if (nextState === "recording") batch.resume();
+  } else if (currentMode === "live" && mic) {
+    if (nextState === "paused") mic.pause();
+    else if (nextState === "recording") mic.resume();
+  }
 }
 
 async function discardRecording(): Promise<void> {
@@ -284,6 +288,27 @@ async function discardRecording(): Promise<void> {
 
 async function stopRecording(): Promise<void> {
   if (currentMode === "live") {
+    // Capture any partial that's still on screen but hasn't been promoted to
+    // a final yet — otherwise pressing stop right after speaking would lose
+    // the last utterance. The partial we adopt as a final has no
+    // server-supplied timestamp, so we synthesize one from elapsed time so
+    // the row slots in chronologically.
+    const partial = transcript.getPartial().trim();
+    if (partial && currentSessionId) {
+      const ts = Math.max(0, Date.now() - recordingStartedAt);
+      store.appendFinal(currentSessionId, {
+        text: partial,
+        start_ms: ts,
+        end_ms: ts,
+      });
+      transcript.appendFinal({
+        text: partial,
+        start_ms: ts,
+        end_ms: ts,
+        kind: "live",
+      });
+    }
+
     await mic?.stop();
     mic = null;
     sock?.stop();
