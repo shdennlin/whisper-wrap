@@ -126,11 +126,11 @@ describe("SettingsPanel + persistence helpers", () => {
       onChange: () => {},
     });
     void panel;
-    // Mic select + url input + 3 checkboxes (partials, auto-scroll, auto-copy) + retention number
+    // Mic select + url input + 3 checkboxes + 3 number inputs (retention, idle, max)
     expect(host.querySelectorAll("select").length).toBe(1);
     expect(host.querySelectorAll('input[type="url"]').length).toBe(1);
     expect(host.querySelectorAll('input[type="checkbox"]').length).toBe(3);
-    expect(host.querySelectorAll('input[type="number"]').length).toBe(1);
+    expect(host.querySelectorAll('input[type="number"]').length).toBe(3);
   });
 
   it("persists settings to localStorage and reloadSettings reads them back", () => {
@@ -141,6 +141,8 @@ describe("SettingsPanel + persistence helpers", () => {
       autoScroll: false,
       autoCopy: false,
       retention: 5,
+      liveIdleMinutes: 15,
+      liveMaxMinutes: 120,
     });
     const reloaded = loadSettings();
     expect(reloaded.deviceId).toBe("airpods-id");
@@ -149,6 +151,8 @@ describe("SettingsPanel + persistence helpers", () => {
     expect(reloaded.autoScroll).toBe(false);
     expect(reloaded.autoCopy).toBe(false);
     expect(reloaded.retention).toBe(5);
+    expect(reloaded.liveIdleMinutes).toBe(15);
+    expect(reloaded.liveMaxMinutes).toBe(120);
   });
 
   it("changing a control fires onChange with the merged Settings and writes localStorage", async () => {

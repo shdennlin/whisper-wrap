@@ -6,7 +6,10 @@
  *   - backend base URL (default: window.location.origin)
  *   - show partials toggle
  *   - auto-scroll toggle
+ *   - auto-copy transcript toggle
  *   - history retention count (1–50, default 20)
+ *   - Live idle-stop minutes (0 disables; default 30)
+ *   - Live hard-cap minutes (0 disables; default 240 = 4 h)
  */
 
 export const SETTINGS_KEY = "whisper-wrap.settings";
@@ -18,6 +21,10 @@ export interface Settings {
   autoScroll: boolean;
   autoCopy: boolean;
   retention: number;
+  /** Stop Live recording after this many minutes with no speech. 0 = off. */
+  liveIdleMinutes: number;
+  /** Hard cap on Live recording wall-clock duration. 0 = off. */
+  liveMaxMinutes: number;
 }
 
 export const DEFAULTS: Settings = {
@@ -27,6 +34,8 @@ export const DEFAULTS: Settings = {
   autoScroll: true,
   autoCopy: true,
   retention: 20,
+  liveIdleMinutes: 30,
+  liveMaxMinutes: 240,
 };
 
 export function loadSettings(): Settings {
@@ -62,6 +71,8 @@ export class SettingsPanel {
   private autoscrollInput!: HTMLInputElement;
   private autocopyInput!: HTMLInputElement;
   private retentionInput!: HTMLInputElement;
+  private liveIdleInput!: HTMLInputElement;
+  private liveMaxInput!: HTMLInputElement;
 
   constructor(private readonly opts: SettingsPanelOptions) {
     this.current = loadSettings();
@@ -90,6 +101,24 @@ export class SettingsPanel {
     this.retentionInput.min = "1";
     this.retentionInput.max = "50";
 
+    this.makeSectionTitle("Live 模式自動停止");
+    this.liveIdleInput = this.makeInputWithHint(
+      "閒置幾分鐘自動停止（0 = 永不）",
+      "number",
+      String(this.current.liveIdleMinutes),
+      "持續這麼久沒有新字幕就自動停止錄音 — 適合會議結束忘記按停。",
+    );
+    this.liveIdleInput.min = "0";
+    this.liveIdleInput.max = "180";
+    this.liveMaxInput = this.makeInputWithHint(
+      "最長錄音上限（分鐘，0 = 永不）",
+      "number",
+      String(this.current.liveMaxMinutes),
+      "保命用 hard cap，從按下開始算到這個分鐘數一定停。預設 4 小時。",
+    );
+    this.liveMaxInput.min = "0";
+    this.liveMaxInput.max = "720";
+
     this.populateDevices();
 
     const onAnyChange = (): void => {
@@ -100,6 +129,8 @@ export class SettingsPanel {
         autoScroll: this.autoscrollInput.checked,
         autoCopy: this.autocopyInput.checked,
         retention: clampRetention(this.retentionInput.valueAsNumber),
+        liveIdleMinutes: clampMinutes(this.liveIdleInput.valueAsNumber, 180),
+        liveMaxMinutes: clampMinutes(this.liveMaxInput.valueAsNumber, 720),
       };
       saveSettings(this.current);
       this.opts.onChange(this.current);
@@ -111,6 +142,8 @@ export class SettingsPanel {
       this.autoscrollInput,
       this.autocopyInput,
       this.retentionInput,
+      this.liveIdleInput,
+      this.liveMaxInput,
     ]) {
       el.addEventListener("change", onAnyChange);
     }
@@ -162,6 +195,27 @@ export class SettingsPanel {
     return input;
   }
 
+  private makeInputWithHint(
+    label: string,
+    type: string,
+    value: string,
+    hint: string,
+  ): HTMLInputElement {
+    const wrap = document.createElement("label");
+    wrap.className = "settings-field";
+    wrap.append(document.createTextNode(label));
+    const input = document.createElement("input");
+    input.type = type;
+    input.value = value;
+    wrap.appendChild(input);
+    const hintEl = document.createElement("span");
+    hintEl.className = "settings-hint";
+    hintEl.textContent = hint;
+    wrap.appendChild(hintEl);
+    this.opts.root.appendChild(wrap);
+    return input;
+  }
+
   private makeCheckbox(label: string, checked: boolean): HTMLInputElement {
     const wrap = document.createElement("label");
     wrap.className = "settings-field settings-checkbox";
@@ -172,9 +226,21 @@ export class SettingsPanel {
     this.opts.root.appendChild(wrap);
     return input;
   }
+
+  private makeSectionTitle(text: string): void {
+    const h = document.createElement("h3");
+    h.className = "settings-section";
+    h.textContent = text;
+    this.opts.root.appendChild(h);
+  }
 }
 
 function clampRetention(n: number): number {
   if (!Number.isFinite(n)) return DEFAULTS.retention;
   return Math.min(50, Math.max(1, Math.floor(n)));
+}
+
+function clampMinutes(n: number, max: number): number {
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(max, Math.floor(n));
 }

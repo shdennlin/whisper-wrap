@@ -23,6 +23,7 @@ import { registerSW } from "virtual:pwa-register";
 import { MicPipeline } from "./capture/mic-pipeline";
 import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
 import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
+import { LiveTimeoutManager, type LiveTimeoutReason } from "./capture/live-timeout";
 import {
   loadCaptureMode,
   saveCaptureMode,
@@ -63,19 +64,35 @@ const uploadRetryHost = el("div", "upload-retry");
 uploadRetryHost.hidden = true;
 captureHost.append(cardsHost, wsIndicatorHost, uploadRetryHost);
 
-const settingsHost = el("section");
-settingsHost.hidden = true;
 const transcriptHost = el("section");
 const actionsHost = el("section");
 const answerHost = el("section", "answer-pane");
 answerHost.textContent = "（按下停止後選一個 AI 動作，回應會出現在這）";
-main.append(captureHost, settingsHost, transcriptHost, actionsHost, answerHost);
+main.append(captureHost, transcriptHost, actionsHost, answerHost);
 
 const aside = el("aside", "aside");
 const historyHost = el("section");
 aside.append(historyHost);
 
-root.append(header, main, aside);
+// Settings live in a modal overlay so they don't displace the recording UI.
+const settingsModal = el("div", "modal-backdrop");
+settingsModal.hidden = true;
+settingsModal.setAttribute("role", "dialog");
+settingsModal.setAttribute("aria-modal", "true");
+settingsModal.setAttribute("aria-label", "設定");
+const settingsDialog = el("div", "modal-dialog");
+const settingsHeader = el("div", "modal-header");
+const settingsTitle = el("h2");
+settingsTitle.textContent = "設定";
+const settingsClose = button("✕");
+settingsClose.className = "modal-close";
+settingsClose.setAttribute("aria-label", "關閉設定");
+settingsHeader.append(settingsTitle, settingsClose);
+const settingsHost = el("section");
+settingsDialog.append(settingsHeader, settingsHost);
+settingsModal.append(settingsDialog);
+
+root.append(header, main, aside, settingsModal);
 
 // ---- Insecure-origin banner (above header) ---------------------------------
 if (!window.isSecureContext && window.location.hostname !== "localhost") {
@@ -160,9 +177,21 @@ const wsIndicator = new ConnectionIndicator(wsIndicatorHost, () => {
   if (currentMode === "live") void startRecording("live").catch(reportError);
 });
 
-settingsToggle.addEventListener("click", () => {
-  settingsHost.hidden = !settingsHost.hidden;
-  settingsHost.classList.toggle("is-open", !settingsHost.hidden);
+function openSettings(): void {
+  settingsModal.hidden = false;
+  document.addEventListener("keydown", onSettingsKey);
+}
+function closeSettings(): void {
+  settingsModal.hidden = true;
+  document.removeEventListener("keydown", onSettingsKey);
+}
+function onSettingsKey(e: KeyboardEvent): void {
+  if (e.key === "Escape") closeSettings();
+}
+settingsToggle.addEventListener("click", () => openSettings());
+settingsClose.addEventListener("click", () => closeSettings());
+settingsModal.addEventListener("click", (e) => {
+  if (e.target === settingsModal) closeSettings();
 });
 
 // ---- Health monitor --------------------------------------------------------
@@ -184,6 +213,7 @@ healthMonitor.start();
 let mic: MicPipeline | null = null;
 let sock: ListenSocket | null = null;
 let batch: BatchRecorder | null = null;
+let liveTimeout: LiveTimeoutManager | null = null;
 let currentSessionId: string | null = null;
 let currentMode: CaptureMode = loadCaptureMode();
 let recordingStartedAt = 0;
@@ -225,6 +255,22 @@ async function startRecording(mode: CaptureMode): Promise<void> {
     const wsUrl = `${wsProto}//${window.location.host}/listen`;
     sock = new ListenSocket({ url: wsUrl, onEvent: handleListenEvent });
     sock.start();
+    // Idle / hard-cap auto-stop. Reads the latest settings each time so the
+    // user can tune the values mid-session.
+    const liveSettings = settingsPanel.getSettings();
+    liveTimeout = new LiveTimeoutManager({
+      idleMinutes: liveSettings.liveIdleMinutes,
+      maxMinutes: liveSettings.liveMaxMinutes,
+      onTimeout: (reason: LiveTimeoutReason) => {
+        toast(
+          reason === "idle"
+            ? `已閒置 ${liveSettings.liveIdleMinutes} 分鐘，自動停止錄音`
+            : `已達 ${liveSettings.liveMaxMinutes} 分鐘上限，自動停止錄音`,
+        );
+        void stopRecording().catch(reportError);
+      },
+    });
+    liveTimeout.start();
     try {
       mic = new MicPipeline({
         deviceId: settings.deviceId ?? undefined,
@@ -260,11 +306,15 @@ async function togglePause(): Promise<void> {
   } else if (currentMode === "live" && mic) {
     if (nextState === "paused") mic.pause();
     else if (nextState === "recording") mic.resume();
+    // Pause/resume counts as user activity — push the idle timer forward.
+    liveTimeout?.onActivity();
   }
 }
 
 async function discardRecording(): Promise<void> {
   if (currentMode === "live") {
+    liveTimeout?.stop();
+    liveTimeout = null;
     await mic?.stop();
     mic = null;
     sock?.stop();
@@ -309,6 +359,8 @@ async function stopRecording(): Promise<void> {
       });
     }
 
+    liveTimeout?.stop();
+    liveTimeout = null;
     await mic?.stop();
     mic = null;
     sock?.stop();
@@ -495,6 +547,8 @@ function handleListenEvent(e: ListenEvent): void {
         transcript.root.scrollTop = transcript.root.scrollHeight;
       }
       history.render();
+      // Each confirmed final counts as activity — reset the idle timer.
+      liveTimeout?.onActivity();
       break;
     case "error":
       toast(`⚠ ${e.message}`);
