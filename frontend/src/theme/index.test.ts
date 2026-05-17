@@ -74,14 +74,14 @@ describe("theme", () => {
     const meta = document.head.querySelector<HTMLMetaElement>(
       'meta[name="theme-color"]',
     );
-    expect(meta?.content).toBe("#0f1115");
+    expect(meta?.content).toBe("#0d1117");
 
     saveTheme("light");
     applyTheme();
     expect(
       document.head.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
         ?.content,
-    ).toBe("#ffffff");
+    ).toBe("#eef1f5");
   });
 
   it("resolveTheme('system') follows prefers-color-scheme", () => {

@@ -26,6 +26,7 @@ export interface FinalCue {
 export class TranscriptView {
   private partialEl: HTMLDivElement;
   private finalsEl: HTMLDivElement;
+  private placeholderEl: HTMLDivElement;
   private copyBtn: HTMLButtonElement;
 
   constructor(public readonly root: HTMLElement) {
@@ -54,11 +55,25 @@ export class TranscriptView {
     });
     header.append(titleEl, this.copyBtn);
 
+    // Empty-state hint: mirrors the answer-pane placeholder so users know
+    // "this box is where the transcript appears" before any text streams in.
+    // Hidden whenever there's at least one final cue OR an active partial.
+    this.placeholderEl = document.createElement("div");
+    this.placeholderEl.className = "transcript-placeholder";
+    this.placeholderEl.textContent = t("transcript.placeholder");
+
     this.finalsEl = document.createElement("div");
     this.finalsEl.className = "transcript-finals";
     this.partialEl = document.createElement("div");
     this.partialEl.className = "transcript-partial";
-    this.root.append(header, this.finalsEl, this.partialEl);
+    this.root.append(header, this.placeholderEl, this.finalsEl, this.partialEl);
+  }
+
+  private updatePlaceholder(): void {
+    const hasContent =
+      this.finalsEl.childElementCount > 0 ||
+      (this.partialEl.textContent ?? "").length > 0;
+    this.placeholderEl.hidden = hasContent;
   }
 
   /** Plain-text join of all current finals (newline-separated). */
@@ -69,6 +84,7 @@ export class TranscriptView {
   setPartial(text: string): void {
     this.partialEl.textContent = text;
     this.partialEl.classList.toggle("is-active", text.length > 0);
+    this.updatePlaceholder();
   }
 
   /** Returns the in-flight partial text (empty when no partial is showing). */
@@ -99,11 +115,13 @@ export class TranscriptView {
     // Clearing the partial keeps the visual contract: partial slot shows the
     // current in-flight utterance only; finals own the confirmed history.
     this.clearPartial();
+    this.updatePlaceholder();
   }
 
   clear(): void {
     this.finalsEl.replaceChildren();
     this.clearPartial();
+    this.updatePlaceholder();
   }
 
   getFinals(): ReadonlyArray<FinalCue> {

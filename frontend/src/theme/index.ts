@@ -23,8 +23,8 @@ export const THEME_STORAGE_KEY = "whisper-wrap.theme";
 export const DEFAULT_THEME: Theme = "system";
 
 const THEME_COLORS: Record<ResolvedTheme, string> = {
-  light: "#ffffff",
-  dark: "#0f1115",
+  light: "#eef1f5",
+  dark: "#0d1117",
 };
 
 let activeTheme: Theme = DEFAULT_THEME;

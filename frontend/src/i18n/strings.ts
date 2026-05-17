@@ -59,6 +59,8 @@ export const STRINGS = {
     "transcript.copyTitle": "Copy current transcript",
     "transcript.copied": "Copied ✓",
     "transcript.copyFailed": "Copy failed",
+    "transcript.placeholder":
+      "(Press record to start; the transcript will appear here)",
 
     "history.title": "Sessions ({count})",
     "history.empty": "No sessions yet. Press record to start your first.",
@@ -183,6 +185,7 @@ export const STRINGS = {
     "transcript.copyTitle": "複製目前的逐字稿",
     "transcript.copied": "已複製 ✓",
     "transcript.copyFailed": "複製失敗",
+    "transcript.placeholder": "（按下錄音鍵開始，逐字稿會出現在這）",
 
     "history.title": "對話記錄（{count}）",
     "history.empty": "尚無記錄。按錄音鍵開始第一段。",

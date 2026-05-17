@@ -1,10 +1,16 @@
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
+  /* Light palette tuned for surface contrast. The page is a noticeably grey
+     `--bg` so that pure-white `--surface` cards (transcript, answer, mode
+     segments) clearly pop. Borders are bumped from the old gray-200 to
+     gray-300 so outlined widgets (chips, badges) read as deliberate edges,
+     not faint suggestions. Values inspired by Linear / GitHub light. */
+  --bg: #eef1f5;
+  --surface: #ffffff;
   --fg: #1a1a1f;
   --muted: #6b7280;
   --partial: #9ca3af;
-  --border: #e5e7eb;
+  --border: #cbd2da;
   --accent: #2563eb;
   --green: #16a34a;
   --yellow: #d97706;
@@ -17,22 +23,27 @@
 /* Dark palette: applies when the user has explicitly chosen dark via the
    header toggle (data-theme="dark") OR when no preference is stored yet and
    the OS reports `prefers-color-scheme: dark`. The :not([data-theme]) guard
-   prevents the OS query from overriding an explicit "light" pick. */
+   prevents the OS query from overriding an explicit "light" pick.
+   Page is the deeper "ink" (GitHub-dark-style #0d1117); surface is visibly
+   raised (#20252e) so cards look elevated rather than flush. Border bumped
+   to #3a4150 so outlined widgets are readable in dim ambient light. */
 :root[data-theme="dark"] {
-  --bg: #0f1115;
+  --bg: #0d1117;
+  --surface: #20252e;
   --fg: #f3f4f6;
   --muted: #9ca3af;
   --partial: #6b7280;
-  --border: #1f2937;
+  --border: #3a4150;
   --accent: #60a5fa;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #0f1115;
+    --bg: #0d1117;
+    --surface: #20252e;
     --fg: #f3f4f6;
     --muted: #9ca3af;
     --partial: #6b7280;
-    --border: #1f2937;
+    --border: #3a4150;
     --accent: #60a5fa;
   }
 }
@@ -68,6 +79,49 @@ body { min-height: 100vh; }
 }
 .app-header h1 { font-size: 1.05rem; margin: 0; flex: 1; }
 
+/* Unified header button: theme toggle + settings share one visual contract so
+   they line up on the baseline regardless of which glyph each one carries.
+   Previously the icons were emoji (🌙) vs text-style symbol (⚙︎), which
+   diverged in size + baseline (especially in dark mode where the colour-emoji
+   moon clashed with the muted palette). SVG icons sized via .header-icon are
+   identical across OS and theme. */
+.app-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.app-header button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+.header-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ---- Narrow-viewport header cleanup ----
    At ≤720px the header gets cramped (h1 + "● Connected" + "AI: <model>" pill
    + "⚙︎ Settings" button = ~420px before gaps). Demote each secondary widget
@@ -78,8 +132,8 @@ body { min-height: 100vh; }
   .app-header h1 { font-size: 0.95rem; }
   .backend-indicator .label { display: none; }
   .header-button-label { display: none; }
-  /* Settings button: compact pill so the gear icon is the focal point. */
-  .app-header button { padding: 0.35rem 0.55rem; font-size: 1rem; line-height: 1; }
+  /* Narrow viewport: tighten padding so the icon-only buttons stay compact. */
+  .app-header button { padding: 0.4rem 0.55rem; gap: 0; }
 }
 
 .banner {
@@ -125,6 +179,7 @@ body { min-height: 100vh; }
   padding: 0.1rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: 999px;
+  background: var(--surface);
   cursor: help;
   white-space: nowrap;
   font-weight: 400;
@@ -152,7 +207,11 @@ body { min-height: 100vh; }
   padding: 0.9rem 1rem;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: transparent;
+  /* Filled with --surface so Batch/Live read as first-class segment cards
+     against the page bg. Previously transparent, which made them blend into
+     the canvas — the user couldn't tell at a glance "this is a tappable
+     panel" vs "this is just text on the page". */
+  background: var(--surface);
   color: inherit;
   cursor: pointer;
   text-align: left;
@@ -317,29 +376,40 @@ body { min-height: 100vh; }
 .conn-indicator[data-state="failed"] .conn-dot { background: var(--red); }
 .conn-retry { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
 
-.transcript-view {
-  min-height: 200px;
+/* Shared "panel card" visual contract used by both .transcript-view and
+   .answer-pane. They previously diverged (transcript: outlined transparent /
+   answer: filled grey, no header divider), which made them feel like two
+   unrelated widgets. Same surface bg, same border, same header divider, same
+   title typography, same copy-button shape — only min-height differs because
+   they hold different content volumes. */
+.transcript-view,
+.answer-pane {
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.75rem;
+  border-radius: 8px;
+  padding: 0.85rem 0.95rem;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
-.transcript-header {
+.transcript-view { min-height: 200px; }
+.transcript-header,
+.answer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding-bottom: 0.4rem;
+  padding-bottom: 0.45rem;
   border-bottom: 1px solid var(--border);
 }
-.transcript-title {
+.transcript-title,
+.answer-title {
   font-size: 0.85rem;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--muted);
 }
-.transcript-copy {
+.transcript-copy,
+.answer-copy {
   padding: 0.25rem 0.7rem;
   font-size: 0.8rem;
   border: 1px solid var(--border);
@@ -348,7 +418,9 @@ body { min-height: 100vh; }
   color: inherit;
   cursor: pointer;
 }
-.transcript-copy:hover { border-color: var(--accent); color: var(--accent); }
+.transcript-copy:hover,
+.answer-copy:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.answer-copy:disabled { cursor: not-allowed; opacity: 0.4; }
 .transcript-final { display: flex; gap: 0.5rem; }
 .transcript-ts { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 3.5em; }
 /* Batch finals collapse to a single row with start_ms=0; skip the timestamp
@@ -357,6 +429,16 @@ body { min-height: 100vh; }
 .transcript-text { flex: 1; }
 .transcript-partial { color: var(--partial); font-style: italic; min-height: 1.2em; }
 .transcript-partial.is-active { color: var(--partial); }
+/* Empty-state hint: mirrors the AI answer pane's placeholder so users know
+   "this box is where the transcript appears" before any text has streamed in.
+   Hidden whenever there's at least one final cue OR an active partial. */
+.transcript-placeholder {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.9rem;
+  padding: 0.25rem 0;
+}
+.transcript-placeholder[hidden] { display: none; }
 
 .actions-bar { display: flex; flex-direction: column; gap: 0.6rem; }
 /* Section header: [heading + model badge] on the left, (touch-only) toggle on
@@ -393,7 +475,7 @@ body { min-height: 100vh; }
 .actions-category-heading { font-size: 0.8rem; font-weight: 600; color: var(--muted, #9ca3af); flex: 0 0 auto; }
 .actions-category-heading::after { content: "："; }
 .actions-category-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.actions-chip { padding: 0.35rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: inherit; cursor: pointer; font-size: 0.85rem; transition: opacity 0.15s ease, border-color 0.15s ease; }
+.actions-chip { padding: 0.35rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: inherit; cursor: pointer; font-size: 0.85rem; transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease; }
 .actions-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .actions-chip:disabled { cursor: not-allowed; opacity: 0.45; }
 .actions-chip[data-loading="true"] { opacity: 1; border-color: var(--accent); color: var(--accent); animation: actions-chip-pulse 1.1s ease-in-out infinite; }
@@ -556,17 +638,11 @@ body { min-height: 100vh; }
 }
 .actions-tooltip.is-visible { opacity: 1; }
 
-/* Answer pane: header (title + copy) + body. */
-/* `display: flex` would otherwise mask the [hidden] attribute's default
-   display: none, so we need to override explicitly — same pattern as
-   .ws-indicator-host[hidden], .modal-backdrop[hidden], .upload-retry[hidden]. */
+/* Answer pane: card visual contract is shared with .transcript-view (see
+   block near .transcript-final). Only the answer-specific bits remain here:
+   the [hidden] override, the body min-height, and the loading-state animation. */
 .answer-pane[hidden] { display: none; }
-.answer-pane { min-height: 80px; padding: 0.75rem; background: var(--border); border-radius: 4px; display: flex; flex-direction: column; gap: 0.5rem; }
-.answer-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.answer-title { font-size: 0.85rem; font-weight: 600; color: var(--muted, #9ca3af); }
-.answer-copy { padding: 0.2rem 0.55rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font-size: 0.75rem; }
-.answer-copy:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.answer-copy:disabled { cursor: not-allowed; opacity: 0.4; }
+.answer-pane { min-height: 80px; }
 .answer-body { white-space: pre-wrap; min-height: 1.5em; }
 .answer-pane.is-loading .answer-body { color: var(--muted, #9ca3af); font-style: italic; }
 .answer-pane.is-loading .answer-body::after {
