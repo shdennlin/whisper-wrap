@@ -17,6 +17,11 @@ export const STRINGS = {
     "common.dismiss": "Dismiss",
     "common.delete": "Delete",
 
+    "theme.toggleAriaToLight": "Switch to light mode",
+    "theme.toggleAriaToDark": "Switch to dark mode",
+    "theme.labelLight": "Light",
+    "theme.labelDark": "Dark",
+
     "connection.idle": "Not connected",
     "connection.open": "Connected",
     "connection.reconnecting": "Reconnecting…",
@@ -135,6 +140,11 @@ export const STRINGS = {
     "common.close": "關閉",
     "common.dismiss": "略過",
     "common.delete": "刪除",
+
+    "theme.toggleAriaToLight": "切換到淺色模式",
+    "theme.toggleAriaToDark": "切換到深色模式",
+    "theme.labelLight": "淺色",
+    "theme.labelDark": "深色",
 
     "connection.idle": "未連線",
     "connection.open": "已連線",

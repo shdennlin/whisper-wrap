@@ -14,8 +14,20 @@
     "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
 }
 
+/* Dark palette: applies when the user has explicitly chosen dark via the
+   header toggle (data-theme="dark") OR when no preference is stored yet and
+   the OS reports `prefers-color-scheme: dark`. The :not([data-theme]) guard
+   prevents the OS query from overriding an explicit "light" pick. */
+:root[data-theme="dark"] {
+  --bg: #0f1115;
+  --fg: #f3f4f6;
+  --muted: #9ca3af;
+  --partial: #6b7280;
+  --border: #1f2937;
+  --accent: #60a5fa;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #0f1115;
     --fg: #f3f4f6;
     --muted: #9ca3af;

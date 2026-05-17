@@ -21,6 +21,14 @@
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
 import { loadLocale, t } from "./i18n";
+import {
+  applyTheme,
+  getTheme,
+  loadTheme,
+  resolveTheme,
+  saveTheme,
+  type ResolvedTheme,
+} from "./theme";
 import { MicPipeline } from "./capture/mic-pipeline";
 import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
 import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
@@ -50,6 +58,11 @@ import {
 
 // Resolve locale before any component reads strings.
 loadLocale();
+// Resolve theme before first paint so the page doesn't flash the OS default
+// when the user has explicitly chosen the opposite. applyTheme() writes
+// `data-theme` on <html> and updates the <meta theme-color> tag.
+loadTheme();
+applyTheme();
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("missing #app root");
@@ -60,6 +73,46 @@ const header = el("header", "app-header");
 const title = el("h1");
 title.textContent = t("app.appName");
 const indicatorHost = el("div");
+// Theme toggle: a two-state button that flips between light and dark. We
+// don't expose a "system" option in the UI — it's the implicit default for
+// first-time visitors (stored as no key in localStorage), but once the user
+// clicks the toggle they get a sticky explicit pick. Same icon+label shape as
+// the settings button so the narrow-viewport CSS hides both labels uniformly.
+const themeToggle = document.createElement("button");
+themeToggle.type = "button";
+themeToggle.className = "theme-toggle";
+const themeIcon = document.createElement("span");
+themeIcon.setAttribute("aria-hidden", "true");
+const themeLabel = document.createElement("span");
+themeLabel.className = "header-button-label";
+themeToggle.append(themeIcon, " ", themeLabel);
+function paintThemeButton(resolved: ResolvedTheme): void {
+  // Icon shows what the page currently *is*; the aria-label / tooltip
+  // describes what clicking does (i.e. the opposite). Mirrors GitHub /
+  // Vercel / macOS behaviour where the icon is a status indicator.
+  if (resolved === "dark") {
+    themeIcon.textContent = "🌙";
+    themeLabel.textContent = t("theme.labelDark");
+    themeToggle.setAttribute("aria-label", t("theme.toggleAriaToLight"));
+    themeToggle.title = t("theme.toggleAriaToLight");
+  } else {
+    themeIcon.textContent = "☀︎";
+    themeLabel.textContent = t("theme.labelLight");
+    themeToggle.setAttribute("aria-label", t("theme.toggleAriaToDark"));
+    themeToggle.title = t("theme.toggleAriaToDark");
+  }
+}
+paintThemeButton(resolveTheme());
+themeToggle.addEventListener("click", () => {
+  // From any current state, jump to the explicit opposite of what's painted.
+  // This collapses the tri-state model (light/dark/system) into a simple
+  // two-state toggle for the user: one click moves you to the other palette
+  // and pins the choice.
+  const next = resolveTheme(getTheme()) === "dark" ? "light" : "dark";
+  saveTheme(next);
+  const resolved = applyTheme(next);
+  paintThemeButton(resolved);
+});
 // Settings button: icon + text. The text span is hidden by the narrow-viewport
 // CSS so mobile gets a clean icon-only button while desktop still labels it.
 const settingsToggle = document.createElement("button");
@@ -75,7 +128,7 @@ settingsToggle.append(settingsIcon, " ", settingsLabel);
 // AI model badge previously lived here (next to the backend indicator). It now
 // sits next to the "AI Enhance" section heading inside ActionsBar — see
 // actionsBar.setModel() below.
-header.append(title, indicatorHost, settingsToggle);
+header.append(title, indicatorHost, themeToggle, settingsToggle);
 
 const main = el("main", "main-pane");
 
