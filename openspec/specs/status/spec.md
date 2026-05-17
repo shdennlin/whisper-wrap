@@ -151,20 +151,66 @@ tests:
 
 The system SHALL expose `GET /` returning a JSON document that lists every public HTTP and WebSocket route registered on the FastAPI app. Each entry SHALL include the HTTP method (or the literal string `"WS"` for WebSocket routes), the URL path, and a one-line `description`. The list SHALL be a single source of truth for clients discovering the API surface; documentation generators MAY read it. The response SHALL be reachable without authentication.
 
-The catalogue SHALL include the OpenAI-compatibility surface introduced by the `openai-compat` capability so operators can confirm at a glance that the compat layer is mounted.
+The catalogue SHALL include the OpenAI-compatibility surface introduced by the `openai-compat` capability and the PWA surface introduced by the `pwa-listen-client` and `prompt-actions` capabilities so operators can confirm at a glance that every layer is mounted.
 
 #### Scenario: Discovery payload shape
 
 - **WHEN** a client requests `GET /`
-- **THEN** the response SHALL be HTTP 200 with a JSON document of shape `{"endpoints": [{"method": "POST", "path": "/transcribe", "description": "..."}, ...]}` and SHALL include at least these entries: `POST /transcribe`, `WS /listen`, `POST /ask`, `GET /status`, `GET /`, `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `GET /v1/models`
+- **THEN** the response SHALL be HTTP 200 with a JSON document of shape `{"endpoints": [{"method": "POST", "path": "/transcribe", "description": "..."}, ...]}` and SHALL include at least these entries: `POST /transcribe`, `WS /listen`, `POST /ask`, `GET /status`, `GET /`, `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `GET /v1/models`, `GET /actions`, `GET /app/`
 
-##### Example: catalogue rows for OpenAI-compat routes
+##### Example: catalogue rows for v2.4 surfaces
 
-| method | path | description (illustrative; exact wording is implementation-defined) |
-| ------ | ---- | --- |
-| POST | /v1/audio/transcriptions | OpenAI-compatible audio transcription endpoint |
-| POST | /v1/audio/translations | OpenAI-compatible audio translation endpoint (output: English) |
-| GET | /v1/models | OpenAI-compatible model catalogue (lists the active whisper-wrap model) |
+| method | path        | description (illustrative; exact wording is implementation-defined) |
+| ------ | ----------- | --- |
+| GET    | /actions    | Prompt action templates registry (consumed by the PWA) |
+| GET    | /app/       | PWA live-captioning client |
+
+
+<!-- @trace
+source: v2-4-pwa-listen-client
+updated: 2026-05-17
+code:
+  - frontend/package.json
+  - app/api/status.py
+  - frontend/src/capture/downsample.ts
+  - README.md
+  - docs/INSTALLATION.md
+  - frontend/src/capture/listen-socket.ts
+  - docs/HTTPS-TAILSCALE.md
+  - frontend/src/ui/transcript-view.ts
+  - frontend/src/storage/history-store.ts
+  - registry/actions.yaml
+  - frontend/src/ui/connection-indicator.ts
+  - app/api/actions.py
+  - frontend/src/main.ts
+  - frontend/CHECKLIST.md
+  - frontend/src/capture/audio-worklet.ts
+  - app/main.py
+  - frontend/src/ui/actions-bar.ts
+  - frontend/public/icons/icon-192.png
+  - frontend/tsconfig.json
+  - frontend/src/capture/mic-pipeline.ts
+  - frontend/src/style.css
+  - frontend/index.html
+  - frontend/src/ui/settings-panel.ts
+  - frontend/src/ui/history-panel.ts
+  - app/services/actions.py
+  - frontend/src/export/subtitle-export.ts
+  - CLAUDE.md
+  - frontend/src/types/audioworklet.d.ts
+  - Makefile
+  - frontend/public/icons/icon-512.png
+  - frontend/vite.config.ts
+tests:
+  - frontend/src/export/subtitle-export.test.ts
+  - tests/test_actions.py
+  - frontend/src/capture/downsample.test.ts
+  - frontend/src/ui/ui-components.test.ts
+  - frontend/src/ui/actions-and-settings.test.ts
+  - frontend/src/storage/history-store.test.ts
+  - frontend/src/capture/listen-socket.test.ts
+  - tests/test_status.py
+-->
 
 ---
 ### Requirement: Status replaces the removed health endpoint
