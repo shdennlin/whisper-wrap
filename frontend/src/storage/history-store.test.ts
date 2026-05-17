@@ -8,8 +8,25 @@ import {
   HistoryStore,
   STORAGE_KEY,
   DEFAULT_RETENTION,
+  formatSessionDuration,
   type SessionRecord,
 } from "./history-store";
+
+describe("formatSessionDuration", () => {
+  it("shows tenths-of-second under one minute", () => {
+    expect(formatSessionDuration(0)).toBe("0.0s");
+    expect(formatSessionDuration(300)).toBe("0.3s");
+    expect(formatSessionDuration(12_345)).toBe("12.3s");
+    expect(formatSessionDuration(59_900)).toBe("59.9s");
+  });
+
+  it("shows mm:ss.x at or over one minute", () => {
+    expect(formatSessionDuration(60_000)).toBe("1:00.0");
+    expect(formatSessionDuration(60_500)).toBe("1:00.5");
+    expect(formatSessionDuration(125_400)).toBe("2:05.4");
+    expect(formatSessionDuration(600_000)).toBe("10:00.0");
+  });
+});
 
 describe("HistoryStore", () => {
   beforeEach(() => {

@@ -30,21 +30,20 @@ export function sessionDurationMs(s: SessionRecord): number {
 }
 
 /**
- * Format a duration with one decimal place under 60 s, mm:ss for longer takes.
- * Used in the history list so users can eyeball which sessions were
- * accidental clicks vs real recordings.
+ * Format a duration with one decimal place. Under 60 s renders as `12.3s`;
+ * 60 s and over renders as `mm:ss.x` so the user can see the same tenths-of-
+ * second resolution at any length.
  */
 export function formatSessionDuration(ms: number): string {
-  if (ms < 60_000) {
-    const tenths = Math.floor(ms / 100);
-    const sec = Math.floor(tenths / 10);
-    const decimal = tenths % 10;
-    return `${sec}.${decimal}s`;
+  const tenths = Math.floor(ms / 100);
+  const totalSec = Math.floor(tenths / 10);
+  const decimal = tenths % 10;
+  if (totalSec < 60) {
+    return `${totalSec}.${decimal}s`;
   }
-  const totalSec = Math.floor(ms / 1000);
   const mm = Math.floor(totalSec / 60);
   const ss = totalSec % 60;
-  return `${mm}:${String(ss).padStart(2, "0")}`;
+  return `${mm}:${String(ss).padStart(2, "0")}.${decimal}`;
 }
 
 export interface SessionFinal {
