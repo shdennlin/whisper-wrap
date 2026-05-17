@@ -48,4 +48,4 @@
 
 - [x] 8.1 Full test suite green per the design's "Acceptance criteria" section: `uv run pytest -q` (expect at least 320 passed) AND `cd frontend && bun run test` (expect at least 160 passed). Document the counts in the commit body.
 - [x] 8.2 `make build-frontend` succeeds; visit `/app/` and smoke test: start a Batch recording, stop, see transcript, click a chip, see AI answer, see new session in right-side history, expand the session, replay audio (loads from backend), delete the session (gone from history AND `data/audio/<id>.webm` removed). Document the smoke pass in the commit body.
-- [ ] 8.3 Stage all changes and commit on `feat/history-persistence-sqlite` branch with a comprehensive commit message summarising the new backend capability, frontend swap, and migration tool. No `git push` (user verifies first).
+- [x] 8.3 Stage all changes and commit on `feat/history-persistence-sqlite` branch with a comprehensive commit message summarising the new backend capability, frontend swap, and migration tool. No `git push` (user verifies first).
