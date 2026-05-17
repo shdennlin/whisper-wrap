@@ -73,6 +73,7 @@ export class ModeCard {
     this.controls.className = "controls";
     this.pauseBtn = makeIconButton("⏸", "暫停");
     this.discardBtn = makeIconButton("✕", "捨棄錄音");
+    this.discardBtn.classList.add("discard-btn");
     if (opts.pauseSupported !== false) {
       this.controls.appendChild(this.pauseBtn);
     }
@@ -83,19 +84,51 @@ export class ModeCard {
     this.root.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest(".mode-card .controls button"))
         return;
+      // Body click resets any pending discard-confirm so it doesn't lurk.
+      this.cancelDiscardConfirm();
       if (this.state === "idle") this.opts.onStart();
       else if (this.state === "recording" || this.state === "paused")
         this.opts.onStop();
     });
     this.pauseBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      this.cancelDiscardConfirm();
       this.opts.onPauseResume();
     });
     this.discardBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.opts.onDiscard();
+      if (this.discardConfirming) {
+        this.cancelDiscardConfirm();
+        this.opts.onDiscard();
+      } else {
+        this.startDiscardConfirm();
+      }
     });
     this.applyState();
+  }
+
+  private discardConfirming = false;
+  private discardConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private startDiscardConfirm(): void {
+    this.discardConfirming = true;
+    this.discardBtn.classList.add("is-confirming");
+    this.discardBtn.textContent = "確定?";
+    this.discardBtn.title = "再按一次確認捨棄（3 秒內）";
+    if (this.discardConfirmTimer !== null) clearTimeout(this.discardConfirmTimer);
+    this.discardConfirmTimer = setTimeout(() => this.cancelDiscardConfirm(), 3000);
+  }
+
+  private cancelDiscardConfirm(): void {
+    if (this.discardConfirmTimer !== null) {
+      clearTimeout(this.discardConfirmTimer);
+      this.discardConfirmTimer = null;
+    }
+    if (!this.discardConfirming) return;
+    this.discardConfirming = false;
+    this.discardBtn.classList.remove("is-confirming");
+    this.discardBtn.textContent = "✕";
+    this.discardBtn.title = "捨棄錄音";
   }
 
   getState(): ModeCardState {
@@ -147,6 +180,7 @@ export class ModeCard {
     this.state = "idle";
     this.accumulatedMs = 0;
     this.stopTimer();
+    this.cancelDiscardConfirm();
     this.timer.textContent = "0:00.0";
     this.applyState();
   }

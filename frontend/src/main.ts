@@ -217,7 +217,9 @@ async function startRecording(mode: CaptureMode): Promise<void> {
   if (mode === "live") {
     currentSessionId = store.startSession();
     history.render();
-    wsIndicatorHost.hidden = false;
+    // WS row stays hidden while everything is fine; the connection indicator
+    // surfaces itself only on reconnecting / failed states (see handler below).
+    wsIndicatorHost.hidden = true;
     wsIndicator.setState("idle");
     const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProto}//${window.location.host}/listen`;
@@ -341,7 +343,12 @@ async function processBatchRecording(
     const sessionId = store.startSession();
     store.appendFinal(sessionId, { text, start_ms: 0, end_ms: durationMs });
     store.stopSession(sessionId);
-    transcript.appendFinal({ text, start_ms: 0, end_ms: durationMs });
+    transcript.appendFinal({
+      text,
+      start_ms: 0,
+      end_ms: durationMs,
+      kind: "batch",
+    });
     currentSessionId = sessionId;
     history.render();
     await maybeAutoCopy();
@@ -438,6 +445,10 @@ function handleListenEvent(e: ListenEvent): void {
   switch (e.type) {
     case "state":
       wsIndicator.setState(e.state);
+      // Surface the WS row only when there's something to act on; healthy
+      // ("open") and pre-flight ("idle") states are noise during a normal
+      // Live recording.
+      wsIndicatorHost.hidden = e.state === "open" || e.state === "idle";
       break;
     case "partial":
       if (loadSettings().showPartials) transcript.setPartial(e.text);

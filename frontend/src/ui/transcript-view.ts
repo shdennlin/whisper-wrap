@@ -1,13 +1,24 @@
 /**
- * Renders live caption events: a single greyed-italic partial slot (replaced
- * on every new partial) and an append-only list of confirmed black final cues
- * with `mm:ss` timestamps.
+ * Renders capture results.
+ *
+ * Layout: a header bar (title + copy button), an append-only list of confirmed
+ * final cues, and a greyed-italic partial slot replaced on every new partial.
+ *
+ * Each final carries a `kind`:
+ *   - "live"  → prefixed with an `mm:ss` start-time column (the WS /listen
+ *               server emits per-utterance timestamps)
+ *   - "batch" → no timestamp column (POST /transcribe collapses the run into
+ *               one final with start_ms=0, so a timestamp would always read
+ *               "00:00" and just add visual noise)
  */
+
+export type FinalKind = "live" | "batch";
 
 export interface FinalCue {
   text: string;
   start_ms: number;
   end_ms: number;
+  kind?: FinalKind;
 }
 
 export class TranscriptView {
@@ -17,6 +28,12 @@ export class TranscriptView {
 
   constructor(public readonly root: HTMLElement) {
     this.root.classList.add("transcript-view");
+
+    const header = document.createElement("div");
+    header.className = "transcript-header";
+    const titleEl = document.createElement("span");
+    titleEl.className = "transcript-title";
+    titleEl.textContent = "逐字稿";
     this.copyBtn = document.createElement("button");
     this.copyBtn.type = "button";
     this.copyBtn.className = "transcript-copy";
@@ -28,11 +45,13 @@ export class TranscriptView {
         setTimeout(() => (this.copyBtn.textContent = "複製"), 1500);
       });
     });
+    header.append(titleEl, this.copyBtn);
+
     this.finalsEl = document.createElement("div");
     this.finalsEl.className = "transcript-finals";
     this.partialEl = document.createElement("div");
     this.partialEl.className = "transcript-partial";
-    this.root.append(this.copyBtn, this.finalsEl, this.partialEl);
+    this.root.append(header, this.finalsEl, this.partialEl);
   }
 
   /** Plain-text join of all current finals (newline-separated). */
@@ -52,13 +71,18 @@ export class TranscriptView {
   appendFinal(cue: FinalCue): void {
     const row = document.createElement("div");
     row.className = "transcript-final";
-    const ts = document.createElement("span");
-    ts.className = "transcript-ts";
-    ts.textContent = formatMmSs(cue.start_ms);
+    const kind: FinalKind = cue.kind ?? "live";
+    row.dataset.kind = kind;
+    if (kind === "live") {
+      const ts = document.createElement("span");
+      ts.className = "transcript-ts";
+      ts.textContent = formatMmSs(cue.start_ms);
+      row.appendChild(ts);
+    }
     const text = document.createElement("span");
     text.className = "transcript-text";
     text.textContent = cue.text;
-    row.append(ts, text);
+    row.appendChild(text);
     this.finalsEl.appendChild(row);
     // Clearing the partial keeps the visual contract: partial slot shows the
     // current in-flight utterance only; finals own the confirmed history.
@@ -77,7 +101,8 @@ export class TranscriptView {
     for (const row of Array.from(this.finalsEl.children)) {
       const text = row.querySelector(".transcript-text")?.textContent ?? "";
       const ts = row.querySelector(".transcript-ts")?.textContent ?? "00:00";
-      result.push({ text, start_ms: parseMmSs(ts), end_ms: parseMmSs(ts) });
+      const kind = ((row as HTMLElement).dataset.kind as FinalKind) ?? "live";
+      result.push({ text, start_ms: parseMmSs(ts), end_ms: parseMmSs(ts), kind });
     }
     return result;
   }
