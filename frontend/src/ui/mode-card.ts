@@ -167,11 +167,14 @@ export class ModeCard {
     return this.state;
   }
 
-  /** Move to `processing` (transcribe in flight). */
-  showProcessing(): void {
+  /**
+   * Move to `processing`. Optional custom label replaces the default
+   * "處理中…" (e.g. "確認最後一段…" for Live's graceful-stop wait).
+   */
+  showProcessing(label = "處理中…"): void {
     this.state = "processing";
     this.stopTimer();
-    this.timer.textContent = "處理中…";
+    this.timer.textContent = label;
     this.applyState();
   }
 

@@ -225,6 +225,22 @@ let recordingStartedAt = 0;
  * Cleared whenever the server promotes a partial to a final.
  */
 let lastLivePartialText = "";
+
+/**
+ * One-shot resolver woken up by the next `final` event during a graceful
+ * Live stop. Cleared after firing (or after the timeout expires) so it
+ * never carries across recordings.
+ */
+let pendingStopFinalResolver: (() => void) | null = null;
+
+/** 250 ms silent PCM frame at 16 kHz mono int16, used to coax the server's
+ *  VAD into endpointing the in-flight utterance on a graceful Live stop. */
+const SILENT_FRAME_BYTES = 4000 * 2;
+/** Push 2 s of silence (8 × 250 ms) on stop; long enough to clear any sane
+ *  end-of-utterance VAD window. */
+const GRACEFUL_STOP_SILENCE_FRAMES = 8;
+/** Hard ceiling on how long we wait for the final after pressing stop. */
+const GRACEFUL_STOP_TIMEOUT_MS = 3000;
 const settings = settingsPanel.getSettings();
 
 function activeCard(): ModeCard {
@@ -347,12 +363,23 @@ async function discardRecording(): Promise<void> {
 
 async function stopRecording(): Promise<void> {
   if (currentMode === "live") {
-    // Capture any partial that's still in flight but hasn't been promoted
-    // to a final yet — otherwise pressing stop right after speaking would
-    // lose the last utterance. We read from `lastLivePartialText` (not
-    // `transcript.getPartial()`) so the flush still works when the user has
-    // `showPartials` disabled in Settings. The synthesized timestamp comes
-    // from elapsed wall-clock so the row slots in chronologically.
+    // Graceful Live stop: keep the WS open, pause the real mic, push a short
+    // burst of silence frames so the server's silero-VAD endpoints the
+    // pending utterance, and wait briefly for one more `final` event. If the
+    // final lands, the partial-text variable will already have been cleared
+    // by the event handler so the fallback flush below is a no-op. If
+    // nothing arrives before the timeout, fall back to flushing the latest
+    // partial text we tracked locally.
+    if (sock && mic) {
+      activeCard().showProcessing("確認最後一段…");
+      mic.pause();
+      sendSilenceFrames(sock, GRACEFUL_STOP_SILENCE_FRAMES);
+      await waitForNextFinalOr(GRACEFUL_STOP_TIMEOUT_MS);
+    }
+
+    // After the graceful wait, flush any remaining in-flight partial. Reads
+    // `lastLivePartialText` (not `transcript.getPartial()`) so the flush
+    // still works when the user has `showPartials` disabled in Settings.
     const partial = lastLivePartialText.trim();
     if (partial && currentSessionId) {
       const ts = Math.max(0, Date.now() - recordingStartedAt);
@@ -548,6 +575,10 @@ function handleListenEvent(e: ListenEvent): void {
       // The server confirmed the in-flight buffer; the partial slot is
       // consumed, nothing left to flush at stop time.
       lastLivePartialText = "";
+      // Wake up any graceful-stop waiter — we just got the final it was
+      // hoping for.
+      pendingStopFinalResolver?.();
+      pendingStopFinalResolver = null;
       if (currentSessionId) {
         store.appendFinal(currentSessionId, {
           text: e.text,
@@ -641,6 +672,32 @@ function mimeToExt(mime: string): string {
   if (mime.startsWith("audio/mp4")) return "m4a";
   if (mime.startsWith("audio/ogg")) return "ogg";
   return "bin";
+}
+
+function sendSilenceFrames(socket: ListenSocket, frameCount: number): void {
+  for (let i = 0; i < frameCount; i++) {
+    // Fresh ArrayBuffer per frame because ListenSocket.send may transfer
+    // ownership; reusing one buffer would detach it on the second send.
+    socket.send(new ArrayBuffer(SILENT_FRAME_BYTES));
+  }
+}
+
+function waitForNextFinalOr(timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    pendingStopFinalResolver = settle;
+    setTimeout(() => {
+      // Clear the resolver only if we're still the active waiter; a real
+      // final arrival would have cleared it already.
+      if (pendingStopFinalResolver === settle) pendingStopFinalResolver = null;
+      settle();
+    }, timeoutMs);
+  });
 }
 
 function reportError(e: unknown): void {
