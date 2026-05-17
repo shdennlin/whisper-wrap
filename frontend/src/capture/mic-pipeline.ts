@@ -3,7 +3,7 @@
  * downsampler and delivers 4000-sample (250 ms) Int16 frames via callback.
  */
 
-import workletUrl from "./audio-worklet?url";
+import workletUrl from "./audio-worklet.js?url";
 
 export type FrameHandler = (frame: ArrayBuffer) => void;
 

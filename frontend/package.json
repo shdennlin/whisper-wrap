@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --environment happy-dom",
+    "test:watch": "vitest --environment happy-dom"
   },
   "devDependencies": {
     "@vitest/web-worker": "^2.1.5",
