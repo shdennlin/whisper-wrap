@@ -11,20 +11,40 @@ import {
   sessionDurationMs,
   type SessionRecord,
 } from "../storage/history-store";
+import type { StoredAudio } from "../storage/audio-store";
 import { exportSrt, exportVtt, exportTxt } from "../export/subtitle-export";
+import { WaveformPlayer, type PlayerInput } from "./waveform-player";
+import { ReAsrForm, type ReAsrFormDefaults, type ReAsrFormDeps } from "./re-asr-form";
 
 export interface HistoryPanelOptions {
   root: HTMLElement;
   store: HistoryStore;
+  /**
+   * Lookup the stored audio record for a session. Returns null when not
+   * present (either pre-capability session or audio was evicted).
+   */
+  getAudio?: (session_id: string) => Promise<StoredAudio | null>;
+  /** ReAsrForm needs this to POST to /transcribe with the stored blob. */
+  reAsrDeps?: ReAsrFormDeps;
+  /** Defaults for the ReAsrForm (prompt, language, language options). */
+  reAsrDefaults?: () => ReAsrFormDefaults;
 }
 
 export class HistoryPanel {
+  /** Tracks active players so we can destroy them on re-render. */
+  private players: WaveformPlayer[] = [];
+
   constructor(private readonly opts: HistoryPanelOptions) {
     this.opts.root.classList.add("history-panel");
     this.render();
   }
 
   render(): void {
+    // Tear down any in-flight players from the previous render so we don't
+    // leak event listeners / rAF tickers when the user refreshes mid-playback.
+    for (const p of this.players) p.destroy();
+    this.players = [];
+
     const sessions = this.opts.store.list();
     this.opts.root.replaceChildren();
     const header = document.createElement("h2");
@@ -65,6 +85,18 @@ export class HistoryPanel {
     const summary = document.createElement("summary");
     summary.textContent = t("history.expand");
     preview.appendChild(summary);
+
+    // Waveform player + (optionally) Re-transcribe form. Loading is deferred
+    // until the user expands the <details> so a long history doesn't spike
+    // memory by decoding every session's audio on render.
+    const playerHost = document.createElement("div");
+    playerHost.className = "history-player-host";
+    preview.appendChild(playerHost);
+    const reAsrHost = document.createElement("div");
+    reAsrHost.className = "history-reasr-host";
+    preview.appendChild(reAsrHost);
+    this.mountPlayerOnExpand(s, preview, playerHost, reAsrHost);
+
     const body = document.createElement("pre");
     body.className = "history-body";
     body.textContent = s.finals.map((f) => f.text).join("\n");
@@ -97,6 +129,99 @@ export class HistoryPanel {
     );
     card.appendChild(actions);
     return card;
+  }
+
+  /**
+   * Look up this session's audio and mount the player + optional re-transcribe
+   * UI on the first time the user opens the <details> for the card. Idempotent:
+   * subsequent toggles do nothing because the host elements stay populated.
+   *
+   * Player state mapping:
+   *   - audio record present                → WaveformPlayer "audio" + Re-transcribe button
+   *   - record absent AND session.audio_saved → "expired" (was saved, then evicted)
+   *   - record absent AND !session.audio_saved → "missing" (predates capability or save was off)
+   */
+  private mountPlayerOnExpand(
+    s: SessionRecord,
+    preview: HTMLDetailsElement,
+    playerHost: HTMLElement,
+    reAsrHost: HTMLElement,
+  ): void {
+    let mounted = false;
+    const tryMount = (): void => {
+      if (mounted || !preview.open) return;
+      mounted = true;
+      void this.attachPlayer(s, playerHost, reAsrHost);
+    };
+    preview.addEventListener("toggle", tryMount);
+    // If the card is already open at render time (e.g. user re-render),
+    // mount synchronously.
+    if (preview.open) tryMount();
+  }
+
+  private async attachPlayer(
+    s: SessionRecord,
+    playerHost: HTMLElement,
+    reAsrHost: HTMLElement,
+  ): Promise<void> {
+    let record: StoredAudio | null = null;
+    if (this.opts.getAudio) {
+      try {
+        record = await this.opts.getAudio(s.id);
+      } catch {
+        // Treat lookup failure as missing — the player still renders gracefully.
+        record = null;
+      }
+    }
+
+    const input: PlayerInput = record
+      ? {
+          kind: "audio",
+          blob: record.blob,
+          mime_type: record.mime_type,
+          duration_ms: record.duration_ms,
+        }
+      : s.audio_saved
+        ? { kind: "expired" }
+        : { kind: "missing" };
+
+    const player = new WaveformPlayer({ root: playerHost, input });
+    this.players.push(player);
+    if (input.kind === "audio") {
+      void player.load();
+      // Render the Re-transcribe button only when audio is available and the
+      // dependencies needed to drive it were provided.
+      if (this.opts.reAsrDeps && this.opts.reAsrDefaults) {
+        const reAsrDeps = this.opts.reAsrDeps;
+        const reAsrDefaults = this.opts.reAsrDefaults;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "history-reasr-toggle";
+        button.textContent = t("audio.reTranscribe");
+        button.addEventListener("click", () => {
+          button.hidden = true;
+          const form = new ReAsrForm({
+            ...reAsrDeps,
+            onComplete: () => {
+              reAsrDeps.onComplete?.();
+              button.hidden = false;
+              this.render();
+            },
+          });
+          const teardown = form.mount(reAsrHost, s.id, record!.blob, reAsrDefaults());
+          // Cancel re-shows the button.
+          reAsrHost.addEventListener("click", function onCancel(ev) {
+            const tgt = ev.target as HTMLElement;
+            if (tgt.classList.contains("re-asr-cancel")) {
+              button.hidden = false;
+              reAsrHost.removeEventListener("click", onCancel);
+              teardown();
+            }
+          });
+        });
+        reAsrHost.appendChild(button);
+      }
+    }
   }
 
   private makeButton(label: string, onClick: () => void): HTMLButtonElement {

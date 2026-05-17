@@ -64,6 +64,19 @@ export const STRINGS = {
     "actions.requestFailed": "(Request failed)",
     "actions.passthroughLabel": "Send as-is",
 
+    "audio.playerExpired": "Audio expired (evicted to stay within storage budget)",
+    "audio.playerNoAudio": "No audio available",
+    "audio.playerLoading": "Loading audio…",
+    "audio.playerError": "Could not decode audio",
+    "audio.reTranscribe": "Re-transcribe",
+    "audio.reTranscribeSubmit": "Transcribe",
+    "audio.reTranscribeCancel": "Cancel",
+    "audio.reTranscribePromptLabel": "Prompt (optional)",
+    "audio.reTranscribeLanguageLabel": "Language",
+    "audio.reTranscribeFailed": "Transcription failed: {error}",
+    "audio.evicted":
+      "Storage budget reached — audio for {count} older session(s) was removed.",
+
     "settings.title": "Settings",
     "settings.closeAria": "Close settings",
     "settings.mic": "Microphone",
@@ -81,6 +94,16 @@ export const STRINGS = {
     "settings.liveMaxLabel": "Maximum recording length (minutes, 0 = never)",
     "settings.liveMaxHint":
       "Hard cap counted from start. Default 4 h.",
+
+    "settings.audioSaveLabel": "Save audio for replay",
+    "settings.audioSaveHint":
+      "Keep a compressed copy of each recording in this browser so you can play it back or re-transcribe later.",
+    "settings.audioBudgetLabel": "Audio storage budget (MB)",
+    "settings.audioBudgetHint": "10–1000 MB. Oldest recordings are dropped when full.",
+    "settings.audioClearAllButton": "Clear all stored audio",
+    "settings.audioClearAllConfirm":
+      "Delete every saved audio recording? Transcripts will be kept.",
+    "settings.audioClearedToast": "Cleared {count} saved audio recording(s).",
 
     "app.appName": "whisper-wrap",
     "app.answerPlaceholder":
@@ -167,6 +190,18 @@ export const STRINGS = {
     "actions.requestFailed": "（請求失敗）",
     "actions.passthroughLabel": "直接送",
 
+    "audio.playerExpired": "音訊已過期（為了控制儲存空間已自動清除）",
+    "audio.playerNoAudio": "無可用音訊",
+    "audio.playerLoading": "載入音訊中…",
+    "audio.playerError": "無法解碼音訊",
+    "audio.reTranscribe": "重新轉錄",
+    "audio.reTranscribeSubmit": "送出轉錄",
+    "audio.reTranscribeCancel": "取消",
+    "audio.reTranscribePromptLabel": "Prompt（可留空）",
+    "audio.reTranscribeLanguageLabel": "語言",
+    "audio.reTranscribeFailed": "轉錄失敗：{error}",
+    "audio.evicted": "達到儲存上限，已自動移除 {count} 段較舊的音訊。",
+
     "settings.title": "設定",
     "settings.closeAria": "關閉設定",
     "settings.mic": "麥克風裝置",
@@ -184,6 +219,16 @@ export const STRINGS = {
     "settings.liveMaxLabel": "最長錄音上限（分鐘，0 = 永不）",
     "settings.liveMaxHint":
       "保命用 hard cap，從按下開始算到這個分鐘數一定停。預設 4 小時。",
+
+    "settings.audioSaveLabel": "保存音訊以供重播",
+    "settings.audioSaveHint":
+      "在這個瀏覽器中保留每次錄音的壓縮副本，方便之後重播或重新轉錄。",
+    "settings.audioBudgetLabel": "音訊儲存上限（MB）",
+    "settings.audioBudgetHint": "10–1000 MB；空間滿時會自動刪除最舊的錄音。",
+    "settings.audioClearAllButton": "清除所有已儲存音訊",
+    "settings.audioClearAllConfirm":
+      "確定要刪除所有已儲存的音訊？逐字稿仍會保留。",
+    "settings.audioClearedToast": "已清除 {count} 段儲存的音訊。",
 
     "app.appName": "whisper-wrap",
     "app.answerPlaceholder": "（按下停止後選一個 AI 動作，回應會出現在這）",

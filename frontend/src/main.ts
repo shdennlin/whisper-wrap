@@ -24,7 +24,9 @@ import { loadLocale, t } from "./i18n";
 import { MicPipeline } from "./capture/mic-pipeline";
 import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
 import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
+import { DualRecorder } from "./capture/dual-recorder";
 import { LiveTimeoutManager, type LiveTimeoutReason } from "./capture/live-timeout";
+import { AudioStore } from "./storage/audio-store";
 import {
   loadCaptureMode,
   saveCaptureMode,
@@ -110,6 +112,9 @@ const settings0 = loadSettings();
 const store = new HistoryStore();
 store.setRetention(settings0.retention);
 
+const audioStore = new AudioStore();
+let audioStoreWarned = false; // Toast once per page lifetime if IDB unavailable.
+
 const transcript = new TranscriptView(transcriptHost);
 
 const backendIndicator = new BackendIndicator(indicatorHost);
@@ -118,9 +123,50 @@ const settingsPanel = new SettingsPanel({
   root: settingsHost,
   enumerateDevices: async () => navigator.mediaDevices.enumerateDevices(),
   onChange: (s) => store.setRetention(s.retention),
+  clearAllAudio: async () => audioStore.clear(),
+  onToast: (text) => toast(text),
 });
 
-const history = new HistoryPanel({ root: historyHost, store });
+const history = new HistoryPanel({
+  root: historyHost,
+  store,
+  getAudio: (id) => audioStore.get(id),
+  reAsrDeps: {
+    transcribe: async (blob, opts) => {
+      const form = new FormData();
+      form.append("file", blob, `re-asr.${mimeToExt(blob.type)}`);
+      if (opts.prompt) form.append("prompt", opts.prompt);
+      if (opts.language) form.append("language", opts.language);
+      const r = await fetch(backendUrl("/transcribe"), { method: "POST", body: form });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = (await r.json()) as { text: string };
+      return body.text ?? "";
+    },
+    appendActionRun: (sessionId, run) => store.appendActionRun(sessionId, run),
+  },
+  reAsrDefaults: () => ({
+    prompt: "",
+    language: "",
+    languages: RE_ASR_LANGUAGE_OPTIONS,
+  }),
+});
+
+/**
+ * Language options for the re-ASR form. Whisper accepts ISO codes like
+ * "en", "zh", "ja"; we list the most-used ones plus "" for auto-detect.
+ * The list is small on purpose — the form is for tweaking, not for picking
+ * an unfamiliar language.
+ */
+const RE_ASR_LANGUAGE_OPTIONS = [
+  { value: "", label: t("settings.micAuto") },
+  { value: "en", label: "English" },
+  { value: "zh", label: "中文" },
+  { value: "ja", label: "日本語" },
+  { value: "ko", label: "한국어" },
+  { value: "es", label: "Español" },
+  { value: "fr", label: "Français" },
+  { value: "de", label: "Deutsch" },
+];
 
 const actionsBar = new ActionsBar({
   root: actionsHost,
@@ -216,6 +262,7 @@ healthMonitor.start();
 let mic: MicPipeline | null = null;
 let sock: ListenSocket | null = null;
 let batch: BatchRecorder | null = null;
+let dual: DualRecorder | null = null; // Parallel compressed-audio recorder (Live only).
 let liveTimeout: LiveTimeoutManager | null = null;
 let currentSessionId: string | null = null;
 let currentMode: CaptureMode = loadCaptureMode();
@@ -305,6 +352,17 @@ async function startRecording(mode: CaptureMode): Promise<void> {
         onFrame: (frame) => sock?.send(frame),
       });
       await mic.start();
+      // Attach a parallel MediaRecorder to the same MediaStream so we can
+      // persist a compressed copy of the audio for replay / re-ASR. Honours
+      // the audio.save Setting — when off, DualRecorder is constructed but
+      // skips the actual recording (start() is a no-op, stop() resolves with
+      // blob: null) so callers don't have to branch on the toggle.
+      const live = settingsPanel.getSettings();
+      const stream = mic.getStream();
+      if (stream) {
+        dual = new DualRecorder(stream, "live", live.audioSave !== false);
+        dual.start();
+      }
     } catch (e) {
       micPermissionModal(e instanceof Error ? e.message : String(e));
       await stopRecording();
@@ -332,8 +390,13 @@ async function togglePause(): Promise<void> {
     if (nextState === "paused") batch.pause();
     else if (nextState === "recording") batch.resume();
   } else if (currentMode === "live" && mic) {
-    if (nextState === "paused") mic.pause();
-    else if (nextState === "recording") mic.resume();
+    if (nextState === "paused") {
+      mic.pause();
+      dual?.pause();
+    } else if (nextState === "recording") {
+      mic.resume();
+      dual?.resume();
+    }
     // Pause/resume counts as user activity — push the idle timer forward.
     liveTimeout?.onActivity();
   }
@@ -347,6 +410,10 @@ async function discardRecording(): Promise<void> {
     mic = null;
     sock?.stop();
     sock = null;
+    // Tear down the parallel recorder; whatever blob it has built up is
+    // dropped because we never write it to AudioStore on the discard path.
+    await dual?.stop();
+    dual = null;
     if (currentSessionId) {
       store.deleteSession(currentSessionId);
       history.render();
@@ -395,6 +462,10 @@ async function stopRecording(): Promise<void> {
 
     liveTimeout?.stop();
     liveTimeout = null;
+    // Stop the parallel recorder concurrently with the mic / sock — the
+    // returned blob is what we persist to AudioStore. Capture it BEFORE
+    // resetting `dual` so a late-arriving `stop` event still resolves.
+    const dualStop = dual ? dual.stop() : Promise.resolve(null);
     await mic?.stop();
     mic = null;
     sock?.stop();
@@ -403,6 +474,7 @@ async function stopRecording(): Promise<void> {
       store.stopSession(currentSessionId);
       const session = store.list().find((s) => s.id === currentSessionId);
       const dur = Date.now() - recordingStartedAt;
+      let sessionDeleted = false;
       if (
         session &&
         session.ended_at !== null &&
@@ -410,12 +482,27 @@ async function stopRecording(): Promise<void> {
         session.finals.length === 0
       ) {
         store.deleteSession(currentSessionId);
+        sessionDeleted = true;
         toast(t("toast.tooShortNotSaved", { duration: formatBriefDuration(dur) }));
       } else if (session && session.finals.length > 0) {
         await maybeAutoCopy();
       }
+      // Best-effort: await the parallel-recorder blob and persist it. Skip
+      // when the session was already dropped (no point keeping orphan audio).
+      // Persistence failures MUST NOT bubble to the user — recording already
+      // succeeded.
+      const recording = await dualStop.catch(() => null);
+      if (
+        !sessionDeleted &&
+        recording &&
+        recording.blob &&
+        recording.blob.size > 0
+      ) {
+        await persistAudio(currentSessionId, recording.blob, recording.duration_ms);
+      }
       history.render();
     }
+    dual = null;
     currentSessionId = null;
     resetIdle();
     return;
@@ -461,6 +548,12 @@ async function processBatchRecording(
       kind: "batch",
     });
     currentSessionId = sessionId;
+    // Persist the captured blob so the user can replay or re-transcribe it
+    // later. Honours the audio.save Setting; errors are isolated from the
+    // upload-success path.
+    if (loadSettings().audioSave !== false) {
+      await persistAudio(sessionId, blob, durationMs);
+    }
     history.render();
     await maybeAutoCopy();
     resetIdle();
@@ -473,6 +566,34 @@ async function processBatchRecording(
       durationMs,
       errorMessage: e instanceof Error ? e.message : String(e),
     });
+  }
+}
+
+/**
+ * Best-effort write of `blob` to the AudioStore for `sessionId`, plus a flag
+ * on the history record so the player can later distinguish "audio expired"
+ * (was saved, then evicted) from "audio missing" (never saved). Eviction
+ * toasts the count when at least one record was dropped. IDB unavailable
+ * (private browsing, quota exhausted, etc.) is non-fatal: one warning per
+ * page lifetime, then proceed without persistence.
+ */
+async function persistAudio(
+  sessionId: string,
+  blob: Blob,
+  durationMs: number,
+): Promise<void> {
+  try {
+    await audioStore.put(sessionId, blob, durationMs);
+    store.markAudioSaved(sessionId);
+    const evicted = audioStore.lastEvictionCount();
+    if (evicted > 0) {
+      toast(t("audio.evicted", { count: evicted }));
+    }
+  } catch (e) {
+    if (!audioStoreWarned) {
+      audioStoreWarned = true;
+      toast(`⚠ ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 

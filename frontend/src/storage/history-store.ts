@@ -65,6 +65,13 @@ export interface SessionRecord {
   ended_at: number | null;
   finals: SessionFinal[];
   action_runs: ActionRun[];
+  /**
+   * True when an audio blob was successfully written to AudioStore for this
+   * session. Lets the history panel distinguish a session whose audio was
+   * never saved (missing) from one whose audio was saved-then-evicted
+   * (expired). Optional for backwards-compatibility with pre-capability rows.
+   */
+  audio_saved?: boolean;
 }
 
 interface PersistedState {
@@ -112,6 +119,18 @@ export class HistoryStore {
   stopSession(id: string): void {
     this.mutate(id, (s) => {
       s.ended_at = Date.now();
+    });
+  }
+
+  /**
+   * Record that this session's audio blob was successfully persisted to
+   * AudioStore. The history panel reads this to distinguish "audio missing"
+   * (never saved or audio.save was off) from "audio expired" (saved then
+   * evicted by the byte-budget enforcer).
+   */
+  markAudioSaved(id: string): void {
+    this.mutate(id, (s) => {
+      s.audio_saved = true;
     });
   }
 
