@@ -217,6 +217,14 @@ let liveTimeout: LiveTimeoutManager | null = null;
 let currentSessionId: string | null = null;
 let currentMode: CaptureMode = loadCaptureMode();
 let recordingStartedAt = 0;
+/**
+ * Latest in-flight partial text for the active Live session, tracked
+ * independently of the UI so it survives even when the user has
+ * `showPartials` off in Settings (the partial wouldn't be displayed and so
+ * `transcript.getPartial()` would return an empty string at stop time).
+ * Cleared whenever the server promotes a partial to a final.
+ */
+let lastLivePartialText = "";
 const settings = settingsPanel.getSettings();
 
 function activeCard(): ModeCard {
@@ -240,6 +248,7 @@ async function startRecording(mode: CaptureMode): Promise<void> {
   transcript.clear();
   answerHost.textContent = "";
   recordingStartedAt = Date.now();
+  lastLivePartialText = "";
 
   activeCard().start();
   otherCard().setDisabled(true, "錄音中無法切換模式");
@@ -338,12 +347,13 @@ async function discardRecording(): Promise<void> {
 
 async function stopRecording(): Promise<void> {
   if (currentMode === "live") {
-    // Capture any partial that's still on screen but hasn't been promoted to
-    // a final yet — otherwise pressing stop right after speaking would lose
-    // the last utterance. The partial we adopt as a final has no
-    // server-supplied timestamp, so we synthesize one from elapsed time so
-    // the row slots in chronologically.
-    const partial = transcript.getPartial().trim();
+    // Capture any partial that's still in flight but hasn't been promoted
+    // to a final yet — otherwise pressing stop right after speaking would
+    // lose the last utterance. We read from `lastLivePartialText` (not
+    // `transcript.getPartial()`) so the flush still works when the user has
+    // `showPartials` disabled in Settings. The synthesized timestamp comes
+    // from elapsed wall-clock so the row slots in chronologically.
+    const partial = lastLivePartialText.trim();
     if (partial && currentSessionId) {
       const ts = Math.max(0, Date.now() - recordingStartedAt);
       store.appendFinal(currentSessionId, {
@@ -528,9 +538,16 @@ function handleListenEvent(e: ListenEvent): void {
       wsIndicatorHost.hidden = e.state === "open" || e.state === "idle";
       break;
     case "partial":
+      // Always track the latest partial text in memory, even if the user has
+      // partials hidden in Settings; the stop-time flush reads this so the
+      // last utterance survives the disconnect.
+      lastLivePartialText = e.text;
       if (loadSettings().showPartials) transcript.setPartial(e.text);
       break;
     case "final":
+      // The server confirmed the in-flight buffer; the partial slot is
+      // consumed, nothing left to flush at stop time.
+      lastLivePartialText = "";
       if (currentSessionId) {
         store.appendFinal(currentSessionId, {
           text: e.text,
