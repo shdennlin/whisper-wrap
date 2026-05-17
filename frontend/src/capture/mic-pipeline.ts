@@ -75,6 +75,16 @@ export class MicPipeline {
     return this.paused;
   }
 
+  /**
+   * Returns the underlying MediaStream once `start()` has resolved, or null
+   * before. Exposed so a parallel `DualRecorder` can attach a MediaRecorder
+   * to the same source for compressed audio persistence without re-acquiring
+   * the microphone.
+   */
+  getStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async stop(): Promise<void> {
     this.node?.disconnect();
     this.source?.disconnect();
