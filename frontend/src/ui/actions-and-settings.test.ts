@@ -126,10 +126,10 @@ describe("SettingsPanel + persistence helpers", () => {
       onChange: () => {},
     });
     void panel;
-    // Mic select + url input + 2 checkboxes + retention number
+    // Mic select + url input + 3 checkboxes (partials, auto-scroll, auto-copy) + retention number
     expect(host.querySelectorAll("select").length).toBe(1);
     expect(host.querySelectorAll('input[type="url"]').length).toBe(1);
-    expect(host.querySelectorAll('input[type="checkbox"]').length).toBe(2);
+    expect(host.querySelectorAll('input[type="checkbox"]').length).toBe(3);
     expect(host.querySelectorAll('input[type="number"]').length).toBe(1);
   });
 
@@ -139,6 +139,7 @@ describe("SettingsPanel + persistence helpers", () => {
       backendUrl: "http://example.local:8000",
       showPartials: false,
       autoScroll: false,
+      autoCopy: false,
       retention: 5,
     });
     const reloaded = loadSettings();
@@ -146,6 +147,7 @@ describe("SettingsPanel + persistence helpers", () => {
     expect(reloaded.backendUrl).toBe("http://example.local:8000");
     expect(reloaded.showPartials).toBe(false);
     expect(reloaded.autoScroll).toBe(false);
+    expect(reloaded.autoCopy).toBe(false);
     expect(reloaded.retention).toBe(5);
   });
 

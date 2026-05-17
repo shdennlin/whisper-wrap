@@ -111,7 +111,7 @@ body { min-height: 100vh; }
   border-color: var(--accent);
   background: rgba(96, 165, 250, 0.08);
 }
-.mode-card:active:not(:disabled) { transform: scale(0.98); }
+.mode-card:active:not(:disabled) { transform: scale(0.99); }
 .mode-card:disabled { opacity: 0.45; cursor: not-allowed; }
 .mode-card .icon {
   width: 2.4rem;
@@ -120,80 +120,95 @@ body { min-height: 100vh; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--red);
+  background: var(--accent);
   color: white;
-  font-size: 0.95rem;
+  font-size: 1.05rem;
   font-weight: 600;
   flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
-.mode-card[data-mode="live"] .icon { background: var(--green); }
-.mode-card .info { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+/* Distinguish Batch (solid dot) from Live (ring) by icon shape, not colour. */
+.mode-card[data-mode="live"] .icon {
+  background: transparent;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+}
+.mode-card .info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
 .mode-card .label { font-weight: 600; font-size: 1rem; }
 .mode-card .desc { font-size: 0.8rem; color: var(--muted); }
-
-/* ---- Active-recording bar (replaces cards while recording) ---- */
-.recording-active {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+/* Timer is hidden in idle state; the description is shown instead. */
+.mode-card .timer {
+  display: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--fg);
 }
-.recording-active .stop-btn {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: 2px solid var(--red);
-  background: rgba(220, 38, 38, 0.12);
-  cursor: pointer;
-  padding: 0;
+
+.mode-card .controls {
+  display: none;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.mode-card .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.05s ease;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
-.recording-active .stop-btn:hover:not(:disabled) { transform: scale(1.03); }
-.recording-active .stop-btn:active:not(:disabled) { transform: scale(0.97); }
-.recording-active .stop-btn:disabled { opacity: 0.75; cursor: progress; }
-.recording-active .stop-btn .dot {
-  width: 18px;
-  height: 18px;
-  background: var(--red);
-  border-radius: 4px;
+.mode-card .icon-button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Recording / paused / processing morph */
+.mode-card[data-state="recording"],
+.mode-card[data-state="paused"],
+.mode-card[data-state="processing"] {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.08);
+}
+.mode-card[data-state="recording"] .desc,
+.mode-card[data-state="paused"] .desc,
+.mode-card[data-state="processing"] .desc { display: none; }
+.mode-card[data-state="recording"] .timer,
+.mode-card[data-state="paused"] .timer,
+.mode-card[data-state="processing"] .timer { display: inline; }
+.mode-card[data-state="recording"] .controls,
+.mode-card[data-state="paused"] .controls { display: inline-flex; }
+.mode-card[data-state="recording"] .icon {
   animation: record-pulse 1.2s ease-in-out infinite;
 }
-.recording-active .stop-btn[data-state="processing"] {
-  border-color: var(--accent);
-  background: rgba(96, 165, 250, 0.12);
+.mode-card[data-state="paused"] .icon {
+  background: var(--muted);
+  border-color: var(--muted);
+  color: white;
 }
-.recording-active .stop-btn[data-state="processing"] .dot {
+.mode-card[data-state="processing"] { cursor: progress; }
+.mode-card[data-state="processing"] .icon {
   background: var(--accent);
-  border-radius: 50%;
   animation: record-spin 0.9s linear infinite;
 }
-.recording-active .info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  flex: 1;
-  min-width: 0;
-}
-.recording-active .timer {
-  font-variant-numeric: tabular-nums;
-  font-size: 1.15rem;
-  font-weight: 500;
-}
-.recording-active .mode-label {
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-.recording-active .slot { flex-shrink: 0; }
+
+/* ---- WebSocket state indicator (shown only during Live recording) ---- */
+.ws-indicator-host[hidden] { display: none; }
 
 @keyframes record-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
-  50%      { transform: scale(0.82); opacity: 0.7; }
+  50%      { transform: scale(0.88); opacity: 0.75; }
 }
 @keyframes record-spin {
   from { transform: rotate(0deg); }
@@ -201,15 +216,16 @@ body { min-height: 100vh; }
 }
 
 /* ---- Batch upload-failed retry prompt ---- */
+.upload-retry[hidden] { display: none; }
 .upload-retry {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   padding: 0.7rem 0.9rem;
-  border: 1px solid var(--yellow);
+  border: 1px solid var(--accent);
   border-radius: 8px;
-  background: rgba(217, 119, 6, 0.08);
+  background: rgba(96, 165, 250, 0.08);
   font-size: 0.9rem;
 }
 .upload-retry .msg { flex: 1; min-width: 12rem; color: var(--fg); }
@@ -231,7 +247,29 @@ body { min-height: 100vh; }
 .conn-indicator[data-state="failed"] .conn-dot { background: var(--red); }
 .conn-retry { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
 
-.transcript-view { min-height: 200px; border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.transcript-view {
+  position: relative;
+  min-height: 200px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.transcript-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.transcript-copy:hover { border-color: var(--accent); color: var(--accent); }
 .transcript-final { display: flex; gap: 0.5rem; }
 .transcript-ts { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 3.5em; }
 .transcript-text { flex: 1; }

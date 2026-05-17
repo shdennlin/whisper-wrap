@@ -13,14 +13,31 @@ export interface FinalCue {
 export class TranscriptView {
   private partialEl: HTMLDivElement;
   private finalsEl: HTMLDivElement;
+  private copyBtn: HTMLButtonElement;
 
   constructor(public readonly root: HTMLElement) {
     this.root.classList.add("transcript-view");
+    this.copyBtn = document.createElement("button");
+    this.copyBtn.type = "button";
+    this.copyBtn.className = "transcript-copy";
+    this.copyBtn.textContent = "複製";
+    this.copyBtn.title = "複製目前的逐字稿";
+    this.copyBtn.addEventListener("click", () => {
+      void copyToClipboard(this.getText()).then((ok) => {
+        this.copyBtn.textContent = ok ? "已複製 ✓" : "複製失敗";
+        setTimeout(() => (this.copyBtn.textContent = "複製"), 1500);
+      });
+    });
     this.finalsEl = document.createElement("div");
     this.finalsEl.className = "transcript-finals";
     this.partialEl = document.createElement("div");
     this.partialEl.className = "transcript-partial";
-    this.root.append(this.finalsEl, this.partialEl);
+    this.root.append(this.copyBtn, this.finalsEl, this.partialEl);
+  }
+
+  /** Plain-text join of all current finals (newline-separated). */
+  getText(): string {
+    return this.getFinals().map((f) => f.text).join("\n");
   }
 
   setPartial(text: string): void {
@@ -76,4 +93,35 @@ function formatMmSs(ms: number): string {
 function parseMmSs(s: string): number {
   const [mm, ss] = s.split(":").map((p) => parseInt(p, 10) || 0);
   return (mm * 60 + ss) * 1000;
+}
+
+/**
+ * Best-effort clipboard write. Returns true on success. Falls back to the
+ * legacy textarea + document.execCommand path when Clipboard API is blocked
+ * (some browsers in non-HTTPS contexts) so the auto-copy still works on
+ * localhost dev setups.
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to textarea fallback
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
 }

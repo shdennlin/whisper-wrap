@@ -16,6 +16,7 @@ export interface Settings {
   backendUrl: string;
   showPartials: boolean;
   autoScroll: boolean;
+  autoCopy: boolean;
   retention: number;
 }
 
@@ -24,6 +25,7 @@ export const DEFAULTS: Settings = {
   backendUrl: "",
   showPartials: true,
   autoScroll: true,
+  autoCopy: true,
   retention: 20,
 };
 
@@ -58,6 +60,7 @@ export class SettingsPanel {
   private backendInput!: HTMLInputElement;
   private partialsInput!: HTMLInputElement;
   private autoscrollInput!: HTMLInputElement;
+  private autocopyInput!: HTMLInputElement;
   private retentionInput!: HTMLInputElement;
 
   constructor(private readonly opts: SettingsPanelOptions) {
@@ -75,6 +78,10 @@ export class SettingsPanel {
     this.backendInput = this.makeInput("後端位址", "url", this.current.backendUrl);
     this.partialsInput = this.makeCheckbox("顯示 partial", this.current.showPartials);
     this.autoscrollInput = this.makeCheckbox("自動捲到最底", this.current.autoScroll);
+    this.autocopyInput = this.makeCheckbox(
+      "錄音結束自動複製逐字稿",
+      this.current.autoCopy,
+    );
     this.retentionInput = this.makeInput(
       "對話記錄保留筆數",
       "number",
@@ -91,6 +98,7 @@ export class SettingsPanel {
         backendUrl: this.backendInput.value,
         showPartials: this.partialsInput.checked,
         autoScroll: this.autoscrollInput.checked,
+        autoCopy: this.autocopyInput.checked,
         retention: clampRetention(this.retentionInput.valueAsNumber),
       };
       saveSettings(this.current);
@@ -101,6 +109,7 @@ export class SettingsPanel {
       this.backendInput,
       this.partialsInput,
       this.autoscrollInput,
+      this.autocopyInput,
       this.retentionInput,
     ]) {
       el.addEventListener("change", onAnyChange);

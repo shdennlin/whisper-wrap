@@ -1,15 +1,21 @@
 /**
  * whisper-wrap PWA application entry.
  *
- * UX: two large ModeCards in the idle state. Tapping a card both picks the
+ * UX: two ModeCards in the idle state. Tapping a card both selects the
  * capture mode (Batch via MediaRecorder + POST /transcribe; Live via WS
- * /listen) and begins recording in one click. While a recording is active,
- * the cards swap for a RecordingBar with stop button + tenths-of-second
- * timer + (for Live) the connection indicator. A HealthMonitor pings
- * GET /status on load, on visibility-change, every 30 s, and right before
- * each record click; the cards disable themselves whenever the backend
- * isn't reachable so we never record audio with nowhere to send it. Batch
- * uploads that fail surface a retry/download prompt so the blob isn't lost.
+ * /listen) and starts recording. While a recording is active the same card
+ * morphs in place to show a live timer, a pause/resume control (Batch only),
+ * and a discard control; clicking the card body stops & saves. The other
+ * card disables itself so the user can't switch modes mid-recording.
+ *
+ * Cross-cutting:
+ *   - HealthMonitor pings GET /status on load, on visibilitychange, every
+ *     30 s while idle, and right before each start so we never record audio
+ *     with nowhere to upload it.
+ *   - Batch uploads that fail surface an in-page retry/download prompt so
+ *     the captured blob isn't lost to a transient backend hiccup.
+ *   - When the autoCopy setting is on (default), the transcript is copied
+ *     to the clipboard the moment finals are committed.
  */
 
 import "./style.css";
@@ -23,13 +29,12 @@ import {
   type CaptureMode,
 } from "./capture/mode-store";
 import { HealthMonitor } from "./health/health-monitor";
-import { TranscriptView } from "./ui/transcript-view";
+import { TranscriptView, copyToClipboard } from "./ui/transcript-view";
 import { ConnectionIndicator } from "./ui/connection-indicator";
 import { ActionsBar, type ActionTemplate } from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
 import { HistoryPanel } from "./ui/history-panel";
 import { ModeCard } from "./ui/mode-card";
-import { RecordingBar } from "./ui/recording-bar";
 import { BackendIndicator } from "./ui/backend-indicator";
 import {
   HistoryStore,
@@ -52,11 +57,11 @@ const main = el("main", "main-pane");
 
 const captureHost = el("section", "capture-host");
 const cardsHost = el("div", "mode-cards");
-const recordingHost = el("div", "recording-active");
-recordingHost.hidden = true;
+const wsIndicatorHost = el("div", "ws-indicator-host");
+wsIndicatorHost.hidden = true;
 const uploadRetryHost = el("div", "upload-retry");
 uploadRetryHost.hidden = true;
-captureHost.append(cardsHost, recordingHost, uploadRetryHost);
+captureHost.append(cardsHost, wsIndicatorHost, uploadRetryHost);
 
 const settingsHost = el("section");
 settingsHost.hidden = true;
@@ -122,34 +127,36 @@ const actionsBar = new ActionsBar({
     history.render();
   },
   onWarn: (msg) => toast(`⚠ ${msg}`),
-  getTranscript: () => transcript.getFinals().map((f) => f.text).join("\n"),
+  getTranscript: () => transcript.getText(),
 });
 void actionsBar.load();
 
-// ---- Mode cards ------------------------------------------------------------
+// ---- Mode cards (morph in place) ------------------------------------------
 const batchCard = new ModeCard({
   mode: "batch",
   icon: "●",
   label: "Batch",
   description: "錄完一次轉錄，準確度高",
-  onClick: () => startRecording("batch").catch(reportError),
+  pauseSupported: true,
+  onStart: () => startRecording("batch").catch(reportError),
+  onStop: () => stopRecording().catch(reportError),
+  onPauseResume: () => togglePause().catch(reportError),
+  onDiscard: () => discardRecording().catch(reportError),
 });
 const liveCard = new ModeCard({
   mode: "live",
   icon: "◉",
   label: "Live",
   description: "邊講邊出字幕",
-  onClick: () => startRecording("live").catch(reportError),
+  pauseSupported: false,
+  onStart: () => startRecording("live").catch(reportError),
+  onStop: () => stopRecording().catch(reportError),
+  onPauseResume: () => { /* not supported in Live */ },
+  onDiscard: () => discardRecording().catch(reportError),
 });
 cardsHost.append(batchCard.root, liveCard.root);
 
-// ---- Recording bar (replaces cards while recording) ------------------------
-const recordingBar = new RecordingBar({
-  root: recordingHost,
-  onStop: () => stopRecording().catch(reportError),
-});
-
-const wsIndicator = new ConnectionIndicator(recordingBar.slot, () => {
+const wsIndicator = new ConnectionIndicator(wsIndicatorHost, () => {
   if (currentMode === "live") void startRecording("live").catch(reportError);
 });
 
@@ -165,8 +172,10 @@ const healthMonitor = new HealthMonitor({
     backendIndicator.setState(state);
     const disabled = state !== "ok";
     const title = disabled ? "後端未連線；恢復後可重試" : undefined;
-    batchCard.setDisabled(disabled, title);
-    liveCard.setDisabled(disabled, title);
+    // Only disable cards that are currently idle — never yank a card out
+    // from under an in-progress recording.
+    if (batchCard.getState() === "idle") batchCard.setDisabled(disabled, title);
+    if (liveCard.getState() === "idle") liveCard.setDisabled(disabled, title);
   },
 });
 healthMonitor.start();
@@ -180,8 +189,15 @@ let currentMode: CaptureMode = loadCaptureMode();
 let recordingStartedAt = 0;
 const settings = settingsPanel.getSettings();
 
+function activeCard(): ModeCard {
+  return currentMode === "batch" ? batchCard : liveCard;
+}
+
+function otherCard(): ModeCard {
+  return currentMode === "batch" ? liveCard : batchCard;
+}
+
 async function startRecording(mode: CaptureMode): Promise<void> {
-  // Final pre-flight before we open the mic.
   const health = await healthMonitor.checkNow();
   if (health !== "ok") {
     toast("後端離線，無法開始錄音");
@@ -190,16 +206,18 @@ async function startRecording(mode: CaptureMode): Promise<void> {
 
   currentMode = mode;
   saveCaptureMode(mode);
-  showRecordingBar(mode);
   hideRetryPrompt();
   transcript.clear();
   answerHost.textContent = "";
   recordingStartedAt = Date.now();
 
+  activeCard().start();
+  otherCard().setDisabled(true, "錄音中無法切換模式");
+
   if (mode === "live") {
     currentSessionId = store.startSession();
     history.render();
-    wsIndicator.root.hidden = false;
+    wsIndicatorHost.hidden = false;
     wsIndicator.setState("idle");
     const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProto}//${window.location.host}/listen`;
@@ -217,7 +235,7 @@ async function startRecording(mode: CaptureMode): Promise<void> {
     }
   } else {
     currentSessionId = null;
-    wsIndicator.root.hidden = true;
+    wsIndicatorHost.hidden = true;
     try {
       batch = new BatchRecorder({
         deviceId: settings.deviceId ?? undefined,
@@ -227,9 +245,39 @@ async function startRecording(mode: CaptureMode): Promise<void> {
       await batch.start();
     } catch (e) {
       micPermissionModal(e instanceof Error ? e.message : String(e));
-      hideRecordingBar();
+      resetIdle();
     }
   }
+}
+
+async function togglePause(): Promise<void> {
+  if (currentMode !== "batch" || !batch) return;
+  const nextState = activeCard().togglePause();
+  if (nextState === "paused") batch.pause();
+  else if (nextState === "recording") batch.resume();
+}
+
+async function discardRecording(): Promise<void> {
+  if (currentMode === "live") {
+    await mic?.stop();
+    mic = null;
+    sock?.stop();
+    sock = null;
+    if (currentSessionId) {
+      store.deleteSession(currentSessionId);
+      history.render();
+    }
+    currentSessionId = null;
+    toast("已捨棄錄音");
+    resetIdle();
+    return;
+  }
+  if (batch) {
+    await batch.discard();
+    batch = null;
+  }
+  toast("已捨棄錄音");
+  resetIdle();
 }
 
 async function stopRecording(): Promise<void> {
@@ -250,35 +298,36 @@ async function stopRecording(): Promise<void> {
       ) {
         store.deleteSession(currentSessionId);
         toast(`錄音過短（${formatBriefDuration(dur)}），未儲存`);
+      } else if (session && session.finals.length > 0) {
+        await maybeAutoCopy();
       }
       history.render();
     }
     currentSessionId = null;
-    hideRecordingBar();
+    resetIdle();
     return;
   }
 
   if (!batch) {
-    hideRecordingBar();
+    resetIdle();
     return;
   }
-  recordingBar.showProcessing();
+  activeCard().showProcessing();
   let recording;
   try {
     recording = await batch.stop();
   } catch (e) {
     toast(`錄音失敗：${e instanceof Error ? e.message : String(e)}`);
     batch = null;
-    hideRecordingBar();
+    resetIdle();
     return;
   }
   batch = null;
   if (recording.durationMs < MIN_USABLE_DURATION_MS) {
     toast(`錄音過短（${formatBriefDuration(recording.durationMs)}），未儲存`);
-    hideRecordingBar();
+    resetIdle();
     return;
   }
-
   await processBatchRecording(recording.blob, recording.mimeType, recording.durationMs);
 }
 
@@ -290,23 +339,16 @@ async function processBatchRecording(
   try {
     const text = await uploadForTranscription(blob, mimeType);
     const sessionId = store.startSession();
-    store.appendFinal(sessionId, {
-      text,
-      start_ms: 0,
-      end_ms: durationMs,
-    });
+    store.appendFinal(sessionId, { text, start_ms: 0, end_ms: durationMs });
     store.stopSession(sessionId);
-    transcript.appendFinal({
-      text,
-      start_ms: 0,
-      end_ms: durationMs,
-    });
+    transcript.appendFinal({ text, start_ms: 0, end_ms: durationMs });
     currentSessionId = sessionId;
     history.render();
-    hideRecordingBar();
+    await maybeAutoCopy();
+    resetIdle();
     hideRetryPrompt();
   } catch (e) {
-    hideRecordingBar();
+    resetIdle();
     showRetryPrompt({
       blob,
       mimeType,
@@ -314,6 +356,14 @@ async function processBatchRecording(
       errorMessage: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+async function maybeAutoCopy(): Promise<void> {
+  if (!loadSettings().autoCopy) return;
+  const text = transcript.getText();
+  if (!text) return;
+  const ok = await copyToClipboard(text);
+  if (ok) toast("逐字稿已自動複製到剪貼簿");
 }
 
 interface PendingUpload {
@@ -334,11 +384,12 @@ function showRetryPrompt(p: PendingUpload): void {
   const retryBtn = button("重試");
   retryBtn.addEventListener("click", async () => {
     if (!pendingUpload) return;
-    const p = pendingUpload;
+    const u = pendingUpload;
     hideRetryPrompt();
-    showRecordingBar(currentMode);
-    recordingBar.showProcessing();
-    await processBatchRecording(p.blob, p.mimeType, p.durationMs);
+    activeCard().start();
+    activeCard().showProcessing();
+    otherCard().setDisabled(true, "處理中無法切換模式");
+    await processBatchRecording(u.blob, u.mimeType, u.durationMs);
   });
   const downloadBtn = button("下載 .webm");
   downloadBtn.addEventListener("click", () => {
@@ -361,22 +412,18 @@ function hideRetryPrompt(): void {
   uploadRetryHost.replaceChildren();
 }
 
-function showRecordingBar(mode: CaptureMode): void {
-  cardsHost.hidden = true;
-  recordingHost.hidden = false;
-  recordingBar.start(mode);
+function resetIdle(): void {
+  batchCard.reset();
+  liveCard.reset();
+  // Re-apply current health gating so cards reflect the latest backend state.
+  const healthy = healthMonitor.getState() === "ok";
+  const title = healthy ? undefined : "後端未連線；恢復後可重試";
+  batchCard.setDisabled(!healthy, title);
+  liveCard.setDisabled(!healthy, title);
+  wsIndicatorHost.hidden = true;
 }
 
-function hideRecordingBar(): void {
-  recordingBar.reset();
-  recordingHost.hidden = true;
-  cardsHost.hidden = false;
-}
-
-async function uploadForTranscription(
-  blob: Blob,
-  mimeType: string,
-): Promise<string> {
+async function uploadForTranscription(blob: Blob, mimeType: string): Promise<string> {
   const r = await fetch(backendUrl("/transcribe"), {
     method: "POST",
     headers: { "content-type": mimeType || "application/octet-stream" },
