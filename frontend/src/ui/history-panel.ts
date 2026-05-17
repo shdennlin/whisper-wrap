@@ -11,7 +11,7 @@ import {
   sessionDurationMs,
   type SessionRecord,
 } from "../storage/history-store";
-import type { StoredAudio } from "../storage/audio-store";
+import type { StoredAudio } from "../storage/history-api-client";
 import { exportSrt, exportVtt, exportTxt } from "../export/subtitle-export";
 import { WaveformPlayer, type PlayerInput } from "./waveform-player";
 import { ReAsrForm, type ReAsrFormDefaults, type ReAsrFormDeps } from "./re-asr-form";

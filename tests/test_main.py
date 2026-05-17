@@ -69,6 +69,24 @@ def test_lifespan_records_resolved_model_dir(patched_lifespan):
         assert app.state.model_dir == "/fake/breeze-ct2"
 
 
+def test_lifespan_initializes_persistence(patched_lifespan):
+    """data_dir + audio_dir created, alembic_version exists, db_engine on state."""
+    from sqlalchemy import inspect
+
+    from app.config import config
+    from app.main import app
+
+    with TestClient(app):
+        assert config.DATA_DIR.is_dir()
+        assert config.audio_dir.is_dir()
+        engine = app.state.db_engine
+        assert engine is not None
+        insp = inspect(engine)
+        tables = set(insp.get_table_names())
+        assert "alembic_version" in tables
+        assert {"sessions", "finals", "action_runs"}.issubset(tables)
+
+
 def test_lifespan_stores_backend_metadata(patched_lifespan):
     """The metadata dict carrying backend/format/compute_type SHALL be on app.state."""
     from app.main import app

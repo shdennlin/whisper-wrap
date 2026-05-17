@@ -38,6 +38,8 @@ def clean_env(monkeypatch):
         "LOG_LEVEL",
         "BACKEND_FORMAT",
         "VAD_BACKEND",
+        "DATA_DIR",
+        "DATABASE_URL",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -136,6 +138,47 @@ def test_validate_port_ok():
     c = Config()
     c.API_PORT = 8000
     c.validate_port()  # does not raise
+
+
+def test_persistence_defaults(clean_env):
+    """Default data_dir, database_url, audio_dir match the design."""
+    from pathlib import Path
+
+    c = Config()
+    assert c.DATA_DIR == Path("data")
+    assert c.DATABASE_URL == "sqlite:///data/history.db"
+    assert c.audio_dir == Path("data") / "audio"
+
+
+def test_persistence_env_override(clean_env):
+    """Env vars override default paths and URL independently."""
+    from pathlib import Path
+
+    clean_env.setenv("DATA_DIR", "/tmp/wrap-data")
+    clean_env.setenv("DATABASE_URL", "sqlite:///:memory:")
+    c = Config()
+    assert c.DATA_DIR == Path("/tmp/wrap-data")
+    assert c.DATABASE_URL == "sqlite:///:memory:"
+    assert c.audio_dir == Path("/tmp/wrap-data/audio")
+
+
+def test_persistence_data_dir_changes_default_url(clean_env):
+    """When only DATA_DIR is set, the default URL is derived from it."""
+    clean_env.setenv("DATA_DIR", "/var/lib/wrap")
+    c = Config()
+    assert c.DATABASE_URL == "sqlite:////var/lib/wrap/history.db"
+
+
+def test_ensure_data_dirs(tmp_path):
+    from app.config import Config
+
+    c = Config()
+    c.DATA_DIR = tmp_path / "data"
+    assert not c.DATA_DIR.exists()
+    assert not c.audio_dir.exists()
+    c.ensure_data_dirs()
+    assert c.DATA_DIR.is_dir()
+    assert c.audio_dir.is_dir()
 
 
 def test_v1_keys_are_silently_ignored(clean_env, caplog):

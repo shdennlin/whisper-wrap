@@ -23,6 +23,7 @@ from app.api.actions import router as actions_router
 from app.api.ask import router as ask_router
 from app.api.listen import router as listen_router
 from app.api.openai_compat import router as openai_compat_router
+from app.api.sessions import router as sessions_router
 from app.api.status import router as status_router
 from app.api.transcribe import router as transcribe_router
 from app.config import config, load_env_file
@@ -161,6 +162,24 @@ async def lifespan(app: FastAPI):
     logger.info("Starting whisper-wrap API server")
     config.ensure_temp_dir()
 
+    # v2.3 persistence init: create data dirs, run Alembic to head, expose the
+    # engine on app.state. Done BEFORE model loading so any schema errors fail
+    # fast (engine init is sub-second; model load can take 30s on cold ANE).
+    config.ensure_data_dirs()
+    from alembic import command as alembic_command
+    from alembic.config import Config as AlembicConfig
+
+    from app.services.persistence import SessionLocal, build_engine
+
+    alembic_cfg = AlembicConfig(str(Path("alembic.ini")))
+    alembic_cfg.set_main_option("sqlalchemy.url", config.DATABASE_URL)
+    alembic_command.upgrade(alembic_cfg, "head")
+
+    db_engine = build_engine(config.DATABASE_URL)
+    SessionLocal.configure(bind=db_engine)
+    app.state.db_engine = db_engine
+    logger.info("Persistence ready: %s", config.DATABASE_URL)
+
     load_start = time.perf_counter()
     backend, metadata = _build_backend(
         model_dir_override=config.MODEL_DIR,
@@ -241,6 +260,7 @@ app.include_router(status_router)
 app.include_router(listen_router)
 app.include_router(openai_compat_router)
 app.include_router(actions_router)
+app.include_router(sessions_router)
 
 # v2.4: PWA static bundle mounted at /app/. The bundle is produced by
 # `make build-frontend`; if it's missing (developer hasn't run the frontend
