@@ -34,7 +34,8 @@ import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
 import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
 import { DualRecorder } from "./capture/dual-recorder";
 import { LiveTimeoutManager, type LiveTimeoutReason } from "./capture/live-timeout";
-import { AudioStore } from "./storage/audio-store";
+import { getAudio as fetchAudioFromApi } from "./storage/history-api-client";
+import { hasLegacyData, importLegacyData } from "./ui/import-legacy";
 import {
   loadCaptureMode,
   saveCaptureMode,
@@ -250,11 +251,17 @@ if (!window.isSecureContext && window.location.hostname !== "localhost") {
 
 // ---- State and components --------------------------------------------------
 const settings0 = loadSettings();
-const store = new HistoryStore();
+// History is now backend-backed; pass a backendUrl getter (re-read every
+// call so Settings URL changes apply immediately) plus an error hook so
+// failed background writes surface as a toast instead of disappearing.
+const store = new HistoryStore({
+  backendUrl: () => loadSettings().backendUrl || window.location.origin,
+  onError: (e, ctx) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast(`⚠ history ${ctx.op} failed: ${msg}`);
+  },
+});
 store.setRetention(settings0.retention);
-
-const audioStore = new AudioStore();
-let audioStoreWarned = false; // Toast once per page lifetime if IDB unavailable.
 
 const transcript = new TranscriptView(transcriptHost);
 
@@ -264,8 +271,22 @@ const settingsPanel = new SettingsPanel({
   root: settingsHost,
   enumerateDevices: async () => navigator.mediaDevices.enumerateDevices(),
   onChange: (s) => store.setRetention(s.retention),
-  clearAllAudio: async () => audioStore.clear(),
+  clearAllAudio: () => store.bulkClearAudio(),
   onToast: (text) => toast(text),
+  // Migration: one-shot import of pre-2.3 localStorage history into the
+  // backend. Re-primes the history cache on success so the imported
+  // sessions appear in the panel without a page reload.
+  importLegacy: async () => {
+    const result = await importLegacyData({
+      backendUrl: () => loadSettings().backendUrl || window.location.origin,
+    });
+    if (result.sessionsImported > 0) {
+      await store.prime();
+      history.render();
+    }
+    return result;
+  },
+  hasLegacyData: () => hasLegacyData(),
 });
 
 // HistoryPanel and ActionsBar reference each other: ActionsBar's onAnswer
@@ -367,10 +388,24 @@ history = new HistoryPanel({
   // and the panel falls back to the raw ID; we re-render once .load()
   // resolves so the labels light up.
   resolveActionLabel: (id) => actionsBar.getActionLabel(id),
-  // Audio replay: HistoryPanel looks up the per-session blob via audioStore
-  // when the user expands a session card. Returns null when the audio was
-  // either evicted (budget exceeded) or the session predates the capability.
-  getAudio: (id) => audioStore.get(id),
+  // Audio replay: HistoryPanel fetches the blob from the backend on expand.
+  // Returns null when the session has no audio (POST /audio never ran, or it
+  // was cleared via bulk DELETE). 404 is mapped to null by fetchAudioFromApi.
+  getAudio: async (id) => {
+    const got = await fetchAudioFromApi(
+      loadSettings().backendUrl || window.location.origin,
+      id,
+    );
+    if (!got) return null;
+    return {
+      session_id: id,
+      mime_type: got.mime_type,
+      blob: got.blob,
+      duration_ms: 0, // waveform player decodes its own duration
+      byte_size: got.blob.size,
+      stored_at: Date.now(),
+    };
+  },
   // Re-ASR: HistoryPanel renders a "transcribe again" form when audio is
   // available. The transcribe callback wraps the same /transcribe endpoint
   // used by the batch upload path; the new run is appended to the session
@@ -395,7 +430,12 @@ history = new HistoryPanel({
   }),
 });
 
-void actionsBar.load().then(() => history.render());
+// Prime the history cache from the backend BEFORE the panel renders its
+// first frame so persisted sessions appear instantly instead of after a
+// blink. ActionsBar load is independent; both can run concurrently.
+void Promise.all([store.prime(), actionsBar.load()]).then(() => {
+  history.render();
+});
 
 // ---- Mode cards (morph in place) ------------------------------------------
 const batchCard = new ModeCard({
@@ -551,7 +591,7 @@ async function startRecording(mode: CaptureMode): Promise<void> {
   otherCard().setDisabled(true, t("modeCard.recordingInProgress"));
 
   if (mode === "live") {
-    currentSessionId = store.startSession();
+    currentSessionId = store.startSession("live");
     history.render();
     // WS row stays hidden while everything is fine; the connection indicator
     // surfaces itself only on reconnecting / failed states (see handler below).
@@ -769,9 +809,9 @@ async function processBatchRecording(
 ): Promise<void> {
   try {
     const text = await uploadForTranscription(blob, mimeType);
-    const sessionId = store.startSession();
-    store.appendFinal(sessionId, { text, start_ms: 0, end_ms: durationMs });
-    store.stopSession(sessionId);
+    const sessionId = store.startSession("batch");
+    await store.appendFinal(sessionId, { text, start_ms: 0, end_ms: durationMs });
+    await store.stopSession(sessionId);
     transcript.appendFinal({
       text,
       start_ms: 0,
@@ -801,30 +841,21 @@ async function processBatchRecording(
 }
 
 /**
- * Best-effort write of `blob` to the AudioStore for `sessionId`, plus a flag
- * on the history record so the player can later distinguish "audio expired"
- * (was saved, then evicted) from "audio missing" (never saved). Eviction
- * toasts the count when at least one record was dropped. IDB unavailable
- * (private browsing, quota exhausted, etc.) is non-fatal: one warning per
- * page lifetime, then proceed without persistence.
+ * Best-effort upload of `blob` to the backend for `sessionId`. The backend
+ * stores the file under `data/audio/{id}{ext}` and stamps `audio_path` on
+ * the session row; the HistoryStore mirrors this as `audio_saved=true`.
+ * Errors surface as a toast — the transcript is already saved server-side.
+ * `durationMs` is unused now (waveform player decodes its own duration).
  */
 async function persistAudio(
   sessionId: string,
   blob: Blob,
-  durationMs: number,
+  _durationMs: number,
 ): Promise<void> {
   try {
-    await audioStore.put(sessionId, blob, durationMs);
-    store.markAudioSaved(sessionId);
-    const evicted = audioStore.lastEvictionCount();
-    if (evicted > 0) {
-      toast(t("audio.evicted", { count: evicted }));
-    }
+    await store.uploadSessionAudio(sessionId, blob, blob.type || "audio/webm");
   } catch (e) {
-    if (!audioStoreWarned) {
-      audioStoreWarned = true;
-      toast(`⚠ ${e instanceof Error ? e.message : String(e)}`);
-    }
+    toast(`⚠ ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

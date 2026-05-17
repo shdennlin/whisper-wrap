@@ -22,7 +22,11 @@ from app.services.persistence.models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` is critical here: the default behaviour
+    # of fileConfig is to mute every logger that existed BEFORE this call,
+    # which would silence the app's own loggers (and break pytest caplog
+    # capture in tests that run after this module is imported).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

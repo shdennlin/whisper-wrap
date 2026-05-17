@@ -1,39 +1,45 @@
 /**
- * Per-session capture history persisted to `localStorage`.
+ * Per-session capture history backed by the `/v1/sessions` REST API.
  *
- * Decision 4: writes happen incrementally on every `final` event (not only on
- * stop), capped at 20 sessions, oldest-by-`started_at` evicted on overflow.
+ * Reads (`list`, `get`) hit the in-memory cache and resolve synchronously
+ * after `prime()` has run once at startup. Writes (`startSession`,
+ * `appendFinal`, ...) issue API calls and update the cache only on 2xx so
+ * a failed network call doesn't pollute the optimistic view.
  *
- * Schema (versioned under `STORAGE_KEY`):
- *   {
- *     "version": 1,
- *     "sessions": [SessionRecord, ...]  // any order; sorted at read time
- *   }
+ * `startSession` is intentionally synchronous (returns the id immediately,
+ * fires the POST in the background). The id is client-generated so the
+ * caller can write to other in-memory state without waiting for the round
+ * trip; if the POST fails the cache is rolled back and an `onError`
+ * callback fires (if supplied).
+ *
+ * Legacy localStorage data lives at `STORAGE_KEY` for use by the migration
+ * tool only — HistoryStore itself never writes to localStorage anymore.
  */
+
+import {
+  appendActionRunToApi,
+  appendFinalToApi,
+  bulkClearAudio,
+  createSession,
+  deleteSession as deleteSessionApi,
+  listSessions,
+  patchSession,
+  uploadAudio,
+  type CaptureMode,
+  type SessionFull,
+} from "./history-api-client";
 
 export const STORAGE_KEY = "whisper-wrap.sessions";
 export const DEFAULT_RETENTION = 20;
-const SCHEMA_VERSION = 1;
 
-/**
- * Recordings shorter than this are treated as accidental taps and discarded
- * without going into history. 500 ms = 2 AudioWorklet frames, enough that the
- * user actually intended to record but small enough to never lose a real
- * utterance.
- */
+/** Recordings shorter than this are treated as accidental taps and discarded. */
 export const MIN_USABLE_DURATION_MS = 500;
 
-/** Returns the recording duration in ms, or 0 if the session is still open. */
 export function sessionDurationMs(s: SessionRecord): number {
   if (s.ended_at === null) return 0;
   return Math.max(0, s.ended_at - s.started_at);
 }
 
-/**
- * Format a duration with one decimal place. Under 60 s renders as `12.3s`;
- * 60 s and over renders as `mm:ss.x` so the user can see the same tenths-of-
- * second resolution at any length.
- */
 export function formatSessionDuration(ms: number): string {
   const tenths = Math.floor(ms / 100);
   const totalSec = Math.floor(tenths / 10);
@@ -65,149 +71,203 @@ export interface SessionRecord {
   ended_at: number | null;
   finals: SessionFinal[];
   action_runs: ActionRun[];
-  /**
-   * True when an audio blob was successfully written to AudioStore for this
-   * session. Lets the history panel distinguish a session whose audio was
-   * never saved (missing) from one whose audio was saved-then-evicted
-   * (expired). Optional for backwards-compatibility with pre-capability rows.
-   */
+  /** Derived from `audio_path !== null` once the API populates it. */
   audio_saved?: boolean;
 }
 
-interface PersistedState {
-  version: number;
-  sessions: SessionRecord[];
-  retention: number;
+export interface HistoryStoreOptions {
+  backendUrl: () => string;
+  /** Called when a background API write fails. Receives the error + which
+   *  session it was for. Use to surface a toast / log so silent failures
+   *  don't leave the cache out of sync. */
+  onError?: (err: unknown, ctx: { op: string; sessionId?: string }) => void;
 }
 
 export class HistoryStore {
   private retention = DEFAULT_RETENTION;
+  /** Newest-first cache of sessions. Mutated only via _setCache wrappers
+   *  so we keep a single ordering invariant. */
+  private cache: SessionRecord[] = [];
 
-  list(): SessionRecord[] {
-    const state = this.load();
-    // Insertion order is chronological; reverse for "newest first" without
-    // relying on Date.now() being unique (tight loops can produce ties).
-    return [...state.sessions].reverse();
+  constructor(private readonly opts: HistoryStoreOptions = { backendUrl: () => "" }) {}
+
+  /** Initial fetch — call once at startup before the history panel renders. */
+  async prime(): Promise<void> {
+    try {
+      const r = await listSessions(this.opts.backendUrl(), {
+        limit: this.retention,
+      });
+      this.cache = r.sessions.map(sessionFromDigest);
+    } catch (e) {
+      this.opts.onError?.(e, { op: "prime" });
+      this.cache = [];
+    }
   }
 
-  startSession(): string {
-    const state = this.load();
+  list(): SessionRecord[] {
+    // Newest-first (started_at DESC) — backend already returns this order.
+    return [...this.cache];
+  }
+
+  startSession(mode: CaptureMode = "batch"): string {
     const id = generateId();
-    state.sessions.push({
+    const started_at = Date.now();
+    const record: SessionRecord = {
       id,
-      started_at: Date.now(),
+      started_at,
       ended_at: null,
       finals: [],
       action_runs: [],
-    });
-    this.persist(this.enforceRetention(state));
+    };
+    this.cache = [record, ...this.cache];
+    void createSession(this.opts.backendUrl(), { id, started_at, mode })
+      .catch((e) => this.opts.onError?.(e, { op: "startSession", sessionId: id }));
     return id;
   }
 
-  appendFinal(id: string, final: SessionFinal): void {
-    this.mutate(id, (s) => {
-      s.finals.push(final);
-    });
+  async appendFinal(id: string, final: SessionFinal): Promise<void> {
+    const session = this.cache.find((s) => s.id === id);
+    if (!session) {
+      throw new Error(`HistoryStore: unknown session id ${id}`);
+    }
+    try {
+      await appendFinalToApi(this.opts.backendUrl(), id, final);
+      session.finals.push(final);
+    } catch (e) {
+      this.opts.onError?.(e, { op: "appendFinal", sessionId: id });
+      throw e;
+    }
   }
 
-  appendActionRun(id: string, run: ActionRun): void {
-    this.mutate(id, (s) => {
-      s.action_runs.push(run);
-    });
+  async appendActionRun(id: string, run: ActionRun): Promise<void> {
+    const session = this.cache.find((s) => s.id === id);
+    if (!session) {
+      throw new Error(`HistoryStore: unknown session id ${id}`);
+    }
+    try {
+      await appendActionRunToApi(this.opts.backendUrl(), id, run);
+      session.action_runs.push(run);
+    } catch (e) {
+      this.opts.onError?.(e, { op: "appendActionRun", sessionId: id });
+      throw e;
+    }
   }
 
-  stopSession(id: string): void {
-    this.mutate(id, (s) => {
-      s.ended_at = Date.now();
-    });
+  async stopSession(id: string): Promise<void> {
+    const session = this.cache.find((s) => s.id === id);
+    if (!session) {
+      throw new Error(`HistoryStore: unknown session id ${id}`);
+    }
+    const ended_at = Date.now();
+    try {
+      await patchSession(this.opts.backendUrl(), id, {
+        ended_at,
+        duration_ms: ended_at - session.started_at,
+      });
+      session.ended_at = ended_at;
+    } catch (e) {
+      this.opts.onError?.(e, { op: "stopSession", sessionId: id });
+      throw e;
+    }
   }
 
-  /**
-   * Record that this session's audio blob was successfully persisted to
-   * AudioStore. The history panel reads this to distinguish "audio missing"
-   * (never saved or audio.save was off) from "audio expired" (saved then
-   * evicted by the byte-budget enforcer).
-   */
-  markAudioSaved(id: string): void {
-    this.mutate(id, (s) => {
-      s.audio_saved = true;
-    });
-  }
-
-  deleteSession(id: string): void {
-    const state = this.load();
-    state.sessions = state.sessions.filter((s) => s.id !== id);
-    this.persist(state);
+  async deleteSession(id: string): Promise<void> {
+    const previous = this.cache;
+    this.cache = this.cache.filter((s) => s.id !== id);
+    try {
+      await deleteSessionApi(this.opts.backendUrl(), id);
+    } catch (e) {
+      // Roll back the cache so the UI re-renders consistently.
+      this.cache = previous;
+      this.opts.onError?.(e, { op: "deleteSession", sessionId: id });
+      throw e;
+    }
   }
 
   setRetention(n: number): void {
     if (!Number.isFinite(n) || n < 1) {
       throw new Error(`Retention must be a positive integer, got ${n}`);
     }
-    // Load first (which may overwrite this.retention from persisted state),
-    // then set the new retention so it sticks for both this call and the
-    // persisted snapshot.
-    const state = this.load();
     this.retention = Math.floor(n);
-    state.retention = this.retention;
-    this.persist(this.enforceRetention(state));
-  }
-
-  clear(): void {
-    window.localStorage.removeItem(STORAGE_KEY);
-  }
-
-  private mutate(id: string, fn: (s: SessionRecord) => void): void {
-    const state = this.load();
-    const session = state.sessions.find((s) => s.id === id);
-    if (!session) {
-      throw new Error(`HistoryStore: unknown session id ${id}`);
+    // Trim cache to new cap (backend doesn't enforce retention).
+    if (this.cache.length > this.retention) {
+      this.cache = this.cache.slice(0, this.retention);
     }
-    fn(session);
-    this.persist(state);
   }
 
-  private enforceRetention(state: PersistedState): PersistedState {
-    if (state.sessions.length <= this.retention) return state;
-    // Insertion order is chronological, so the oldest are at the front. Drop
-    // the surplus from the head. (Avoids relying on Date.now() being unique.)
-    state.sessions.splice(0, state.sessions.length - this.retention);
-    return state;
+  async clear(): Promise<void> {
+    // Convenience for tests / settings: wipe local cache only. Server-side
+    // bulk delete would require a per-session DELETE storm; the audio bulk
+    // clear is a separate operation.
+    this.cache = [];
   }
 
-  private load(): PersistedState {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return { version: SCHEMA_VERSION, sessions: [], retention: this.retention };
-    }
+  /** Upload audio for a session and stamp the metadata back into the cache. */
+  async uploadSessionAudio(
+    id: string,
+    blob: Blob,
+    mimeType: string,
+  ): Promise<void> {
     try {
-      const parsed = JSON.parse(raw) as PersistedState;
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        Array.isArray(parsed.sessions)
-      ) {
-        if (typeof parsed.retention === "number") this.retention = parsed.retention;
-        return {
-          version: parsed.version ?? SCHEMA_VERSION,
-          sessions: parsed.sessions,
-          retention: this.retention,
-        };
+      const meta = await uploadAudio(this.opts.backendUrl(), id, blob, mimeType);
+      const session = this.cache.find((s) => s.id === id);
+      if (session) {
+        session.audio_saved = !!meta.audio_path;
       }
-    } catch {
-      // Fall through to a clean state.
+    } catch (e) {
+      this.opts.onError?.(e, { op: "uploadSessionAudio", sessionId: id });
+      throw e;
     }
-    return { version: SCHEMA_VERSION, sessions: [], retention: this.retention };
   }
 
-  private persist(state: PersistedState): void {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  /** Bulk clear all audio files via backend; mark cache rows as unsaved. */
+  async bulkClearAudio(): Promise<number> {
+    const r = await bulkClearAudio(this.opts.backendUrl());
+    for (const s of this.cache) {
+      s.audio_saved = false;
+    }
+    return r.deleted_count;
+  }
+
+  /** Test hook only — replace cache contents with a known seed. */
+  __setCacheForTests(records: SessionRecord[]): void {
+    this.cache = [...records];
   }
 }
 
+function sessionFromDigest(d: SessionFull | {
+  id: string;
+  started_at: number;
+  ended_at: number | null;
+  audio_path: string | null;
+}): SessionRecord {
+  const full = "finals" in d ? d : undefined;
+  return {
+    id: d.id,
+    started_at: d.started_at,
+    ended_at: d.ended_at,
+    finals: full
+      ? full.finals.map((f) => ({
+          text: f.text,
+          start_ms: f.start_ms ?? 0,
+          end_ms: f.end_ms ?? 0,
+        }))
+      : [],
+    action_runs: full
+      ? full.action_runs.map((r) => ({
+          action_id: r.action_id,
+          prompt: r.prompt,
+          answer: r.answer,
+          ran_at: r.ran_at,
+        }))
+      : [],
+    audio_saved: d.audio_path !== null,
+  };
+}
+
 function generateId(): string {
-  // Lightweight ULID-style ID (timestamp + random suffix). Not cryptographic;
-  // adequate for client-side session identity.
+  // ULID-style: timestamp + random suffix. Not cryptographic; adequate for
+  // client-side session identity that's also used as the backend PK.
   const t = Date.now().toString(36);
   const r = Math.floor(Math.random() * 0xffffff)
     .toString(36)
