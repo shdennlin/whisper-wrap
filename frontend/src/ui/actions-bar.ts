@@ -11,6 +11,7 @@
  */
 
 import type { ActionRun } from "../storage/history-store";
+import { t } from "../i18n";
 
 export interface ActionTemplate {
   id: string;
@@ -27,11 +28,13 @@ export interface ActionsBarOptions {
   getTranscript: () => string;
 }
 
-const FALLBACK_PASSTHROUGH: ActionTemplate = {
-  id: "passthrough",
-  label: "直接送",
-  template: "{transcript}",
-};
+function fallbackPassthrough(): ActionTemplate {
+  return {
+    id: "passthrough",
+    label: t("actions.passthroughLabel"),
+    template: "{transcript}",
+  };
+}
 
 export class ActionsBar {
   private actions: ActionTemplate[] = [];
@@ -54,7 +57,7 @@ export class ActionsBar {
   }
 
   private fallback(message: string): void {
-    this.actions = [FALLBACK_PASSTHROUGH];
+    this.actions = [fallbackPassthrough()];
     this.opts.onWarn(message);
   }
 
@@ -79,7 +82,10 @@ export class ActionsBar {
       const response = await this.opts.postAsk(prompt);
       answer = response.answer ?? "";
     } catch (e) {
-      answer = e instanceof Error ? `（請求失敗：${e.message}）` : "（請求失敗）";
+      answer =
+        e instanceof Error
+          ? t("actions.requestFailedWithMessage", { error: e.message })
+          : t("actions.requestFailed");
     }
     this.opts.onAnswer({
       action_id: action.id,

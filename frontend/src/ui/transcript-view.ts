@@ -12,6 +12,8 @@
  *               "00:00" and just add visual noise)
  */
 
+import { t } from "../i18n";
+
 export type FinalKind = "live" | "batch";
 
 export interface FinalCue {
@@ -33,16 +35,21 @@ export class TranscriptView {
     header.className = "transcript-header";
     const titleEl = document.createElement("span");
     titleEl.className = "transcript-title";
-    titleEl.textContent = "逐字稿";
+    titleEl.textContent = t("transcript.title");
     this.copyBtn = document.createElement("button");
     this.copyBtn.type = "button";
     this.copyBtn.className = "transcript-copy";
-    this.copyBtn.textContent = "複製";
-    this.copyBtn.title = "複製目前的逐字稿";
+    this.copyBtn.textContent = t("common.copy");
+    this.copyBtn.title = t("transcript.copyTitle");
     this.copyBtn.addEventListener("click", () => {
       void copyToClipboard(this.getText()).then((ok) => {
-        this.copyBtn.textContent = ok ? "已複製 ✓" : "複製失敗";
-        setTimeout(() => (this.copyBtn.textContent = "複製"), 1500);
+        this.copyBtn.textContent = ok
+          ? t("transcript.copied")
+          : t("transcript.copyFailed");
+        setTimeout(
+          () => (this.copyBtn.textContent = t("common.copy")),
+          1500,
+        );
       });
     });
     header.append(titleEl, this.copyBtn);

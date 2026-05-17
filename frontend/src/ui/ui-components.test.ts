@@ -93,13 +93,13 @@ describe("ConnectionIndicator", () => {
     expect(retried).toBe(1);
   });
 
-  it("renders a Chinese label appropriate to each state", () => {
+  it("renders an English label appropriate to each state (default locale)", () => {
     const ind = new ConnectionIndicator(host, () => {});
     ind.setState("open");
-    expect(host.querySelector(".conn-label")?.textContent).toBe("已連線");
+    expect(host.querySelector(".conn-label")?.textContent).toBe("Connected");
     ind.setState("reconnecting");
-    expect(host.querySelector(".conn-label")?.textContent).toBe("重連中…");
+    expect(host.querySelector(".conn-label")?.textContent).toBe("Reconnecting…");
     ind.setState("failed");
-    expect(host.querySelector(".conn-label")?.textContent).toBe("連線失敗");
+    expect(host.querySelector(".conn-label")?.textContent).toBe("Connection failed");
   });
 });

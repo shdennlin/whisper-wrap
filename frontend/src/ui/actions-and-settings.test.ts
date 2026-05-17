@@ -84,7 +84,7 @@ describe("ActionsBar", () => {
 
     const chips = host.querySelectorAll("button.actions-chip");
     expect(chips.length).toBe(1);
-    expect(chips[0].textContent).toBe("直接送");
+    expect(chips[0].textContent).toBe("Send as-is");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("502 Bad Gateway");
   });
@@ -126,8 +126,8 @@ describe("SettingsPanel + persistence helpers", () => {
       onChange: () => {},
     });
     void panel;
-    // Mic select + url input + 3 checkboxes + 3 number inputs (retention, idle, max)
-    expect(host.querySelectorAll("select").length).toBe(1);
+    // 2 selects (language + mic) + url input + 3 checkboxes + 3 number inputs
+    expect(host.querySelectorAll("select").length).toBe(2);
     expect(host.querySelectorAll('input[type="url"]').length).toBe(1);
     expect(host.querySelectorAll('input[type="checkbox"]').length).toBe(3);
     expect(host.querySelectorAll('input[type="number"]').length).toBe(3);

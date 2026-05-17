@@ -12,7 +12,20 @@
  *   - Live hard-cap minutes (0 disables; default 240 = 4 h)
  */
 
+import {
+  AVAILABLE_LOCALES,
+  getLocale,
+  saveLocale,
+  t,
+  type Locale,
+} from "../i18n";
+
 export const SETTINGS_KEY = "whisper-wrap.settings";
+
+const LOCALE_LABELS: Record<Locale, string> = {
+  en: "English",
+  "zh-TW": "繁體中文",
+};
 
 export interface Settings {
   deviceId: string | null;
@@ -73,6 +86,7 @@ export class SettingsPanel {
   private retentionInput!: HTMLInputElement;
   private liveIdleInput!: HTMLInputElement;
   private liveMaxInput!: HTMLInputElement;
+  private languageSelect!: HTMLSelectElement;
 
   constructor(private readonly opts: SettingsPanelOptions) {
     this.current = loadSettings();
@@ -85,36 +99,62 @@ export class SettingsPanel {
   }
 
   private build(): void {
-    this.deviceSelect = this.makeSelect("麥克風裝置");
-    this.backendInput = this.makeInput("後端位址", "url", this.current.backendUrl);
-    this.partialsInput = this.makeCheckbox("顯示 partial", this.current.showPartials);
-    this.autoscrollInput = this.makeCheckbox("自動捲到最底", this.current.autoScroll);
+    this.languageSelect = this.makeSelect(t("settings.language"));
+    for (const loc of AVAILABLE_LOCALES) {
+      const opt = document.createElement("option");
+      opt.value = loc;
+      opt.textContent = LOCALE_LABELS[loc];
+      this.languageSelect.appendChild(opt);
+    }
+    this.languageSelect.value = getLocale();
+    // Locale change is rare; reload the page rather than re-rendering every
+    // component subtree on the fly.
+    this.languageSelect.addEventListener("change", () => {
+      const next = this.languageSelect.value as Locale;
+      saveLocale(next);
+      window.location.reload();
+    });
+
+    this.deviceSelect = this.makeSelect(t("settings.mic"));
+    this.backendInput = this.makeInput(
+      t("settings.backendUrl"),
+      "url",
+      this.current.backendUrl,
+    );
+    this.partialsInput = this.makeCheckbox(
+      t("settings.showPartials"),
+      this.current.showPartials,
+    );
+    this.autoscrollInput = this.makeCheckbox(
+      t("settings.autoScroll"),
+      this.current.autoScroll,
+    );
     this.autocopyInput = this.makeCheckbox(
-      "錄音結束自動複製逐字稿",
+      t("settings.autoCopy"),
       this.current.autoCopy,
     );
     this.retentionInput = this.makeInput(
-      "對話記錄保留筆數",
+      t("settings.retention"),
       "number",
       String(this.current.retention),
     );
     this.retentionInput.min = "1";
     this.retentionInput.max = "50";
 
-    this.makeSectionTitle("Live 模式自動停止");
+    this.makeSectionTitle(t("settings.liveSection"));
     this.liveIdleInput = this.makeInputWithHint(
-      "閒置幾分鐘自動停止（0 = 永不）",
+      t("settings.liveIdleLabel"),
       "number",
       String(this.current.liveIdleMinutes),
-      "持續這麼久沒有新字幕就自動停止錄音 — 適合會議結束忘記按停。",
+      t("settings.liveIdleHint"),
     );
     this.liveIdleInput.min = "0";
     this.liveIdleInput.max = "180";
     this.liveMaxInput = this.makeInputWithHint(
-      "最長錄音上限（分鐘，0 = 永不）",
+      t("settings.liveMaxLabel"),
       "number",
       String(this.current.liveMaxMinutes),
-      "保命用 hard cap，從按下開始算到這個分鐘數一定停。預設 4 小時。",
+      t("settings.liveMaxHint"),
     );
     this.liveMaxInput.min = "0";
     this.liveMaxInput.max = "720";
@@ -159,7 +199,7 @@ export class SettingsPanel {
     this.deviceSelect.replaceChildren();
     const auto = document.createElement("option");
     auto.value = "";
-    auto.textContent = "（系統預設）";
+    auto.textContent = t("settings.micAuto");
     this.deviceSelect.appendChild(auto);
     for (const d of devices) {
       if (d.kind !== "audioinput") continue;

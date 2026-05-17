@@ -20,6 +20,7 @@
 
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
+import { loadLocale, t } from "./i18n";
 import { MicPipeline } from "./capture/mic-pipeline";
 import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
 import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
@@ -42,6 +43,9 @@ import {
   MIN_USABLE_DURATION_MS,
 } from "./storage/history-store";
 
+// Resolve locale before any component reads strings.
+loadLocale();
+
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("missing #app root");
 root.replaceChildren();
@@ -49,9 +53,9 @@ root.replaceChildren();
 // ---- Layout shell ----------------------------------------------------------
 const header = el("header", "app-header");
 const title = el("h1");
-title.textContent = "whisper-wrap";
+title.textContent = t("app.appName");
 const indicatorHost = el("div");
-const settingsToggle = button("⚙︎ 設定");
+const settingsToggle = button(`⚙︎ ${t("common.settings")}`);
 header.append(title, indicatorHost, settingsToggle);
 
 const main = el("main", "main-pane");
@@ -67,7 +71,7 @@ captureHost.append(cardsHost, wsIndicatorHost, uploadRetryHost);
 const transcriptHost = el("section");
 const actionsHost = el("section");
 const answerHost = el("section", "answer-pane");
-answerHost.textContent = "（按下停止後選一個 AI 動作，回應會出現在這）";
+answerHost.textContent = t("app.answerPlaceholder");
 main.append(captureHost, transcriptHost, actionsHost, answerHost);
 
 const aside = el("aside", "aside");
@@ -79,14 +83,14 @@ const settingsModal = el("div", "modal-backdrop");
 settingsModal.hidden = true;
 settingsModal.setAttribute("role", "dialog");
 settingsModal.setAttribute("aria-modal", "true");
-settingsModal.setAttribute("aria-label", "設定");
+settingsModal.setAttribute("aria-label", t("settings.title"));
 const settingsDialog = el("div", "modal-dialog");
 const settingsHeader = el("div", "modal-header");
 const settingsTitle = el("h2");
-settingsTitle.textContent = "設定";
+settingsTitle.textContent = t("settings.title");
 const settingsClose = button("✕");
 settingsClose.className = "modal-close";
-settingsClose.setAttribute("aria-label", "關閉設定");
+settingsClose.setAttribute("aria-label", t("settings.closeAria"));
 settingsHeader.append(settingsTitle, settingsClose);
 const settingsHost = el("section");
 settingsDialog.append(settingsHeader, settingsHost);
@@ -97,8 +101,7 @@ root.append(header, main, aside, settingsModal);
 // ---- Insecure-origin banner (above header) ---------------------------------
 if (!window.isSecureContext && window.location.hostname !== "localhost") {
   const banner = el("div", "banner");
-  banner.textContent =
-    "目前不是 HTTPS 或 localhost — 麥克風 API 無法使用。請參考 docs/HTTPS-TAILSCALE.md 設定 Tailscale cert。";
+  banner.textContent = t("app.insecureBanner");
   root.insertBefore(banner, header);
 }
 
@@ -152,8 +155,8 @@ void actionsBar.load();
 const batchCard = new ModeCard({
   mode: "batch",
   icon: "●",
-  label: "Batch",
-  description: "錄完一次轉錄，準確度高",
+  label: t("modeCard.batchLabel"),
+  description: t("modeCard.batchDesc"),
   pauseSupported: true,
   onStart: () => startRecording("batch").catch(reportError),
   onStop: () => stopRecording().catch(reportError),
@@ -163,8 +166,8 @@ const batchCard = new ModeCard({
 const liveCard = new ModeCard({
   mode: "live",
   icon: "◉",
-  label: "Live",
-  description: "邊講邊出字幕",
+  label: t("modeCard.liveLabel"),
+  description: t("modeCard.liveDesc"),
   pauseSupported: true,
   onStart: () => startRecording("live").catch(reportError),
   onStop: () => stopRecording().catch(reportError),
@@ -200,7 +203,7 @@ const healthMonitor = new HealthMonitor({
   onStateChange: (state) => {
     backendIndicator.setState(state);
     const disabled = state !== "ok";
-    const title = disabled ? "後端未連線；恢復後可重試" : undefined;
+    const title = disabled ? t("backend.disabledTitle") : undefined;
     // Only disable cards that are currently idle — never yank a card out
     // from under an in-progress recording.
     if (batchCard.getState() === "idle") batchCard.setDisabled(disabled, title);
@@ -254,7 +257,7 @@ function otherCard(): ModeCard {
 async function startRecording(mode: CaptureMode): Promise<void> {
   const health = await healthMonitor.checkNow();
   if (health !== "ok") {
-    toast("後端離線，無法開始錄音");
+    toast(t("toast.backendOffline"));
     return;
   }
 
@@ -267,7 +270,7 @@ async function startRecording(mode: CaptureMode): Promise<void> {
   lastLivePartialText = "";
 
   activeCard().start();
-  otherCard().setDisabled(true, "錄音中無法切換模式");
+  otherCard().setDisabled(true, t("modeCard.recordingInProgress"));
 
   if (mode === "live") {
     currentSessionId = store.startSession();
@@ -289,8 +292,8 @@ async function startRecording(mode: CaptureMode): Promise<void> {
       onTimeout: (reason: LiveTimeoutReason) => {
         toast(
           reason === "idle"
-            ? `已閒置 ${liveSettings.liveIdleMinutes} 分鐘，自動停止錄音`
-            : `已達 ${liveSettings.liveMaxMinutes} 分鐘上限，自動停止錄音`,
+            ? t("toast.autoStopIdle", { minutes: liveSettings.liveIdleMinutes })
+            : t("toast.autoStopMax", { minutes: liveSettings.liveMaxMinutes }),
         );
         void stopRecording().catch(reportError);
       },
@@ -313,7 +316,7 @@ async function startRecording(mode: CaptureMode): Promise<void> {
       batch = new BatchRecorder({
         deviceId: settings.deviceId ?? undefined,
         maxDurationMs: DEFAULT_MAX_DURATION_MS,
-        onAutoStop: () => toast("已達 10 分鐘上限，自動停止錄音"),
+        onAutoStop: () => toast(t("toast.tenMinReached")),
       });
       await batch.start();
     } catch (e) {
@@ -349,7 +352,7 @@ async function discardRecording(): Promise<void> {
       history.render();
     }
     currentSessionId = null;
-    toast("已捨棄錄音");
+    toast(t("toast.discarded"));
     resetIdle();
     return;
   }
@@ -357,7 +360,7 @@ async function discardRecording(): Promise<void> {
     await batch.discard();
     batch = null;
   }
-  toast("已捨棄錄音");
+  toast(t("toast.discarded"));
   resetIdle();
 }
 
@@ -365,21 +368,15 @@ async function stopRecording(): Promise<void> {
   if (currentMode === "live") {
     // Graceful Live stop: keep the WS open, pause the real mic, push a short
     // burst of silence frames so the server's silero-VAD endpoints the
-    // pending utterance, and wait briefly for one more `final` event. If the
-    // final lands, the partial-text variable will already have been cleared
-    // by the event handler so the fallback flush below is a no-op. If
-    // nothing arrives before the timeout, fall back to flushing the latest
-    // partial text we tracked locally.
+    // pending utterance, and wait briefly for one more `final` event.
     if (sock && mic) {
-      activeCard().showProcessing("確認最後一段…");
+      activeCard().showProcessing(t("modeCard.confirmingFinal"));
       mic.pause();
       sendSilenceFrames(sock, GRACEFUL_STOP_SILENCE_FRAMES);
       await waitForNextFinalOr(GRACEFUL_STOP_TIMEOUT_MS);
     }
 
-    // After the graceful wait, flush any remaining in-flight partial. Reads
-    // `lastLivePartialText` (not `transcript.getPartial()`) so the flush
-    // still works when the user has `showPartials` disabled in Settings.
+    // After the graceful wait, flush any remaining in-flight partial.
     const partial = lastLivePartialText.trim();
     if (partial && currentSessionId) {
       const ts = Math.max(0, Date.now() - recordingStartedAt);
@@ -413,7 +410,7 @@ async function stopRecording(): Promise<void> {
         session.finals.length === 0
       ) {
         store.deleteSession(currentSessionId);
-        toast(`錄音過短（${formatBriefDuration(dur)}），未儲存`);
+        toast(t("toast.tooShortNotSaved", { duration: formatBriefDuration(dur) }));
       } else if (session && session.finals.length > 0) {
         await maybeAutoCopy();
       }
@@ -433,14 +430,14 @@ async function stopRecording(): Promise<void> {
   try {
     recording = await batch.stop();
   } catch (e) {
-    toast(`錄音失敗：${e instanceof Error ? e.message : String(e)}`);
+    toast(t("toast.recordFailed", { error: e instanceof Error ? e.message : String(e) }));
     batch = null;
     resetIdle();
     return;
   }
   batch = null;
   if (recording.durationMs < MIN_USABLE_DURATION_MS) {
-    toast(`錄音過短（${formatBriefDuration(recording.durationMs)}），未儲存`);
+    toast(t("toast.tooShortNotSaved", { duration: formatBriefDuration(recording.durationMs) }));
     resetIdle();
     return;
   }
@@ -484,7 +481,7 @@ async function maybeAutoCopy(): Promise<void> {
   const text = transcript.getText();
   if (!text) return;
   const ok = await copyToClipboard(text);
-  if (ok) toast("逐字稿已自動複製到剪貼簿");
+  if (ok) toast(t("toast.autoCopied"));
 }
 
 interface PendingUpload {
@@ -501,18 +498,21 @@ function showRetryPrompt(p: PendingUpload): void {
   uploadRetryHost.replaceChildren();
 
   const message = el("span", "msg");
-  message.textContent = `轉錄失敗（${formatBriefDuration(p.durationMs)} 錄音）：${p.errorMessage}`;
-  const retryBtn = button("重試");
+  message.textContent = t("uploadRetry.message", {
+    duration: formatBriefDuration(p.durationMs),
+    error: p.errorMessage,
+  });
+  const retryBtn = button(t("uploadRetry.retry"));
   retryBtn.addEventListener("click", async () => {
     if (!pendingUpload) return;
     const u = pendingUpload;
     hideRetryPrompt();
     activeCard().start();
     activeCard().showProcessing();
-    otherCard().setDisabled(true, "處理中無法切換模式");
+    otherCard().setDisabled(true, t("modeCard.processingInProgress"));
     await processBatchRecording(u.blob, u.mimeType, u.durationMs);
   });
-  const downloadBtn = button("下載 .webm");
+  const downloadBtn = button(t("uploadRetry.downloadWebm"));
   downloadBtn.addEventListener("click", () => {
     if (!pendingUpload) return;
     downloadBlob(
@@ -520,7 +520,7 @@ function showRetryPrompt(p: PendingUpload): void {
       `whisper-wrap-failed-${Date.now()}.${mimeToExt(pendingUpload.mimeType)}`,
     );
   });
-  const dismissBtn = button("略過");
+  const dismissBtn = button(t("uploadRetry.dismiss"));
   dismissBtn.addEventListener("click", () => hideRetryPrompt());
 
   uploadRetryHost.append(message, retryBtn, downloadBtn, dismissBtn);
@@ -538,7 +538,7 @@ function resetIdle(): void {
   liveCard.reset();
   // Re-apply current health gating so cards reflect the latest backend state.
   const healthy = healthMonitor.getState() === "ok";
-  const title = healthy ? undefined : "後端未連線；恢復後可重試";
+  const title = healthy ? undefined : t("backend.disabledTitle");
   batchCard.setDisabled(!healthy, title);
   liveCard.setDisabled(!healthy, title);
   wsIndicatorHost.hidden = true;
@@ -559,24 +559,14 @@ function handleListenEvent(e: ListenEvent): void {
   switch (e.type) {
     case "state":
       wsIndicator.setState(e.state);
-      // Surface the WS row only when there's something to act on; healthy
-      // ("open") and pre-flight ("idle") states are noise during a normal
-      // Live recording.
       wsIndicatorHost.hidden = e.state === "open" || e.state === "idle";
       break;
     case "partial":
-      // Always track the latest partial text in memory, even if the user has
-      // partials hidden in Settings; the stop-time flush reads this so the
-      // last utterance survives the disconnect.
       lastLivePartialText = e.text;
       if (loadSettings().showPartials) transcript.setPartial(e.text);
       break;
     case "final":
-      // The server confirmed the in-flight buffer; the partial slot is
-      // consumed, nothing left to flush at stop time.
       lastLivePartialText = "";
-      // Wake up any graceful-stop waiter — we just got the final it was
-      // hoping for.
       pendingStopFinalResolver?.();
       pendingStopFinalResolver = null;
       if (currentSessionId) {
@@ -595,7 +585,6 @@ function handleListenEvent(e: ListenEvent): void {
         transcript.root.scrollTop = transcript.root.scrollHeight;
       }
       history.render();
-      // Each confirmed final counts as activity — reset the idle timer.
       liveTimeout?.onActivity();
       break;
     case "error":
@@ -607,7 +596,7 @@ function handleListenEvent(e: ListenEvent): void {
 // ---- Service worker --------------------------------------------------------
 registerSW({
   onNeedRefresh() {
-    toast("新版本已就緒，重新整理頁面以套用。");
+    toast(t("app.newVersionReady"));
   },
   onOfflineReady() {
     // No banner — the offline shell case is documented in INSTALLATION.md.
@@ -637,15 +626,15 @@ function backendUrl(path: string): string {
 }
 
 function toast(message: string): void {
-  const t = el("div", "toast");
-  t.textContent = message;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
+  const tNode = el("div", "toast");
+  tNode.textContent = message;
+  document.body.appendChild(tNode);
+  setTimeout(() => tNode.remove(), 4000);
 }
 
 function micPermissionModal(detail: string): void {
   const modal = el("div", "banner");
-  modal.textContent = `麥克風存取失敗：${detail}。請在瀏覽器設定允許麥克風後重試。`;
+  modal.textContent = t("app.micPermissionDenied", { detail });
   root!.insertBefore(modal, root!.firstChild);
 }
 
@@ -676,8 +665,6 @@ function mimeToExt(mime: string): string {
 
 function sendSilenceFrames(socket: ListenSocket, frameCount: number): void {
   for (let i = 0; i < frameCount; i++) {
-    // Fresh ArrayBuffer per frame because ListenSocket.send may transfer
-    // ownership; reusing one buffer would detach it on the second send.
     socket.send(new ArrayBuffer(SILENT_FRAME_BYTES));
   }
 }
@@ -692,8 +679,6 @@ function waitForNextFinalOr(timeoutMs: number): Promise<void> {
     };
     pendingStopFinalResolver = settle;
     setTimeout(() => {
-      // Clear the resolver only if we're still the active waiter; a real
-      // final arrival would have cleared it already.
       if (pendingStopFinalResolver === settle) pendingStopFinalResolver = null;
       settle();
     }, timeoutMs);
@@ -702,5 +687,5 @@ function waitForNextFinalOr(timeoutMs: number): Promise<void> {
 
 function reportError(e: unknown): void {
   console.error(e);
-  toast(`錯誤：${e instanceof Error ? e.message : String(e)}`);
+  toast(t("app.errorPrefix", { message: e instanceof Error ? e.message : String(e) }));
 }

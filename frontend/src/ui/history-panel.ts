@@ -4,6 +4,7 @@
  * Exports trigger a browser download via blob URLs; no backend round-trip.
  */
 
+import { t } from "../i18n";
 import {
   HistoryStore,
   formatSessionDuration,
@@ -28,12 +29,12 @@ export class HistoryPanel {
     this.opts.root.replaceChildren();
     const header = document.createElement("h2");
     header.className = "history-title";
-    header.textContent = `對話記錄（${sessions.length}）`;
+    header.textContent = t("history.title", { count: sessions.length });
     this.opts.root.appendChild(header);
     if (sessions.length === 0) {
       const empty = document.createElement("p");
       empty.className = "history-empty";
-      empty.textContent = "尚無記錄。按錄音鍵開始第一段。";
+      empty.textContent = t("history.empty");
       this.opts.root.appendChild(empty);
       return;
     }
@@ -51,16 +52,18 @@ export class HistoryPanel {
     meta.textContent =
       formatDate(s.started_at) +
       " · " +
-      (s.ended_at ? formatSessionDuration(sessionDurationMs(s)) : "錄音中") +
+      (s.ended_at
+        ? formatSessionDuration(sessionDurationMs(s))
+        : t("history.recording")) +
       " · " +
       countWords(s) +
-      " 字";
+      t("history.charsSuffix");
     card.appendChild(meta);
 
     const preview = document.createElement("details");
     preview.className = "history-preview";
     const summary = document.createElement("summary");
-    summary.textContent = "展開內容";
+    summary.textContent = t("history.expand");
     preview.appendChild(summary);
     const body = document.createElement("pre");
     body.className = "history-body";
@@ -68,7 +71,7 @@ export class HistoryPanel {
     preview.appendChild(body);
     if (s.action_runs.length > 0) {
       const runsHeader = document.createElement("h3");
-      runsHeader.textContent = "AI 回應";
+      runsHeader.textContent = t("history.aiResponse");
       preview.appendChild(runsHeader);
       for (const run of s.action_runs) {
         const runBlock = document.createElement("div");
@@ -86,11 +89,11 @@ export class HistoryPanel {
     const actions = document.createElement("div");
     actions.className = "history-actions";
     actions.append(
-      this.makeButton("複製", () => this.copy(s)),
-      this.makeButton("匯出 SRT", () => this.download(s, "srt", exportSrt)),
-      this.makeButton("匯出 VTT", () => this.download(s, "vtt", exportVtt)),
-      this.makeButton("匯出 TXT", () => this.download(s, "txt", exportTxt)),
-      this.makeButton("刪除", () => this.deleteSession(s)),
+      this.makeButton(t("common.copy"), () => this.copy(s)),
+      this.makeButton(t("history.exportSrt"), () => this.download(s, "srt", exportSrt)),
+      this.makeButton(t("history.exportVtt"), () => this.download(s, "vtt", exportVtt)),
+      this.makeButton(t("history.exportTxt"), () => this.download(s, "txt", exportTxt)),
+      this.makeButton(t("common.delete"), () => this.deleteSession(s)),
     );
     card.appendChild(actions);
     return card;

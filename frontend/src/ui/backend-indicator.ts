@@ -6,12 +6,13 @@
  */
 
 import type { HealthState } from "../health/health-monitor";
+import { t } from "../i18n";
 
-const LABELS: Record<HealthState, string> = {
-  checking: "檢查中…",
-  ok: "已連線",
-  down: "後端離線",
-};
+const LABEL_KEYS = {
+  checking: "backend.checking",
+  ok: "backend.ok",
+  down: "backend.down",
+} as const;
 
 export class BackendIndicator {
   private dot: HTMLSpanElement;
@@ -29,6 +30,6 @@ export class BackendIndicator {
 
   setState(state: HealthState): void {
     this.root.dataset.state = state;
-    this.label.textContent = LABELS[state];
+    this.label.textContent = t(LABEL_KEYS[state]);
   }
 }

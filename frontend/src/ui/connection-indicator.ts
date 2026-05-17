@@ -9,13 +9,14 @@
  */
 
 import type { ConnectionState } from "../capture/listen-socket";
+import { t } from "../i18n";
 
-const LABELS: Record<ConnectionState, string> = {
-  idle: "未連線",
-  open: "已連線",
-  reconnecting: "重連中…",
-  failed: "連線失敗",
-};
+const LABEL_KEYS = {
+  idle: "connection.idle",
+  open: "connection.open",
+  reconnecting: "connection.reconnecting",
+  failed: "connection.failed",
+} as const;
 
 export class ConnectionIndicator {
   private dot: HTMLSpanElement;
@@ -34,7 +35,7 @@ export class ConnectionIndicator {
     this.retry = document.createElement("button");
     this.retry.type = "button";
     this.retry.className = "conn-retry";
-    this.retry.textContent = "重試";
+    this.retry.textContent = t("connection.retry");
     this.retry.hidden = true;
     this.retry.addEventListener("click", () => this.onRetry());
     this.root.append(this.dot, this.label, this.retry);
@@ -43,7 +44,7 @@ export class ConnectionIndicator {
 
   setState(state: ConnectionState): void {
     this.root.dataset.state = state;
-    this.label.textContent = LABELS[state];
+    this.label.textContent = t(LABEL_KEYS[state]);
     this.retry.hidden = state !== "failed";
   }
 }

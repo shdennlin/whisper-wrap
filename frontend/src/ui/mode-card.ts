@@ -14,6 +14,7 @@
  */
 
 import type { CaptureMode } from "../capture/mode-store";
+import { t } from "../i18n";
 
 export type ModeCardState = "idle" | "recording" | "paused" | "processing";
 
@@ -71,8 +72,8 @@ export class ModeCard {
 
     this.controls = document.createElement("div");
     this.controls.className = "controls";
-    this.pauseBtn = makeIconButton("⏸", "暫停");
-    this.discardBtn = makeIconButton("✕", "捨棄錄音");
+    this.pauseBtn = makeIconButton("⏸", t("modeCard.pause"));
+    this.discardBtn = makeIconButton("✕", t("modeCard.discard"));
     this.discardBtn.classList.add("discard-btn");
     if (opts.pauseSupported !== false) {
       this.controls.appendChild(this.pauseBtn);
@@ -113,8 +114,8 @@ export class ModeCard {
   private startDiscardConfirm(): void {
     this.discardConfirming = true;
     this.discardBtn.classList.add("is-confirming");
-    this.discardBtn.textContent = "確定?";
-    this.discardBtn.title = "再按一次確認捨棄（3 秒內）";
+    this.discardBtn.textContent = t("modeCard.discardConfirm");
+    this.discardBtn.title = t("modeCard.discardConfirmTitle");
     if (this.discardConfirmTimer !== null) clearTimeout(this.discardConfirmTimer);
     this.discardConfirmTimer = setTimeout(() => this.cancelDiscardConfirm(), 3000);
   }
@@ -128,7 +129,7 @@ export class ModeCard {
     this.discardConfirming = false;
     this.discardBtn.classList.remove("is-confirming");
     this.discardBtn.textContent = "✕";
-    this.discardBtn.title = "捨棄錄音";
+    this.discardBtn.title = t("modeCard.discard");
   }
 
   getState(): ModeCardState {
@@ -169,12 +170,13 @@ export class ModeCard {
 
   /**
    * Move to `processing`. Optional custom label replaces the default
-   * "處理中…" (e.g. "確認最後一段…" for Live's graceful-stop wait).
+   * processing label (e.g. modeCard.confirmingFinal for Live's
+   * graceful-stop wait).
    */
-  showProcessing(label = "處理中…"): void {
+  showProcessing(label?: string): void {
     this.state = "processing";
     this.stopTimer();
-    this.timer.textContent = label;
+    this.timer.textContent = label ?? t("modeCard.processing");
     this.applyState();
   }
 
@@ -192,18 +194,18 @@ export class ModeCard {
     this.root.dataset.state = this.state;
     if (this.state === "paused") {
       this.pauseBtn.textContent = "▶";
-      this.pauseBtn.title = "繼續";
+      this.pauseBtn.title = t("modeCard.resume");
     } else {
       this.pauseBtn.textContent = "⏸";
-      this.pauseBtn.title = "暫停";
+      this.pauseBtn.title = t("modeCard.pause");
     }
     this.root.setAttribute(
       "aria-label",
       this.state === "idle"
-        ? `開始 ${this.opts.label} 錄音`
+        ? t("modeCard.startAria", { label: this.opts.label })
         : this.state === "processing"
-          ? "處理中"
-          : `點此停止錄音（${this.opts.label}）`,
+          ? t("modeCard.processingAria")
+          : t("modeCard.stopAria", { label: this.opts.label }),
     );
   }
 
