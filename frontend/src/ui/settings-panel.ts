@@ -33,6 +33,8 @@ export interface Settings {
   showPartials: boolean;
   autoScroll: boolean;
   autoCopy: boolean;
+  /** Auto-copy the AI answer to clipboard when an action completes. */
+  autoCopyAnswer: boolean;
   retention: number;
   /** Stop Live recording after this many minutes with no speech. 0 = off. */
   liveIdleMinutes: number;
@@ -46,6 +48,7 @@ export const DEFAULTS: Settings = {
   showPartials: true,
   autoScroll: true,
   autoCopy: true,
+  autoCopyAnswer: true,
   retention: 20,
   liveIdleMinutes: 30,
   liveMaxMinutes: 240,
@@ -83,6 +86,7 @@ export class SettingsPanel {
   private partialsInput!: HTMLInputElement;
   private autoscrollInput!: HTMLInputElement;
   private autocopyInput!: HTMLInputElement;
+  private autocopyAnswerInput!: HTMLInputElement;
   private retentionInput!: HTMLInputElement;
   private liveIdleInput!: HTMLInputElement;
   private liveMaxInput!: HTMLInputElement;
@@ -133,6 +137,10 @@ export class SettingsPanel {
       t("settings.autoCopy"),
       this.current.autoCopy,
     );
+    this.autocopyAnswerInput = this.makeCheckbox(
+      t("settings.autoCopyAnswer"),
+      this.current.autoCopyAnswer,
+    );
     this.retentionInput = this.makeInput(
       t("settings.retention"),
       "number",
@@ -168,6 +176,7 @@ export class SettingsPanel {
         showPartials: this.partialsInput.checked,
         autoScroll: this.autoscrollInput.checked,
         autoCopy: this.autocopyInput.checked,
+        autoCopyAnswer: this.autocopyAnswerInput.checked,
         retention: clampRetention(this.retentionInput.valueAsNumber),
         liveIdleMinutes: clampMinutes(this.liveIdleInput.valueAsNumber, 180),
         liveMaxMinutes: clampMinutes(this.liveMaxInput.valueAsNumber, 720),
@@ -181,6 +190,7 @@ export class SettingsPanel {
       this.partialsInput,
       this.autoscrollInput,
       this.autocopyInput,
+      this.autocopyAnswerInput,
       this.retentionInput,
       this.liveIdleInput,
       this.liveMaxInput,

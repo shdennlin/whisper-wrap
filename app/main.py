@@ -27,7 +27,7 @@ from app.api.status import router as status_router
 from app.api.transcribe import router as transcribe_router
 from app.config import config, load_env_file
 from app.services._whisper_backend import WhisperBackend, WhisperLoadError
-from app.services.actions import load_actions
+from app.services.actions import load_actions, load_categories
 from app.services.llm import LLMClient
 from app.services.registry import (
     HARDCODED_FALLBACK_MODEL_NAME,
@@ -198,7 +198,12 @@ async def lifespan(app: FastAPI):
     from app.services import actions as _actions_module
 
     app.state.actions = load_actions(_actions_module.DEFAULT_REGISTRY_PATH)
-    logger.info("Prompt-actions registry: %d entries loaded", len(app.state.actions))
+    app.state.action_categories = load_categories(_actions_module.DEFAULT_REGISTRY_PATH)
+    logger.info(
+        "Prompt-actions registry: %d entries loaded, %d categories",
+        len(app.state.actions),
+        len(app.state.action_categories),
+    )
 
     app.state.llm_client = LLMClient(
         api_key=config.GEMINI_API_KEY,

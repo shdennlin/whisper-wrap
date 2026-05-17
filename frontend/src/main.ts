@@ -33,7 +33,12 @@ import {
 import { HealthMonitor } from "./health/health-monitor";
 import { TranscriptView, copyToClipboard } from "./ui/transcript-view";
 import { ConnectionIndicator } from "./ui/connection-indicator";
-import { ActionsBar, type ActionTemplate } from "./ui/actions-bar";
+import {
+  ActionsBar,
+  type ActionTemplate,
+  type ActionsResponse,
+  type Category,
+} from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
 import { HistoryPanel } from "./ui/history-panel";
 import { ModeCard } from "./ui/mode-card";
@@ -55,7 +60,21 @@ const header = el("header", "app-header");
 const title = el("h1");
 title.textContent = t("app.appName");
 const indicatorHost = el("div");
-const settingsToggle = button(`⚙︎ ${t("common.settings")}`);
+// Settings button: icon + text. The text span is hidden by the narrow-viewport
+// CSS so mobile gets a clean icon-only button while desktop still labels it.
+const settingsToggle = document.createElement("button");
+settingsToggle.type = "button";
+settingsToggle.setAttribute("aria-label", t("common.settings"));
+const settingsIcon = document.createElement("span");
+settingsIcon.textContent = "⚙︎";
+settingsIcon.setAttribute("aria-hidden", "true");
+const settingsLabel = document.createElement("span");
+settingsLabel.className = "header-button-label";
+settingsLabel.textContent = t("common.settings");
+settingsToggle.append(settingsIcon, " ", settingsLabel);
+// AI model badge previously lived here (next to the backend indicator). It now
+// sits next to the "AI Enhance" section heading inside ActionsBar — see
+// actionsBar.setModel() below.
 header.append(title, indicatorHost, settingsToggle);
 
 const main = el("main", "main-pane");
@@ -68,10 +87,42 @@ const uploadRetryHost = el("div", "upload-retry");
 uploadRetryHost.hidden = true;
 captureHost.append(cardsHost, wsIndicatorHost, uploadRetryHost);
 
-const transcriptHost = el("section");
-const actionsHost = el("section");
+// Explicit classes so the touch-device media query in style.css can reorder
+// these sections via `order:` without using :has() / structural selectors.
+const transcriptHost = el("section", "transcript-host");
+const actionsHost = el("section", "actions-host");
+
+// Answer pane: header (title + copy button) + body.
+// Desktop: always visible, showing the localised placeholder until an action
+// runs — gives a stable spatial cue for "AI output appears here".
+// Touch: hidden until the first action (or recording-start reset), because
+// the CSS reorder slots it between transcript and chips where empty space
+// would push the chip bar further down.
 const answerHost = el("section", "answer-pane");
-answerHost.textContent = t("app.answerPlaceholder");
+answerHost.hidden = isTouchDevice();
+const answerHeader = el("div", "answer-header");
+const answerTitle = el("span", "answer-title");
+answerTitle.textContent = t("answer.title");
+const answerCopyBtn = button(t("common.copy")) as HTMLButtonElement;
+answerCopyBtn.className = "answer-copy";
+answerCopyBtn.title = t("answer.copyTitle");
+answerCopyBtn.disabled = true; // nothing to copy until the first real answer
+answerHeader.append(answerTitle, answerCopyBtn);
+const answerBody = el("div", "answer-body");
+answerBody.textContent = t("app.answerPlaceholder");
+answerHost.append(answerHeader, answerBody);
+
+let currentAnswerText = "";
+answerCopyBtn.addEventListener("click", () => {
+  if (!currentAnswerText) return;
+  void copyToClipboard(currentAnswerText).then((ok) => {
+    answerCopyBtn.textContent = ok
+      ? t("answer.copied")
+      : t("answer.copyFailed");
+    setTimeout(() => (answerCopyBtn.textContent = t("common.copy")), 1500);
+  });
+});
+
 main.append(captureHost, transcriptHost, actionsHost, answerHost);
 
 const aside = el("aside", "aside");
@@ -120,15 +171,26 @@ const settingsPanel = new SettingsPanel({
   onChange: (s) => store.setRetention(s.retention),
 });
 
-const history = new HistoryPanel({ root: historyHost, store });
+// HistoryPanel and ActionsBar reference each other: ActionsBar's onAnswer
+// calls history.render() to refresh persisted runs, and HistoryPanel uses
+// actionsBar.getActionLabel() to localise the action_id chips into the
+// session preview. Cyclic — so declare `history` with definite-assignment
+// (!) and assign it after actionsBar is constructed.
+let history!: HistoryPanel;
 
 const actionsBar = new ActionsBar({
   root: actionsHost,
   fetchActions: async () => {
     const r = await fetch(backendUrl("/actions"));
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const body = (await r.json()) as { actions: ActionTemplate[] };
-    return body.actions;
+    const body = (await r.json()) as {
+      actions: ActionTemplate[];
+      categories?: Category[];
+    };
+    return {
+      actions: body.actions ?? [],
+      categories: body.categories ?? [],
+    } satisfies ActionsResponse;
   },
   postAsk: async (prompt) => {
     const r = await fetch(backendUrl("/ask"), {
@@ -139,17 +201,59 @@ const actionsBar = new ActionsBar({
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return (await r.json()) as { answer: string };
   },
-  onAnswer: (run) => {
+  onAnswer: (run, meta) => {
     if (currentSessionId) {
       store.appendActionRun(currentSessionId, run);
     }
-    answerHost.textContent = run.answer;
+    currentAnswerText = run.answer;
+    answerBody.textContent = run.answer;
+    answerCopyBtn.disabled = !run.answer;
     history.render();
+    // Auto-copy only on success — copying a localised "(request failed)" to
+    // the clipboard would be hostile.
+    if (meta.succeeded && run.answer && settingsPanel.getSettings().autoCopyAnswer) {
+      void copyToClipboard(run.answer).then((ok) => {
+        if (ok) toast(t("toast.answerAutoCopied"));
+      });
+    }
+  },
+  onLoading: ({ running }) => {
+    answerHost.classList.toggle("is-loading", running);
+    if (running) {
+      // First chip click after page load (or after a fresh recording) reveals
+      // the answer pane; on touch devices the CSS reorder slots it right
+      // under the transcript so the user doesn't have to scroll past the
+      // chip bar to see the response.
+      answerHost.hidden = false;
+      // Clear stale answer so the user sees a clean "processing" state.
+      currentAnswerText = "";
+      answerBody.textContent = t("answer.processing");
+      answerCopyBtn.disabled = true;
+      // Gently bring the answer pane into view. `block: "nearest"` is a no-op
+      // when the pane is already visible (desktop with chip + answer both on
+      // screen) and just enough scroll to reveal it when it's not (mobile —
+      // user just tapped a chip at the bottom of the screen, the answer pane
+      // is in the middle of the document above the chips).
+      answerHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   },
   onWarn: (msg) => toast(`⚠ ${msg}`),
   getTranscript: () => transcript.getText(),
 });
-void actionsBar.load();
+
+history = new HistoryPanel({
+  root: historyHost,
+  store,
+  // Persisted action runs are stored by `action_id` (e.g. "passthrough").
+  // The history panel renders that ID into a localised label using whatever
+  // the actions registry currently calls it. If the registry hasn't loaded
+  // yet (first render right after construction), the resolver returns null
+  // and the panel falls back to the raw ID; we re-render once .load()
+  // resolves so the labels light up.
+  resolveActionLabel: (id) => actionsBar.getActionLabel(id),
+});
+
+void actionsBar.load().then(() => history.render());
 
 // ---- Mode cards (morph in place) ------------------------------------------
 const batchCard = new ModeCard({
@@ -212,6 +316,30 @@ const healthMonitor = new HealthMonitor({
 });
 healthMonitor.start();
 
+// ---- LLM indicator (one-shot fetch of /status to surface the AI model) -----
+// Doesn't need to poll — the active Gemini model is set at server startup and
+// never changes at runtime. One read per page load is enough.
+void fetch(backendUrl("/status"))
+  .then((r) => (r.ok ? r.json() : null))
+  .then((body) => {
+    const gemini = body?.gemini as
+      | { configured?: boolean; model?: string }
+      | undefined;
+    if (!gemini) return;
+    // Hand the badge to ActionsBar — it renders next to the "AI Enhance"
+    // section heading, which is the contextually right place for "what AI
+    // is going to handle these chips".
+    actionsBar.setModel({
+      configured: !!gemini.configured,
+      model: gemini.model,
+    });
+  })
+  .catch(() => {
+    // Best-effort: if /status is unreachable here, the BackendIndicator
+    // already shows "backend offline" and the missing AI badge is a less
+    // urgent signal than the main backend status.
+  });
+
 // ---- Recording lifecycle ---------------------------------------------------
 let mic: MicPipeline | null = null;
 let sock: ListenSocket | null = null;
@@ -265,7 +393,14 @@ async function startRecording(mode: CaptureMode): Promise<void> {
   saveCaptureMode(mode);
   hideRetryPrompt();
   transcript.clear();
-  answerHost.textContent = "";
+  currentAnswerText = "";
+  // Reset to the localised placeholder so desktop (where the pane is always
+  // visible) shows a helpful default instead of a stale answer or blank box.
+  answerBody.textContent = t("app.answerPlaceholder");
+  answerCopyBtn.disabled = true;
+  // Touch only: re-hide for the same reason as initial state — pane sits
+  // between transcript and chips via CSS reorder; empty pane = wasted space.
+  answerHost.hidden = isTouchDevice();
   recordingStartedAt = Date.now();
   lastLivePartialText = "";
 
@@ -618,6 +753,17 @@ function button(label: string): HTMLButtonElement {
   b.type = "button";
   b.textContent = label;
   return b;
+}
+
+/** Same `(hover: none) and (pointer: coarse)` heuristic used inside
+ *  ActionsBar — pure-touch devices (phones, keyboardless tablets). On hover-
+ *  capable devices this returns false so the answer pane behaves like a
+ *  static placeholder. */
+function isTouchDevice(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 }
 
 function backendUrl(path: string): string {

@@ -28,6 +28,11 @@ export const STRINGS = {
     "backend.down": "Backend offline",
     "backend.disabledTitle": "Backend offline — retry when restored",
 
+    "llmIndicator.title": "Active AI model: {model}",
+    "llmIndicator.notConfigured": "AI: not configured",
+    "llmIndicator.notConfiguredTitle":
+      "Gemini API key is not set on the server — chip actions will return 502.",
+
     "modeCard.batchLabel": "Batch",
     "modeCard.batchDesc": "Record then transcribe — higher accuracy",
     "modeCard.liveLabel": "Live",
@@ -63,6 +68,15 @@ export const STRINGS = {
     "actions.requestFailedWithMessage": "(Request failed: {error})",
     "actions.requestFailed": "(Request failed)",
     "actions.passthroughLabel": "Send as-is",
+    "actions.miscCategoryLabel": "Misc",
+    "actions.sectionHeading": "AI Enhance",
+    "actions.showDescriptionsLabel": "Show descriptions",
+
+    "answer.title": "AI response",
+    "answer.processing": "Processing…",
+    "answer.copyTitle": "Copy AI response",
+    "answer.copied": "Copied ✓",
+    "answer.copyFailed": "Copy failed",
 
     "settings.title": "Settings",
     "settings.closeAria": "Close settings",
@@ -72,6 +86,7 @@ export const STRINGS = {
     "settings.showPartials": "Show partials",
     "settings.autoScroll": "Auto-scroll to bottom",
     "settings.autoCopy": "Auto-copy transcript when recording ends",
+    "settings.autoCopyAnswer": "Auto-copy AI response when it arrives",
     "settings.retention": "History retention",
     "settings.language": "Language",
     "settings.liveSection": "Live mode auto-stop",
@@ -98,6 +113,7 @@ export const STRINGS = {
     "toast.transcribeFailed": "Transcription failed: {error}",
     "toast.discarded": "Recording discarded",
     "toast.autoCopied": "Transcript auto-copied to clipboard",
+    "toast.answerAutoCopied": "AI response auto-copied to clipboard",
     "toast.autoStopMax":
       "Reached {minutes}-minute limit, auto-stopped recording",
     "toast.autoStopIdle":
@@ -130,6 +146,11 @@ export const STRINGS = {
     "backend.ok": "已連線",
     "backend.down": "後端離線",
     "backend.disabledTitle": "後端未連線；恢復後可重試",
+
+    "llmIndicator.title": "目前使用的 AI 模型：{model}",
+    "llmIndicator.notConfigured": "AI：未設定",
+    "llmIndicator.notConfiguredTitle":
+      "伺服器未設定 Gemini API key — 點 chip 會回 502。",
 
     "modeCard.batchLabel": "Batch",
     "modeCard.batchDesc": "錄完一次轉錄，準確度高",
@@ -166,6 +187,15 @@ export const STRINGS = {
     "actions.requestFailedWithMessage": "（請求失敗：{error}）",
     "actions.requestFailed": "（請求失敗）",
     "actions.passthroughLabel": "直接送",
+    "actions.miscCategoryLabel": "其他",
+    "actions.sectionHeading": "AI 增強",
+    "actions.showDescriptionsLabel": "顯示說明",
+
+    "answer.title": "AI 回應",
+    "answer.processing": "處理中…",
+    "answer.copyTitle": "複製 AI 回應",
+    "answer.copied": "已複製 ✓",
+    "answer.copyFailed": "複製失敗",
 
     "settings.title": "設定",
     "settings.closeAria": "關閉設定",
@@ -175,6 +205,7 @@ export const STRINGS = {
     "settings.showPartials": "顯示 partial",
     "settings.autoScroll": "自動捲到最底",
     "settings.autoCopy": "錄音結束自動複製逐字稿",
+    "settings.autoCopyAnswer": "AI 回應產生時自動複製",
     "settings.retention": "對話記錄保留筆數",
     "settings.language": "語言",
     "settings.liveSection": "Live 模式自動停止",
@@ -200,6 +231,7 @@ export const STRINGS = {
     "toast.transcribeFailed": "轉錄失敗：{error}",
     "toast.discarded": "已捨棄錄音",
     "toast.autoCopied": "逐字稿已自動複製到剪貼簿",
+    "toast.answerAutoCopied": "AI 回應已自動複製到剪貼簿",
     "toast.autoStopMax": "已達 {minutes} 分鐘上限，自動停止錄音",
     "toast.autoStopIdle": "已閒置 {minutes} 分鐘，自動停止錄音",
     "toast.tenMinReached": "已達 10 分鐘上限，自動停止錄音",

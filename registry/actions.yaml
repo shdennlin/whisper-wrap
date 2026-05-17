@@ -4,39 +4,569 @@
 # the PWA substitutes the literal `{transcript}` placeholder with the joined
 # transcript text and POSTs the wrapped prompt to /ask.
 #
+# `label` and `category` both accept either a single string (shorthand for
+# `{en: <string>}` or `<id>` respectively) or a mapping. The shipped entries
+# below use the mapping form so the PWA renders the active-locale label.
+#
+# Top-level `categories:` declares display order + bilingual labels for the
+# chip-bar groupings. Actions referencing a `category` id absent from this
+# block will log a WARNING and fall into a "Misc" group on the frontend.
+#
 # Editing this file requires a server restart for the PWA to see the new list
 # (the PWA fetches /actions once per page load).
 
+categories:
+  - id: raw
+    label:
+      en: Raw
+      zh-TW: 原文
+  - id: cleanup
+    label:
+      en: Cleanup
+      zh-TW: 清理
+  - id: structure
+    label:
+      en: Structure
+      zh-TW: 結構化
+  - id: transform
+    label:
+      en: Transform
+      zh-TW: 轉換
+
 actions:
   - id: passthrough
-    label: 直接送
+    label:
+      en: Send as-is
+      zh-TW: 直接送
+    category: raw
+    description:
+      en: Send the transcript verbatim to the LLM with no prompt wrapping.
+      zh-TW: 不加任何指令，直接把逐字稿丟給 AI。
     template: "{transcript}"
 
-  - id: cleanup
-    label: 加標點 / 改寫流暢
+  - id: fix-only-asr
+    label:
+      en: Fix ASR errors only
+      zh-TW: 只修 ASR 錯字
+    category: cleanup
+    description:
+      en: Fix only ASR character errors (homophones, split words). Keep all fillers and the original absence of punctuation.
+      zh-TW: 只修 ASR 認錯的字（同音字、英文拆字），保留所有贅字與原本沒標點的狀態。
     template: |
-      請把以下逐字稿加上適當的標點、修掉口語贅字（嗯、對、然後…），
-      但保持原意和語氣，不要重新組織段落。
+      Process the <TRANSCRIPT> text. Your task is the MINIMUM possible edit: fix only obvious ASR character errors. PRESERVE fillers, stutters, repetitions, hesitation markers, and the original absence of punctuation. This mode is intended for language-research or transcript-fidelity workflows where the exact spoken form matters.
 
+      ASR ERROR FIXES (the only edits allowed):
+      - Fix Chinese homophone errors when context makes the correct character obvious:
+        在 vs 再, 想 vs 像, 的 vs 得 vs 地, 化 vs 話, 一 vs 已, 做 vs 作, 是 vs 試, 他 vs 她 vs 它
+      - Fix English split-word or homophone errors when context is clear:
+        "use effect" → "useEffect" (in React context)
+        "type script" → "TypeScript"
+        "their" vs "there" vs "they're"
+      - Only fix when context makes the right answer unambiguous. If genuinely uncertain, keep the original.
+
+      PRESERVE FILLERS AND STUTTERS — DO NOT REMOVE:
+      - Keep 嗯, 欸, 那個, 就是, 然後然後, um, uh, like, you know, sort of, basically — they are part of the speech record.
+      - Keep stutters and repetitions verbatim: 我我我覺得 stays 我我我覺得.
+      - Keep self-corrections verbatim: "actually scratch that" stays in.
+      - Keep a space around English words embedded in Chinese: "我用 React 寫" not "我用React寫".
+
+      DO NOT:
+      - Remove fillers or repetitions of any kind.
+      - Add punctuation of any kind.
+      - Rewrite, paraphrase, or summarise.
+      - Reorganise sentences or paragraphs.
+      - Add information not present in the input.
+      - Translate between languages.
+
+      OUTPUT ONLY THE PROCESSED TEXT. No explanations, no preamble, no closing remarks.
+
+      <TRANSCRIPT>
       {transcript}
+      </TRANSCRIPT>
 
-  - id: summarize
-    label: 整理會議重點
+  - id: cleanup-light
+    label:
+      en: Light cleanup (no punctuation)
+      zh-TW: 輕度整理（不加標點）
+    category: cleanup
+    description:
+      en: Remove fillers and fix ASR errors. Does NOT add punctuation. Best when feeding into another LLM.
+      zh-TW: 去掉贅字並修 ASR 錯字，但不加標點。適合接給下一個 AI 處理。
     template: |
-      請把以下會議內容整理成條列式重點，每條一行，保留發言者口吻。
+      Process the <TRANSCRIPT> text. Your task is LIGHT cleanup only: fix obvious ASR errors and remove fillers, but DO NOT add punctuation. Output goes to a large language model that handles unpunctuated speech well.
 
+      DO NOT ADD PUNCTUATION:
+      - Do NOT add 。, ? ! : ; or any full-width Chinese punctuation.
+      - Do NOT add . , ? ! ; : or any half-width English punctuation.
+      - Sentence boundaries are conveyed by spaces and line breaks, not punctuation.
+
+      ASR ERROR FIXES (main value of this mode):
+      - Fix Chinese homophone errors when context makes the correct character obvious:
+        在 vs 再, 想 vs 像, 的 vs 得 vs 地, 化 vs 話, 一 vs 已, 做 vs 作, 是 vs 試, 他 vs 她 vs 它
+      - Fix English split-word or homophone errors when context is clear:
+        "use effect" → "useEffect" (in React context)
+        "type script" → "TypeScript"
+        "their" vs "there" vs "they're"
+      - Only fix when context makes the right answer unambiguous. If genuinely uncertain, keep the original.
+
+      CLEANUP RULES:
+      - Remove filler words: 嗯, 欸, 那個, 就是, 然後然後, um, uh, like, you know, sort of, basically.
+      - Collapse stutters and repetitions: 我我我覺得 → 我覺得, "I I think" → "I think".
+      - Handle self-corrections: when the speaker says "actually scratch that", "啊不對是", "wait no", "我是說" — keep only the corrected version.
+      - Keep a space around English words embedded in Chinese: "我用 React 寫" not "我用React寫".
+
+      PRESERVE STRICTLY:
+      - All names, proper nouns, numbers, dates, file paths, error messages, technical terms — verbatim.
+      - Original word choice and phrasing — do NOT substitute synonyms.
+      - Original sentence order — do NOT reorganize.
+      - Original voice and register.
+
+      DO NOT:
+      - Add punctuation of any kind.
+      - Rewrite or paraphrase.
+      - Add structure, labels, or formatting.
+      - Add information not present in the input.
+      - Translate between languages.
+
+      OUTPUT ONLY THE PROCESSED TEXT. No explanations, no preamble, no closing remarks.
+
+      <TRANSCRIPT>
       {transcript}
+      </TRANSCRIPT>
+
+  - id: punctuate
+    label:
+      en: Add punctuation
+      zh-TW: 加標點 / 改寫流暢
+    category: cleanup
+    description:
+      en: Add Chinese or English punctuation, fix ASR errors, light cleanup. Best for human reading.
+      zh-TW: 加上中文/英文標點，順便修 ASR 並去贅字。給人讀的版本。
+    template: |
+      Process the <TRANSCRIPT> text. Your task is to add missing Chinese punctuation, fix obvious ASR errors, and apply light cleanup. The input may have no punctuation at all — add it.
+
+      CHINESE PUNCTUATION RULES:
+      - Use full-width Chinese punctuation: ,。?!:;「」『』() — never half-width .,?!
+      - Insert commas at natural pause points within sentences.
+      - End each sentence with 。
+      - Use ? for questions, ! for emphasis or exclamation.
+      - Use 「」 for quoted speech, 『』 for nested quotes.
+      - Numbers, English words, and code identifiers stay half-width and unchanged (e.g. 1080p, API, useEffect must not be split or translated).
+
+      CODE-SWITCHING RULES (Mandarin + English):
+      - Keep a space around English words embedded in Chinese: "我用 React 寫" not "我用React寫".
+      - The dominant language determines the punctuation style. If the sentence is mostly Chinese, use full-width Chinese punctuation even after English words.
+      - Never translate English to Chinese or vice versa. Preserve original word choice.
+
+      ASR ERROR FIXES:
+      - Fix Chinese homophone errors when context makes the correct character obvious:
+        在 vs 再, 想 vs 像, 的 vs 得 vs 地, 化 vs 話, 一 vs 已, 做 vs 作, 是 vs 試, 他 vs 她 vs 它
+      - Fix English split-word or homophone errors when context is clear:
+        "use effect" → "useEffect", "type script" → "TypeScript"
+      - Only fix when context is unambiguous. If uncertain, keep original.
+
+      CLEANUP RULES:
+      - Remove filler words: 嗯, 欸, 那個, 就是, 然後然後, um, uh, like, you know.
+      - Collapse stutters and repetitions.
+      - Handle self-corrections: keep only the corrected version.
+
+      PRESERVE STRICTLY:
+      - All names, proper nouns, numbers, dates, technical terms — verbatim.
+      - Original word choice — do NOT substitute synonyms.
+      - Original sentence order — do NOT reorganize.
+
+      DO NOT:
+      - Rewrite or paraphrase.
+      - Add information not in the input.
+
+      PURE-ENGLISH FALLBACK:
+      - If the input is entirely English, use standard English punctuation . , ? ! ; : — instead.
+
+      OUTPUT ONLY THE PROCESSED TEXT. No explanations, no preamble, no closing remarks.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: polish
+    label:
+      en: Polished rewrite
+      zh-TW: 改寫得流暢易讀
+    category: cleanup
+    description:
+      en: Rewrite for clarity and flow; may reorganise sentences. Hard rule never violated, no new information.
+      zh-TW: 改寫得通順易讀，可重組句子。鐵律：絕不加入新資訊。
+    template: |
+      Process the <TRANSCRIPT> text. Your task is to produce a polished version: improve clarity, sentence flow, and word choice. You MAY rewrite, paraphrase, and reorganize sentences within each topic to improve readability.
+
+      PUNCTUATION & FORMATTING:
+      - Add full-width Chinese punctuation: ,。?!:;「」『』() for Chinese-dominant input.
+      - Add standard English punctuation . , ? ! ; : — for English-dominant input.
+      - Numbers, English words, and code identifiers stay half-width and unchanged.
+      - Insert paragraph breaks at clear topic shifts (every 3-5 sentences).
+      - Keep a space around English words embedded in Chinese.
+
+      REWRITE PERMISSIONS:
+      - Improve sentence structure for natural flow and rhythm.
+      - Substitute words with clearer or more concise alternatives — BUT only when meaning is preserved exactly.
+      - Reorder sentences within a single topic for logical progression.
+      - Combine fragmented thoughts into coherent sentences.
+      - Match register: informal stays informal, formal stays formal, technical stays technical.
+
+      ASR ERROR FIXES:
+      - Fix Chinese homophone errors based on context:
+        在 vs 再, 想 vs 像, 的 vs 得 vs 地, 化 vs 話, 做 vs 作, 是 vs 試, 他 vs 她 vs 它
+      - Fix English split-word errors: "use effect" → "useEffect", "type script" → "TypeScript".
+
+      CLEANUP RULES:
+      - Remove fillers and stutters.
+      - Handle self-corrections: keep only the corrected version.
+
+      HARD CONSTRAINTS — NEVER VIOLATE:
+      - DO NOT add information not present in the input.
+      - DO NOT change facts, names, proper nouns, numbers, dates, file paths, error messages, or technical terms.
+      - DO NOT shift the speaker's tone or stance.
+      - DO NOT add new examples, claims, or context.
+      - DO NOT translate between languages.
+      - DO NOT change the input's intent or main argument.
+      - If you cannot improve a sentence without violating these constraints, leave it unchanged.
+
+      OUTPUT ONLY THE POLISHED TEXT. No explanations, no preamble, no closing remarks.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: meeting-notes
+    label:
+      en: Meeting notes
+      zh-TW: 整理會議紀錄
+    category: structure
+    description:
+      en: Chief-of-staff structured summary, key decisions, action items table, parking lot, next meeting.
+      zh-TW: 行政主管風格的會議摘要：決議、待辦表格、parking lot、下次會議。
+    template: |
+      You are a chief of staff with 10+ years of experience running executive meetings and turning raw discussions into crisp, actionable documentation.
+
+      Here is the raw meeting transcript:
+      ---
+      {transcript}
+      ---
+
+      Infer attendees, date, and duration from the transcript when explicitly mentioned. If a field is not stated in the transcript, write `[NEEDS CLARIFICATION]` for that field rather than guessing.
+
+      Produce a structured meeting summary with these exact sections:
+
+      ## Meeting Summary
+      **Attendees:** [list — inferred from transcript or [NEEDS CLARIFICATION]]
+      **Date:** [inferred from transcript or [NEEDS CLARIFICATION]]
+      **Duration:** [estimated from transcript or [NEEDS CLARIFICATION]]
+
+      ### Key Decisions Made
+      [Numbered list — only firm decisions, not discussions. If none were made, write "None recorded."]
+
+      ### Action Items
+      | # | Action | Owner | Due Date | Priority |
+      |---|--------|-------|----------|----------|
+
+      ### Discussion Highlights
+      [3-5 bullet points capturing important context, risks raised, or open questions]
+
+      ### Parking Lot
+      [Items mentioned but not resolved — flag for next meeting. If none, write "None."]
+
+      ### Next Meeting
+      [Date/agenda if mentioned; otherwise [NEEDS CLARIFICATION]]
+
+      Be ruthlessly concise. If the transcript is ambiguous about a decision or owner, mark it [NEEDS CLARIFICATION] rather than guessing. Match the dominant language of the transcript: Chinese transcript → Chinese summary, English transcript → English summary, mixed → keep each speaker's original language.
+
+  - id: summary-tldr
+    label:
+      en: TL;DR summary
+      zh-TW: 一段話摘要
+    category: structure
+    description:
+      en: One short paragraph summary in the dominant language. No bullets, no headings.
+      zh-TW: 一段話的精簡摘要，用主要語言、不分點、無標題。
+    template: |
+      Summarise the <TRANSCRIPT> text as a single TL;DR paragraph.
+
+      LENGTH:
+      - English transcript → target 40-80 words.
+      - Chinese transcript → target 50-120 字.
+      - Mixed transcript → use the dominant language and the matching word/字 target.
+
+      FORMAT:
+      - Output a single paragraph of plain prose. No bullets. No headings. No markdown.
+      - No preamble like "Summary:" or "TL;DR:" — just the paragraph itself.
+
+      CONTENT RULES:
+      - Capture the main point and 1-2 supporting beats. Skip details, side discussions, and fillers.
+      - Preserve all names, proper nouns, numbers, dates, and technical terms verbatim.
+      - Do NOT add information not present in the input.
+      - Do NOT translate between languages.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: bullet-outline
+    label:
+      en: Bullet outline
+      zh-TW: 條列大綱
+    category: structure
+    description:
+      en: 3 to 7 top-level bullets summarising the major points. No sub-bullets, no preamble.
+      zh-TW: 3 到 7 條最重要的 bullet 大綱，不分子層，沒有開頭白話。
+    template: |
+      Convert the <TRANSCRIPT> text into a bullet outline.
+
+      FORMAT:
+      - 3 to 7 top-level bullets, each starting with `- `.
+      - No sub-bullets. No headings. No preamble.
+      - Each bullet is one sentence or sentence fragment summarising one major point.
+      - Output language matches the dominant language of the transcript.
+
+      CONTENT RULES:
+      - Capture the major beats only. Skip fillers, asides, and minor details.
+      - Preserve all names, proper nouns, numbers, dates, and technical terms verbatim.
+      - Do NOT add information not present in the input.
+      - Do NOT translate between languages.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: extract-todos
+    label:
+      en: Extract action items
+      zh-TW: 抽出待辦清單
+    category: structure
+    description:
+      en: Extract every action item as `- [ ]` checklist lines with owner / due-date hints.
+      zh-TW: 抽出所有待辦，輸出 `- [ ]` checkbox 並附 owner / 到期日。
+    template: |
+      Read the <TRANSCRIPT> text and extract every actionable to-do or commitment.
+
+      OUTPUT FORMAT:
+      - Each action item is one line, starting with `- [ ] `.
+      - If an owner is mentioned, append ` (owner: <name>)`. If unclear, append ` (owner: ?)`.
+      - If a due date is mentioned, append it inside the parens, e.g. ` (owner: Alice, due: Friday)`.
+      - No headings, no numbering, no preamble.
+      - Output language matches the dominant language of the transcript.
+
+      RULES:
+      - Only extract things that are clearly action items or commitments — not general discussion.
+      - If no action items are detectable, output the empty string (nothing at all).
+      - Do NOT invent owners or due dates that are not in the transcript.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: questions-raised
+    label:
+      en: Follow-up questions
+      zh-TW: 延伸追問
+    category: structure
+    description:
+      en: 3 to 5 follow-up questions a thoughtful reviewer would ask. Numbered list.
+      zh-TW: 列出 3 到 5 個值得追問的問題，數字編號。
+    template: |
+      Read the <TRANSCRIPT> text and produce 3 to 5 follow-up questions that a thoughtful reviewer would want to ask.
+
+      FORMAT:
+      - Numbered list, one question per line: `1. ...`, `2. ...`
+      - No preamble, no closing remarks, no headings.
+      - Output language matches the dominant language of the transcript.
+
+      QUESTION RULES:
+      - Each question should be answerable in principle; avoid rhetorical or hypothetical phrasings.
+      - Prefer questions that surface assumptions, risks, missing context, or unstated decisions.
+      - Do NOT echo statements already made in the transcript.
+      - Do NOT translate between languages.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: code-spec
+    label:
+      en: Voice → code spec
+      zh-TW: 整理成需求文件
+    category: structure
+    description:
+      en: Voice memo to structured engineering spec, Context / Goal / Behaviour / Edge cases / Out of scope.
+      zh-TW: 把語音整理成工程需求文件：背景／目標／行為／邊界／不做範圍。
+    template: |
+      You are a senior software engineer turning a voice memo into a structured implementation spec.
+
+      Read the <TRANSCRIPT> text and produce a Markdown document with these exact section headings:
+
+      ## Context
+      [Background: what existing system / pain point / motivation. Use `[NEEDS CLARIFICATION]` if not derivable from the transcript.]
+
+      ## Goal
+      [The single outcome this work delivers, in one or two sentences.]
+
+      ## Behaviour
+      [Bullet list describing the new or changed behaviour the user / caller observes. Specific actions, inputs, outputs.]
+
+      ## Edge cases
+      [Bullet list of edge cases or failure modes mentioned or implied. Use `[NEEDS CLARIFICATION]` for unspecified failure handling.]
+
+      ## Out of scope
+      [Bullet list of things explicitly NOT being done in this work, if mentioned. Otherwise write "None mentioned."]
+
+      RULES:
+      - Use `[NEEDS CLARIFICATION]` for any heading whose content cannot be derived from the transcript — do NOT guess.
+      - Preserve all names, file paths, function names, API names, numbers, and technical terms verbatim.
+      - Do NOT add features or constraints not mentioned in the transcript.
+      - Output language matches the dominant language of the transcript.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: 1on1-notes
+    label:
+      en: 1-on-1 notes
+      zh-TW: 一對一筆記
+    category: structure
+    description:
+      en: One-on-one notes, their updates, my follow-ups, their follow-ups.
+      zh-TW: 一對一筆記：對方更新、我的 follow-up、對方的 follow-up。
+    template: |
+      Read the <TRANSCRIPT> text of a one-on-one conversation and produce structured notes.
+
+      Infer the other participant's name from the transcript when explicitly mentioned. If not stated, use the placeholder `[NEEDS CLARIFICATION]` for the name.
+
+      OUTPUT FORMAT (use these exact headings):
+
+      ## Updates from <them>
+      [Bullet list of things the other person shared: status, blockers, wins, concerns. If unclear who said what, use `[NEEDS CLARIFICATION]`.]
+
+      ## My follow-ups
+      [Bullet list of things the narrator (me / the writer) committed to do. Use `- [ ] ` format if they look like to-dos.]
+
+      ## Their follow-ups
+      [Bullet list of things the other person committed to do. Use `- [ ] ` format if they look like to-dos.]
+
+      RULES:
+      - If an attendance, commitment, or ownership detail is ambiguous, mark it `[NEEDS CLARIFICATION]` rather than guessing.
+      - Preserve all names, dates, and technical terms verbatim.
+      - Do NOT invent commitments or concerns not in the transcript.
+      - Output language matches the dominant language of the transcript.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
+
+  - id: standup-recap
+    label:
+      en: Standup recap
+      zh-TW: 站立會議速記
+    category: structure
+    description:
+      en: Daily standup format with three sections, Yesterday, Today, Blockers.
+      zh-TW: 站立會議格式：昨天 / 今天 / blockers 三段。
+    template: |
+      Read the <TRANSCRIPT> text and recap it in standard daily-standup format.
+
+      OUTPUT FORMAT (use these exact headings):
+
+      ## Yesterday
+      [Bullet list of what was completed or worked on. If nothing mentioned, write "None."]
+
+      ## Today
+      [Bullet list of planned work for today. If nothing mentioned, write "None."]
+
+      ## Blockers
+      [Bullet list of blockers, dependencies, or asks. If none mentioned, write "None."]
+
+      RULES:
+      - Each section is a `- ` bullet list or the literal word "None.".
+      - Preserve all names, ticket numbers, dates, and technical terms verbatim.
+      - Do NOT invent items not present in the transcript.
+      - Output language matches the dominant language of the transcript.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>
 
   - id: translate-en
-    label: 翻譯成英文
+    label:
+      en: Translate to English
+      zh-TW: 翻譯成英文
+    category: transform
+    description:
+      en: Translate the transcript to natural English. Verbatim, no commentary.
+      zh-TW: 把逐字稿翻譯成自然的英文，逐句直譯不加註解。
     template: |
       Translate the following Chinese transcript to natural English:
 
       {transcript}
 
+  - id: translate-zh
+    label:
+      en: Translate to Chinese
+      zh-TW: 翻譯成中文
+    category: transform
+    description:
+      en: Translate to natural Traditional Chinese (zh-TW). Verbatim, identifiers kept as-is.
+      zh-TW: 翻譯成自然的繁體中文，保留識別字與技術名詞。
+    template: |
+      Translate the following English transcript to natural Traditional Chinese (zh-TW). Use Traditional Chinese characters, not Simplified.
+
+      RULES:
+      - Translate verbatim — preserve meaning, register, and structure.
+      - No commentary, no notes, no markdown, no preamble.
+      - Keep all names, proper nouns, numbers, dates, file paths, and technical terms unchanged (do not translate or transliterate identifiers like `useEffect`, `TypeScript`, file paths, error codes).
+      - Keep a space around English words embedded in Chinese output.
+
+      {transcript}
+
   - id: formalize
-    label: 改寫得更專業
+    label:
+      en: Formal tone
+      zh-TW: 改寫得更專業
+    category: transform
+    description:
+      en: Rewrite into formal written tone, suitable for documents and external communication.
+      zh-TW: 改寫成正式書面語氣，適合對外溝通或文件。
     template: |
       請把以下口語逐字稿改寫成適合書面溝通的正式語氣，保留原意。
 
       {transcript}
+
+  - id: email-draft
+    label:
+      en: Draft as email
+      zh-TW: 改寫成 email
+    category: transform
+    description:
+      en: Convert to email format, Subject line plus greeting, body, and signoff.
+      zh-TW: 改寫成 email 格式：主旨、稱呼、內文、結尾簽名。
+    template: |
+      Rewrite the <TRANSCRIPT> text as an email.
+
+      OUTPUT FORMAT (use exactly this layout):
+
+      Subject: <one-line subject, no more than 80 characters>
+
+      <Greeting>,
+
+      <Body — 1 to 4 short paragraphs. Preserve the speaker's intent.>
+
+      <Closing / signoff line>
+      <Sender name placeholder or [NEEDS CLARIFICATION] if not in transcript>
+
+      RULES:
+      - Match the dominant language of the transcript (Chinese transcript → Chinese email with 您好 / 此致敬禮 style; English transcript → English email).
+      - Preserve all facts, names, numbers, and dates verbatim.
+      - Do NOT add information not present in the transcript.
+      - Do NOT write a long-form essay — emails are concise.
+
+      <TRANSCRIPT>
+      {transcript}
+      </TRANSCRIPT>

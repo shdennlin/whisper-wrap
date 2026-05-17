@@ -59,4 +59,11 @@ describe("i18n", () => {
   it("AVAILABLE_LOCALES contains both shipping locales", () => {
     expect(AVAILABLE_LOCALES).toEqual(["en", "zh-TW"]);
   });
+
+  it("miscCategoryLabel localises", () => {
+    saveLocale("en");
+    expect(t("actions.miscCategoryLabel")).toBe("Misc");
+    saveLocale("zh-TW");
+    expect(t("actions.miscCategoryLabel")).toBe("其他");
+  });
 });

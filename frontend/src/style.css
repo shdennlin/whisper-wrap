@@ -27,6 +27,10 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+/* Belt-and-suspenders: any element that accidentally overflows the viewport
+   (long URL, fixed-width image, browser quirk) won't introduce a horizontal
+   scroll axis on mobile. */
+html, body { overflow-x: hidden; }
 body { min-height: 100vh; }
 
 #app {
@@ -51,6 +55,20 @@ body { min-height: 100vh; }
   display: flex; align-items: center; gap: 1rem;
 }
 .app-header h1 { font-size: 1.05rem; margin: 0; flex: 1; }
+
+/* ---- Narrow-viewport header cleanup ----
+   At ≤720px the header gets cramped (h1 + "● Connected" + "AI: <model>" pill
+   + "⚙︎ Settings" button = ~420px before gaps). Demote each secondary widget
+   to its minimal form: dot only, hide LLM pill (still in DOM for desktop),
+   icon-only settings button. The h1 also drops a hair so it doesn't wrap. */
+@media (max-width: 720px) {
+  .app-header { gap: 0.5rem; padding: 0.6rem 0.85rem; }
+  .app-header h1 { font-size: 0.95rem; }
+  .backend-indicator .label { display: none; }
+  .header-button-label { display: none; }
+  /* Settings button: compact pill so the gear icon is the focal point. */
+  .app-header button { padding: 0.35rem 0.55rem; font-size: 1rem; line-height: 1; }
+}
 
 .banner {
   background: var(--yellow); color: white;
@@ -82,6 +100,28 @@ body { min-height: 100vh; }
   animation: bi-pulse 1s ease-in-out infinite;
 }
 @keyframes bi-pulse { 50% { opacity: 0.4; } }
+
+/* ---- AI model badge (next to .actions-section-heading) ----
+   Replaces the old header-level .llm-indicator. Same visual language (pill,
+   muted text, red border for "not configured") but lives where the relevant
+   action chips are, not in the header. */
+.actions-model-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: help;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.actions-model-badge[data-state="down"] {
+  color: var(--red, #f87171);
+  border-color: var(--red, #f87171);
+}
+.actions-model-badge[hidden] { display: none; }
 
 /* ---- One-click mode cards ---- */
 .capture-host { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -306,11 +346,231 @@ body { min-height: 100vh; }
 .transcript-partial { color: var(--partial); font-style: italic; min-height: 1.2em; }
 .transcript-partial.is-active { color: var(--partial); }
 
-.actions-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.actions-chip { padding: 0.35rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: inherit; cursor: pointer; font-size: 0.85rem; }
-.actions-chip:hover { border-color: var(--accent); color: var(--accent); }
+.actions-bar { display: flex; flex-direction: column; gap: 0.6rem; }
+/* Section header: [heading + model badge] on the left, (touch-only) toggle on
+   the right, divider line on the wrapper so it spans the full width. */
+.actions-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+/* Title wrapper keeps heading + model badge as one logical unit so flex's
+   space-between pushes them away from the toggle. min-width: 0 allows the
+   badge to ellipsis-clip if the model id ever gets absurdly long. */
+.actions-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.actions-section-heading {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+/* Toggle is touch-only — on hover devices the description surfaces via
+   tooltip, so a "show descriptions" switch would be meaningless. */
+.actions-description-toggle { display: none; }
+/* Inline layout: heading + chips on the same row, wrapping as needed. */
+.actions-category-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.5rem; }
+.actions-category-heading { font-size: 0.8rem; font-weight: 600; color: var(--muted, #9ca3af); flex: 0 0 auto; }
+.actions-category-heading::after { content: "："; }
+.actions-category-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.actions-chip { padding: 0.35rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: inherit; cursor: pointer; font-size: 0.85rem; transition: opacity 0.15s ease, border-color 0.15s ease; }
+.actions-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.actions-chip:disabled { cursor: not-allowed; opacity: 0.45; }
+.actions-chip[data-loading="true"] { opacity: 1; border-color: var(--accent); color: var(--accent); animation: actions-chip-pulse 1.1s ease-in-out infinite; }
+.actions-chip-label { display: inline; }
+/* On hover-capable devices the description is surfaced via the JS tooltip
+   only; the inline span is in the DOM (for screen readers via aria-label,
+   and so the touch media query below can flip it on without re-rendering)
+   but visually hidden. */
+.actions-chip-description { display: none; }
+@keyframes actions-chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+/* Fallback path (no category headings): chips lay out inline on one row. */
+.actions-bar > .actions-chip { display: inline-block; }
 
-.answer-pane { min-height: 80px; padding: 0.75rem; background: var(--border); border-radius: 4px; white-space: pre-wrap; }
+/* ---- Touch-device card layout for actions ----
+   Pure-touch devices (phones, tablets without keyboard) can't hover and
+   tap-to-flash a tooltip is poor UX, so we flip chips into full-width cards
+   with the description as a visible subtitle. Same DOM as desktop; CSS
+   handles the entire visual switch. Matches the AI-assistant convention
+   (ChatGPT / Claude / Perplexity mobile use card-style prompt lists). */
+@media (hover: none) and (pointer: coarse) {
+  .actions-bar { gap: 0.85rem; }
+  .actions-section-header {
+    padding-bottom: 0.45rem;
+  }
+  .actions-section-heading {
+    font-size: 1.05rem;
+  }
+  .actions-description-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .actions-description-toggle input { margin: 0; }
+  .actions-category-group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+  .actions-category-heading {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .actions-category-chips {
+    flex-direction: column;
+    gap: 0.45rem;
+    width: 100%;
+  }
+  .actions-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 10px;
+    width: 100%;
+    text-align: left;
+    font-size: 0.95rem;
+  }
+  .actions-chip-label { font-weight: 500; }
+  .actions-chip-description {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--muted, #9ca3af);
+    line-height: 1.4;
+    font-weight: 400;
+  }
+  /* Fallback path: still a card even when there's only one chip. */
+  .actions-bar > .actions-chip { display: flex; width: 100%; }
+
+  /* Re-order main-pane sections so AI output sits right under the transcript
+     and the chip bar drops to the bottom (matches ChatGPT / Claude mobile
+     pattern: picker stays where the thumb naturally rests, output is the
+     primary scrollable content). Capture-host and transcript-host keep their
+     default order (0); we only bump answer-pane (2) and actions-host (3). */
+  .main-pane > .answer-pane { order: 2; }
+  .main-pane > .actions-host { order: 3; }
+
+  /* "Show descriptions" OFF on touch: revert each card rule back to the
+     desktop pill layout (inline pills, no subtitle, heading + chips on one
+     row wrapping as needed). This is the user-controllable shortcut for
+     "I know what each chip does, just compact this list please." */
+  .actions-bar.descriptions-off .actions-chip-description { display: none; }
+  .actions-bar.descriptions-off .actions-chip {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    width: auto;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    text-align: center;
+    font-size: 0.85rem;
+    gap: 0;
+  }
+  .actions-bar.descriptions-off .actions-chip-label {
+    font-weight: normal;
+    font-size: inherit;
+  }
+  .actions-bar.descriptions-off .actions-category-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.5rem;
+  }
+  .actions-bar.descriptions-off .actions-category-chips {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    width: auto;
+  }
+  .actions-bar.descriptions-off .actions-category-heading {
+    font-size: 0.8rem;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .actions-bar.descriptions-off > .actions-chip {
+    display: inline-block;
+    width: auto;
+  }
+}
+
+/* Shared tooltip element managed by ActionsBar. Positioned in viewport coords
+   so chips near the left/right edge don't get their tooltip clipped. On touch
+   devices the tooltip is never shown — the description is rendered inline as
+   a subtitle inside the chip (which becomes a card). */
+.actions-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: min(280px, calc(100vw - 1rem));
+  width: max-content;
+  padding: 0.45rem 0.65rem;
+  /* Inverted from the page palette so the tooltip clearly floats above
+     content in both light and dark themes (dark page → light tooltip; light
+     page → dark tooltip). Same pattern as iOS/macOS native tooltips, Material,
+     Tailwind. Removes the previous "blends into bg" problem caused by
+     `background: var(--bg)`. */
+  background: var(--fg);
+  color: var(--bg);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  text-align: left;
+  pointer-events: none;
+  /* Stronger shadow than the old 0.25 because inverted tooltips need to read
+     as "floating" rather than "stuck on" — the elevation cue compensates for
+     the lack of border. */
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.actions-tooltip.is-visible { opacity: 1; }
+
+/* Answer pane: header (title + copy) + body. */
+/* `display: flex` would otherwise mask the [hidden] attribute's default
+   display: none, so we need to override explicitly — same pattern as
+   .ws-indicator-host[hidden], .modal-backdrop[hidden], .upload-retry[hidden]. */
+.answer-pane[hidden] { display: none; }
+.answer-pane { min-height: 80px; padding: 0.75rem; background: var(--border); border-radius: 4px; display: flex; flex-direction: column; gap: 0.5rem; }
+.answer-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.answer-title { font-size: 0.85rem; font-weight: 600; color: var(--muted, #9ca3af); }
+.answer-copy { padding: 0.2rem 0.55rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font-size: 0.75rem; }
+.answer-copy:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.answer-copy:disabled { cursor: not-allowed; opacity: 0.4; }
+.answer-body { white-space: pre-wrap; min-height: 1.5em; }
+.answer-pane.is-loading .answer-body { color: var(--muted, #9ca3af); font-style: italic; }
+.answer-pane.is-loading .answer-body::after {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  margin-left: 0.25em;
+  animation: answer-loading-dots 1.1s steps(4, end) infinite;
+}
+@keyframes answer-loading-dots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
 
 .settings-panel { display: flex; flex-direction: column; gap: 0.75rem; padding: 0; }
 .settings-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }

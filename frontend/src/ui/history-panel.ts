@@ -16,6 +16,10 @@ import { exportSrt, exportVtt, exportTxt } from "../export/subtitle-export";
 export interface HistoryPanelOptions {
   root: HTMLElement;
   store: HistoryStore;
+  /** Optional: resolve an action ID to its localised label. If omitted (or
+   *  returns null for an unknown ID), the raw `action_id` is rendered.
+   *  Resolved every render so locale switches reflect immediately. */
+  resolveActionLabel?: (id: string) => string | null;
 }
 
 export class HistoryPanel {
@@ -77,7 +81,8 @@ export class HistoryPanel {
         const runBlock = document.createElement("div");
         runBlock.className = "history-action-run";
         const idLabel = document.createElement("strong");
-        idLabel.textContent = run.action_id;
+        idLabel.textContent =
+          this.opts.resolveActionLabel?.(run.action_id) ?? run.action_id;
         const answer = document.createElement("pre");
         answer.textContent = run.answer;
         runBlock.append(idLabel, answer);
