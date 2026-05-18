@@ -18,7 +18,16 @@ REGISTRY_FILE="${WHISPER_WRAP_REGISTRY:-$PROJECT_DIR/registry/models.yaml}"
 MODELS_DIR="${WHISPER_WRAP_MODELS_DIR:-$PROJECT_DIR/models}"
 ENV_FILE="${WHISPER_WRAP_ENV_FILE:-$PROJECT_DIR/.env}"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+# Prefer the project's venv python over the system one so imports of
+# project-side modules (e.g. app.services.registry → pyyaml) work after a
+# fresh `uv sync`. Fall back to system python3 if the venv hasn't been
+# created yet — the caller can still override with PYTHON_BIN=...
+DEFAULT_PYTHON="$PROJECT_DIR/.venv/bin/python3"
+if [ -z "${PYTHON_BIN:-}" ] && [ -x "$DEFAULT_PYTHON" ]; then
+    PYTHON_BIN="$DEFAULT_PYTHON"
+else
+    PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
 PYTHONPATH_DIR="${WHISPER_WRAP_PYTHONPATH:-$PROJECT_DIR}"
 
 usage() {
