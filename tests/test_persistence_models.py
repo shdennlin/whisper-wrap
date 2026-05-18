@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
 
 from app.services.persistence import (
     SessionLocal,
@@ -81,9 +80,7 @@ def test_duplicate_session_id_raises_integrity_error(db_session):
     sessions_repo.create_session(db_session, id="dup", started_at=1, mode="batch")
     db_session.commit()
     with pytest.raises(IntegrityError):
-        sessions_repo.create_session(
-            db_session, id="dup", started_at=2, mode="live"
-        )
+        sessions_repo.create_session(db_session, id="dup", started_at=2, mode="live")
         db_session.commit()
 
 
@@ -115,9 +112,7 @@ def test_update_session_partial(db_session):
     sessions_repo.create_session(db_session, id="u", started_at=10, mode="batch")
     db_session.commit()
 
-    updated = sessions_repo.update_session(
-        db_session, "u", ended_at=20, duration_ms=10
-    )
+    updated = sessions_repo.update_session(db_session, "u", ended_at=20, duration_ms=10)
     assert updated is not None
     assert updated.ended_at == 20
     assert updated.duration_ms == 10
@@ -220,3 +215,45 @@ def test_wipe_all_audio_paths_clears_and_returns_paths(db_session):
         assert s.audio_path is None
         assert s.audio_mime_type is None
         assert s.audio_size_bytes is None
+
+
+# ---------- delete_action_run ----------
+
+
+def test_delete_action_run_happy_path(db_session):
+    """Deletes the named run + returns True. Sibling runs untouched."""
+    sessions_repo.create_session(db_session, id="s", started_at=0, mode="batch")
+    r1 = sessions_repo.append_action_run(
+        db_session, "s", action_id="a", prompt="p1", answer="r1", ran_at=1
+    )
+    r2 = sessions_repo.append_action_run(
+        db_session, "s", action_id="a", prompt="p2", answer="r2", ran_at=2
+    )
+    db_session.commit()
+
+    assert sessions_repo.delete_action_run(db_session, "s", r1.id) is True
+    db_session.commit()
+
+    remaining = db_session.query(ActionRun).all()
+    assert [r.id for r in remaining] == [r2.id]
+
+
+def test_delete_action_run_missing_id_returns_false(db_session):
+    sessions_repo.create_session(db_session, id="s", started_at=0, mode="batch")
+    db_session.commit()
+    assert sessions_repo.delete_action_run(db_session, "s", 9999) is False
+
+
+def test_delete_action_run_wrong_session_returns_false_and_leaves_row(db_session):
+    """A run that exists under session A SHALL NOT be deletable under session B."""
+    sessions_repo.create_session(db_session, id="a", started_at=0, mode="batch")
+    sessions_repo.create_session(db_session, id="b", started_at=1, mode="batch")
+    run = sessions_repo.append_action_run(
+        db_session, "a", action_id="x", prompt="p", answer="r", ran_at=1
+    )
+    db_session.commit()
+
+    assert sessions_repo.delete_action_run(db_session, "b", run.id) is False
+    db_session.commit()
+
+    assert db_session.query(ActionRun).filter(ActionRun.id == run.id).count() == 1

@@ -5,7 +5,6 @@ in the transcribe-stream spec and Decision 6: Simplified LocalAgreement-2.
 """
 
 
-
 def test_first_inference_emits_verbatim():
     """First inference of an utterance SHALL emit verbatim — no "wait for consensus"
     delay before the user sees any partial. Subsequent inferences then apply
@@ -72,7 +71,11 @@ def test_lcp_truncation_table():
         # (window_N, window_N+1, expected_truncated_lcp)
         ("I went to", "I went to the store", "I went to"),
         ("I went to", "I want some coffee", ""),
-        ("今天天氣", "今天天氣不錯", "今天天氣"),  # CJK has no whitespace; full LCP returned
+        (
+            "今天天氣",
+            "今天天氣不錯",
+            "今天天氣",
+        ),  # CJK has no whitespace; full LCP returned
         ("Hello wor", "Hello world", "Hello"),
     ]
     for prev, curr, expected in cases:
@@ -198,7 +201,9 @@ async def test_partial_count_ratio_le_half():
         StreamSession,
     )
 
-    fixture_path = Path(__file__).resolve().parent / "fixtures/streaming/mandarin_10s.pcm"
+    fixture_path = (
+        Path(__file__).resolve().parent / "fixtures/streaming/mandarin_10s.pcm"
+    )
     pcm = fixture_path.read_bytes()
     assert len(pcm) == 320_000, f"expected 320000 bytes, got {len(pcm)}"
 

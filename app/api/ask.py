@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.datastructures import UploadFile
 
 from app.api.transcribe import (
@@ -33,6 +33,7 @@ from app.config import config
 from app.services.converter import audio_converter
 from app.services.files import file_manager
 from app.services.llm import LLMConfigError, LLMUpstreamError
+from app.services.postprocess import Drop, Keep, filter_empty_transcription
 from app.services.whisper import WhisperTranscriptionError
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,7 @@ async def _read_text_body(request: Request) -> str:
     return text
 
 
-async def _extract_audio_body(
-    request: Request, content_type: str
-) -> tuple[bytes, str]:
+async def _extract_audio_body(request: Request, content_type: str) -> tuple[bytes, str]:
     """Cheap validation phase for audio paths — runs before any SSE framing begins."""
     if content_type == "multipart/form-data":
         form = await request.form()
@@ -136,9 +135,7 @@ async def ask(
     stream: bool = Query(
         False, description="If true, return text/event-stream with token deltas"
     ),
-    language: str = Query(
-        "auto", description="Spoken language hint for audio inputs"
-    ),
+    language: str = Query("auto", description="Spoken language hint for audio inputs"),
     prompt: str | None = Query(
         None, description="Initial prompt seed for audio transcription"
     ),
@@ -168,8 +165,28 @@ async def ask(
             transcript = await _run_audio_pipeline(
                 request, audio_body, audio_suffix, language, prompt
             )
-            llm_input = transcript
-            transcript_for_response: str | None = transcript
+            # Post-process: skip the LLM (and the Gemini bill) when STT yields
+            # pure noise. Return 400 with a stable error code.
+            decision = filter_empty_transcription(
+                text=transcript,
+                duration_ms=None,
+                enabled=config.FILTER_EMPTY_ENABLED,
+                min_duration_ms=config.FILTER_MIN_DURATION_MS,
+            )
+            if isinstance(decision, Drop):
+                logger.info(
+                    "transcription_filtered",
+                    extra={
+                        "endpoint": "/ask",
+                        "reason": decision.reason,
+                        "stream": False,
+                        "raw_text_len": len(transcript),
+                    },
+                )
+                return JSONResponse({"error": "no_speech_detected"}, status_code=400)
+            assert isinstance(decision, Keep)
+            llm_input = decision.text
+            transcript_for_response: str | None = decision.text
         else:
             llm_input = user_text
             transcript_for_response = None
@@ -187,9 +204,7 @@ async def ask(
     async def event_stream():
         if not llm_client.configured:
             # Missing credentials: single event:error, no transcript event (task 4.5).
-            yield _sse_event(
-                "error", {"error": "GEMINI_API_KEY is not configured"}
-            )
+            yield _sse_event("error", {"error": "GEMINI_API_KEY is not configured"})
             return
 
         if user_text is not None:
@@ -211,8 +226,29 @@ async def ask(
             except Exception as e:  # defensive: don't crash the stream
                 yield _sse_event("error", {"error": f"Transcription failed: {e}"})
                 return
-            yield _sse_event("transcript", {"text": transcript_text})
-            llm_input = transcript_text
+            # Apply empty-filter BEFORE emitting transcript event so the client
+            # sees a single error frame rather than transcript-then-llm-call.
+            stream_decision = filter_empty_transcription(
+                text=transcript_text,
+                duration_ms=None,
+                enabled=config.FILTER_EMPTY_ENABLED,
+                min_duration_ms=config.FILTER_MIN_DURATION_MS,
+            )
+            if isinstance(stream_decision, Drop):
+                logger.info(
+                    "transcription_filtered",
+                    extra={
+                        "endpoint": "/ask",
+                        "reason": stream_decision.reason,
+                        "stream": True,
+                        "raw_text_len": len(transcript_text),
+                    },
+                )
+                yield _sse_event("error", {"error": "no_speech_detected"})
+                return
+            assert isinstance(stream_decision, Keep)
+            yield _sse_event("transcript", {"text": stream_decision.text})
+            llm_input = stream_decision.text
 
         try:
             async for delta in llm_client.ask_stream(llm_input):

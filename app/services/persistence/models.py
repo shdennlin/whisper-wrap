@@ -51,13 +51,13 @@ class Session(Base):
     audio_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    finals: Mapped[list["Final"]] = relationship(
+    finals: Mapped[list[Final]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="Final.ord",
         passive_deletes=True,
     )
-    action_runs: Mapped[list["ActionRun"]] = relationship(
+    action_runs: Mapped[list[ActionRun]] = relationship(
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="ActionRun.ran_at",
@@ -84,7 +84,7 @@ class Final(Base):
     end_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kind: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
-    session: Mapped["Session"] = relationship(back_populates="finals")
+    session: Mapped[Session] = relationship(back_populates="finals")
 
 
 class ActionRun(Base):
@@ -103,7 +103,7 @@ class ActionRun(Base):
     model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
     succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    session: Mapped["Session"] = relationship(back_populates="action_runs")
+    session: Mapped[Session] = relationship(back_populates="action_runs")
 
     __table_args__ = (
         Index("idx_action_runs_session", "session_id"),

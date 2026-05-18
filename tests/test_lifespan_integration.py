@@ -35,7 +35,9 @@ def _make_ct2_dir(tmp_path: Path) -> Path:
 # ---------- MODEL_DIR layout inspection ----------
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="ggml branch requires pywhispercpp (macOS)")
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="ggml branch requires pywhispercpp (macOS)"
+)
 def test_model_dir_override_ggml(tmp_path):
     """MODEL_DIR pointing at a directory with ggml-*.bin SHALL instantiate the pywhispercpp backend."""
     ggml_dir = _make_ggml_dir(tmp_path)
@@ -118,7 +120,9 @@ def test_default_model_unknown_in_registry_raises(monkeypatch, tmp_path):
         )
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="ggml branch requires pywhispercpp (macOS)")
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="ggml branch requires pywhispercpp (macOS)"
+)
 def test_macos_default_loads_pywhispercpp(monkeypatch, tmp_path):
     """On darwin with the default registry, MODEL_NAME=breeze-asr-25 SHALL resolve to ggml."""
     # Point models root at a tmp_path so we can pre-install only the ggml variant.

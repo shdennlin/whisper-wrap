@@ -226,9 +226,7 @@ class PyWhisperCppBackend:
         # pywhispercpp does not return language-detection metadata; fall back to
         # the requested language or a text-based detection so callers get a
         # non-empty `language` field.
-        detected_lang = (
-            None if requested_language == "auto" else requested_language
-        )
+        detected_lang = None if requested_language == "auto" else requested_language
         if detected_lang is None:
             detected_lang = detect_text_language(raw_text)
 
@@ -236,8 +234,7 @@ class PyWhisperCppBackend:
         normalized = normalize_punctuation(joined, detected_lang)
 
         mapped_segments = [
-            Segment(text=s.text, start=s.t0 / 100.0, end=s.t1 / 100.0)
-            for s in segments
+            Segment(text=s.text, start=s.t0 / 100.0, end=s.t1 / 100.0) for s in segments
         ]
         duration = mapped_segments[-1].end if mapped_segments else 0.0
 

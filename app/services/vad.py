@@ -115,12 +115,15 @@ class SileroVad:
             return False
 
         # Convert pcm_s16le to a float tensor in [-1, 1].
-        samples = self._torch.frombuffer(
-            bytearray(pcm), dtype=self._torch.int16
-        ).float() / 32768.0
+        samples = (
+            self._torch.frombuffer(bytearray(pcm), dtype=self._torch.int16).float()
+            / 32768.0
+        )
 
         # Slice into 512-sample chunks; classify each; any-speech-in-frame wins.
-        for start in range(0, n_samples - SILERO_CHUNK_SAMPLES + 1, SILERO_CHUNK_SAMPLES):
+        for start in range(
+            0, n_samples - SILERO_CHUNK_SAMPLES + 1, SILERO_CHUNK_SAMPLES
+        ):
             chunk = samples[start : start + SILERO_CHUNK_SAMPLES]
             with self._torch.no_grad():
                 prob = self._model(chunk, SAMPLE_RATE).item()

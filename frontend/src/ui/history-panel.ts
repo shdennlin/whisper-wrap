@@ -1,68 +1,76 @@
 /**
- * History panel: lists persisted sessions with copy / export / delete.
+ * Slim "recent sessions" sidebar — the lightweight companion to the full
+ * master-detail HistoryView at `#/history`.
  *
- * Exports trigger a browser download via blob URLs; no backend round-trip.
+ * Renders at most `maxItems` (default 5) of the most recent sessions, one
+ * line each: date + duration + word count + quick actions (Copy / Export /
+ * Delete). Clicking the row jumps to the full HistoryView via the hash route.
+ *
+ * History-ux-overhaul change: the Expand / transcript-body / AI-runs /
+ * waveform-player / re-transcribe machinery moved to HistoryView. This panel
+ * is intentionally a glance — no Expand toggle, no nested details.
  */
 
 import { t } from "../i18n";
 import {
   HistoryStore,
+  formatSessionDate,
   formatSessionDuration,
+  latestActionAnswer,
   sessionDurationMs,
+  sessionPreview,
   type SessionRecord,
 } from "../storage/history-store";
-import type { StoredAudio } from "../storage/history-api-client";
 import { exportSrt, exportVtt, exportTxt } from "../export/subtitle-export";
-import { WaveformPlayer, type PlayerInput } from "./waveform-player";
-import { ReAsrForm, type ReAsrFormDefaults, type ReAsrFormDeps } from "./re-asr-form";
+import { navigateToHistory } from "../routing/hash-route";
 
 export interface HistoryPanelOptions {
   root: HTMLElement;
   store: HistoryStore;
-  /** Optional: resolve an action ID to its localised label. If omitted (or
-   *  returns null for an unknown ID), the raw `action_id` is rendered.
-   *  Resolved every render so locale switches reflect immediately. */
-  resolveActionLabel?: (id: string) => string | null;
-  /**
-   * Lookup the stored audio record for a session. Returns null when not
-   * present (either pre-capability session or audio was evicted).
-   */
-  getAudio?: (session_id: string) => Promise<StoredAudio | null>;
-  /** ReAsrForm needs this to POST to /transcribe with the stored blob. */
-  reAsrDeps?: ReAsrFormDeps;
-  /** Defaults for the ReAsrForm (prompt, language, language options). */
-  reAsrDefaults?: () => ReAsrFormDefaults;
+  /** Max number of session rows to show. Defaults to 5 — sidebar is a glance,
+   *  not a browser; full list lives in the master-detail HistoryView. */
+  maxItems?: number;
 }
 
 export class HistoryPanel {
-  /** Tracks active players so we can destroy them on re-render. */
-  private players: WaveformPlayer[] = [];
+  private readonly maxItems: number;
 
   constructor(private readonly opts: HistoryPanelOptions) {
+    this.maxItems = opts.maxItems ?? 5;
     this.opts.root.classList.add("history-panel");
     this.render();
   }
 
   render(): void {
-    // Tear down any in-flight players from the previous render so we don't
-    // leak event listeners / rAF tickers when the user refreshes mid-playback.
-    for (const p of this.players) p.destroy();
-    this.players = [];
-
-    const sessions = this.opts.store.list();
+    const all = this.opts.store.list();
     this.opts.root.replaceChildren();
-    const header = document.createElement("h2");
-    header.className = "history-title";
-    header.textContent = t("history.title", { count: sessions.length });
+
+    const header = document.createElement("div");
+    header.className = "history-panel-header";
+    const title = document.createElement("h2");
+    title.className = "history-title";
+    title.textContent = t("history.title", { count: all.length });
+    header.appendChild(title);
+
+    if (all.length > this.maxItems) {
+      const viewAll = document.createElement("button");
+      viewAll.type = "button";
+      viewAll.className = "history-view-all";
+      viewAll.textContent = t("history.viewAll");
+      viewAll.addEventListener("click", () => navigateToHistory());
+      header.appendChild(viewAll);
+    }
     this.opts.root.appendChild(header);
-    if (sessions.length === 0) {
+
+    if (all.length === 0) {
       const empty = document.createElement("p");
       empty.className = "history-empty";
       empty.textContent = t("history.empty");
       this.opts.root.appendChild(empty);
       return;
     }
-    for (const session of sessions) {
+
+    for (const session of all.slice(0, this.maxItems)) {
       this.opts.root.appendChild(this.renderSession(session));
     }
   }
@@ -70,179 +78,69 @@ export class HistoryPanel {
   private renderSession(s: SessionRecord): HTMLElement {
     const card = document.createElement("article");
     card.className = "history-card";
+    card.dataset.id = s.id;
 
     const meta = document.createElement("div");
     meta.className = "history-meta";
-    meta.textContent =
-      formatDate(s.started_at) +
-      " · " +
-      (s.ended_at
-        ? formatSessionDuration(sessionDurationMs(s))
-        : t("history.recording")) +
-      " · " +
-      countWords(s) +
-      t("history.charsSuffix");
+    const liveOrEnded = s.ended_at !== null || s.finals.length > 0;
+    const dur = liveOrEnded
+      ? formatSessionDuration(sessionDurationMs(s))
+      : t("history.recording");
+    meta.textContent = `${formatSessionDate(s.started_at)} · ${dur} · ${countWords(s)}${t("history.charsSuffix")}`;
+    // Make the meta row itself a navigation target so the whole card is
+    // clickable — quicker than hunting for a small label/link.
+    meta.style.cursor = "pointer";
+    meta.addEventListener("click", () => navigateToHistory(s.id));
     card.appendChild(meta);
 
-    const preview = document.createElement("details");
+    const preview = document.createElement("div");
     preview.className = "history-preview";
-    const summary = document.createElement("summary");
-    summary.textContent = t("history.expand");
-    preview.appendChild(summary);
-
-    // Waveform player + (optionally) Re-transcribe form. Loading is deferred
-    // until the user expands the <details> so a long history doesn't spike
-    // memory by decoding every session's audio on render.
-    const playerHost = document.createElement("div");
-    playerHost.className = "history-player-host";
-    preview.appendChild(playerHost);
-    const reAsrHost = document.createElement("div");
-    reAsrHost.className = "history-reasr-host";
-    preview.appendChild(reAsrHost);
-    this.mountPlayerOnExpand(s, preview, playerHost, reAsrHost);
-
-    const body = document.createElement("pre");
-    body.className = "history-body";
-    body.textContent = s.finals.map((f) => f.text).join("\n");
-    preview.appendChild(body);
-    if (s.action_runs.length > 0) {
-      const runsHeader = document.createElement("h3");
-      runsHeader.textContent = t("history.aiResponse");
-      preview.appendChild(runsHeader);
-      for (const run of s.action_runs) {
-        const runBlock = document.createElement("div");
-        runBlock.className = "history-action-run";
-        const idLabel = document.createElement("strong");
-        idLabel.textContent =
-          this.opts.resolveActionLabel?.(run.action_id) ?? run.action_id;
-        const answer = document.createElement("pre");
-        answer.textContent = run.answer;
-        runBlock.append(idLabel, answer);
-        preview.appendChild(runBlock);
-      }
-    }
+    const previewText = sessionPreview(s);
+    preview.textContent = previewText || t("history.emptyPreview");
+    if (!previewText) preview.classList.add("is-empty");
+    preview.style.cursor = "pointer";
+    preview.addEventListener("click", () => navigateToHistory(s.id));
     card.appendChild(preview);
 
     const actions = document.createElement("div");
     actions.className = "history-actions";
+    const copyAiBtn = this.makeButton(t("history.copyAi"), () =>
+      this.copyAi(s),
+    );
+    if (s.action_runs.length === 0) {
+      copyAiBtn.disabled = true;
+      copyAiBtn.title = t("history.copyAiNoRuns");
+    }
     actions.append(
       this.makeButton(t("common.copy"), () => this.copy(s)),
-      this.makeButton(t("history.exportSrt"), () => this.download(s, "srt", exportSrt)),
-      this.makeButton(t("history.exportVtt"), () => this.download(s, "vtt", exportVtt)),
-      this.makeButton(t("history.exportTxt"), () => this.download(s, "txt", exportTxt)),
+      copyAiBtn,
+      this.makeButton(t("history.exportSrt"), () =>
+        this.download(s, "srt", exportSrt),
+      ),
+      this.makeButton(t("history.exportVtt"), () =>
+        this.download(s, "vtt", exportVtt),
+      ),
+      this.makeButton(t("history.exportTxt"), () =>
+        this.download(s, "txt", exportTxt),
+      ),
       this.makeButton(t("common.delete"), () => this.deleteSession(s)),
     );
     card.appendChild(actions);
     return card;
   }
 
-  /**
-   * Look up this session's audio and mount the player + optional re-transcribe
-   * UI on the first time the user opens the <details> for the card. Idempotent:
-   * subsequent toggles do nothing because the host elements stay populated.
-   *
-   * Player state mapping:
-   *   - audio record present                → WaveformPlayer "audio" + Re-transcribe button
-   *   - record absent AND session.audio_saved → "expired" (was saved, then evicted)
-   *   - record absent AND !session.audio_saved → "missing" (predates capability or save was off)
-   */
-  private mountPlayerOnExpand(
-    s: SessionRecord,
-    preview: HTMLDetailsElement,
-    playerHost: HTMLElement,
-    reAsrHost: HTMLElement,
-  ): void {
-    let mounted = false;
-    const tryMount = (): void => {
-      if (mounted || !preview.open) return;
-      mounted = true;
-      void this.attachPlayer(s, playerHost, reAsrHost);
-    };
-    preview.addEventListener("toggle", tryMount);
-    // If the card is already open at render time (e.g. user re-render),
-    // mount synchronously.
-    if (preview.open) tryMount();
+  private async copyAi(s: SessionRecord): Promise<void> {
+    // Extract synchronously inside the click context so iOS Safari PWA's
+    // permission gate sees the same gesture that triggered the copy.
+    const text = latestActionAnswer(s);
+    if (text === null) return;
+    await this.writeClipboard(text);
   }
 
-  private async attachPlayer(
-    s: SessionRecord,
-    playerHost: HTMLElement,
-    reAsrHost: HTMLElement,
-  ): Promise<void> {
-    let record: StoredAudio | null = null;
-    if (this.opts.getAudio) {
-      try {
-        record = await this.opts.getAudio(s.id);
-      } catch {
-        // Treat lookup failure as missing — the player still renders gracefully.
-        record = null;
-      }
-    }
-
-    const input: PlayerInput = record
-      ? {
-          kind: "audio",
-          blob: record.blob,
-          mime_type: record.mime_type,
-          duration_ms: record.duration_ms,
-        }
-      : s.audio_saved
-        ? { kind: "expired" }
-        : { kind: "missing" };
-
-    const player = new WaveformPlayer({ root: playerHost, input });
-    this.players.push(player);
-    if (input.kind === "audio") {
-      void player.load();
-      // Render the Re-transcribe button only when audio is available and the
-      // dependencies needed to drive it were provided.
-      if (this.opts.reAsrDeps && this.opts.reAsrDefaults) {
-        const reAsrDeps = this.opts.reAsrDeps;
-        const reAsrDefaults = this.opts.reAsrDefaults;
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "history-reasr-toggle";
-        button.textContent = t("audio.reTranscribe");
-        button.addEventListener("click", () => {
-          button.hidden = true;
-          const form = new ReAsrForm({
-            ...reAsrDeps,
-            onComplete: () => {
-              reAsrDeps.onComplete?.();
-              button.hidden = false;
-              this.render();
-            },
-          });
-          const teardown = form.mount(reAsrHost, s.id, record!.blob, reAsrDefaults());
-          // Cancel re-shows the button.
-          reAsrHost.addEventListener("click", function onCancel(ev) {
-            const tgt = ev.target as HTMLElement;
-            if (tgt.classList.contains("re-asr-cancel")) {
-              button.hidden = false;
-              reAsrHost.removeEventListener("click", onCancel);
-              teardown();
-            }
-          });
-        });
-        reAsrHost.appendChild(button);
-      }
-    }
-  }
-
-  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = label;
-    b.addEventListener("click", onClick);
-    return b;
-  }
-
-  private async copy(s: SessionRecord): Promise<void> {
-    const text = s.finals.map((f) => f.text).join("\n");
+  private async writeClipboard(text: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      // Older browsers / non-secure contexts: fall back to a temporary textarea.
       const ta = document.createElement("textarea");
       ta.value = text;
       ta.style.position = "fixed";
@@ -254,12 +152,32 @@ export class HistoryPanel {
     }
   }
 
+  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.addEventListener("click", (ev) => {
+      // Don't propagate to the row's navigation handler — quick actions
+      // should NOT also open the master-detail view.
+      ev.stopPropagation();
+      onClick();
+    });
+    return b;
+  }
+
+  private async copy(s: SessionRecord): Promise<void> {
+    const text = s.finals.map((f) => f.text).join("\n");
+    await this.writeClipboard(text);
+  }
+
   private download(
     s: SessionRecord,
     ext: string,
     fmt: (finals: SessionRecord["finals"]) => string,
   ): void {
-    const blob = new Blob([fmt(s.finals)], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([fmt(s.finals)], {
+      type: "text/plain;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -271,14 +189,8 @@ export class HistoryPanel {
   }
 
   private deleteSession(s: SessionRecord): void {
-    this.opts.store.deleteSession(s.id);
-    this.render();
+    void this.opts.store.deleteSession(s.id).then(() => this.render());
   }
-}
-
-function formatDate(ms: number): string {
-  const d = new Date(ms);
-  return d.toLocaleString("zh-TW", { hour12: false });
 }
 
 function formatDateForFilename(ms: number): string {
@@ -288,5 +200,8 @@ function formatDateForFilename(ms: number): string {
 }
 
 function countWords(s: SessionRecord): number {
-  return s.finals.reduce((acc, f) => acc + f.text.replace(/\s/g, "").length, 0);
+  return s.finals.reduce(
+    (acc, f) => acc + f.text.replace(/\s/g, "").length,
+    0,
+  );
 }

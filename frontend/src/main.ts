@@ -52,12 +52,16 @@ import {
 } from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
 import { HistoryPanel } from "./ui/history-panel";
+import { HistoryView, type ActionChoice } from "./ui/history-view";
+import { HistoryResizer } from "./ui/history-resizer";
 import { ModeCard } from "./ui/mode-card";
 import { BackendIndicator } from "./ui/backend-indicator";
 import {
   HistoryStore,
   MIN_USABLE_DURATION_MS,
+  sessionDurationMs,
 } from "./storage/history-store";
+import { navigateToHistory, onRouteChange } from "./routing/hash-route";
 
 // Resolve locale before any component reads strings.
 loadLocale();
@@ -105,6 +109,16 @@ const SUN_RAYS =
   "M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41";
 const GEAR_PATH =
   "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z";
+
+// History view toggle: navigates to the master-detail History route. Hash-
+// based routing keeps the service worker config untouched (no navigateFallback
+// allowlist needed) since the SW only sees the path, not the fragment.
+const historyToggle = document.createElement("button");
+historyToggle.type = "button";
+historyToggle.className = "history-toggle";
+historyToggle.setAttribute("aria-label", t("history.title", { count: 0 }));
+historyToggle.textContent = "☰";
+historyToggle.addEventListener("click", () => navigateToHistory());
 
 const themeToggle = document.createElement("button");
 themeToggle.type = "button";
@@ -168,7 +182,13 @@ settingsToggle.append(settingsIcon, settingsLabel);
 // AI model badge previously lived here (next to the backend indicator). It now
 // sits next to the "AI Enhance" section heading inside ActionsBar — see
 // actionsBar.setModel() below.
-header.append(title, indicatorHost, themeToggle, settingsToggle);
+header.append(title, indicatorHost, historyToggle, themeToggle, settingsToggle);
+
+// Recording-shell container groups <main> + <aside> so the route switcher can
+// toggle the whole shell with one `hidden` flag without leaking the toggle to
+// the header (which stays visible on every route).
+const recordingShell = el("div", "recording-shell");
+recordingShell.dataset.testid = "recording-shell";
 
 const main = el("main", "main-pane");
 
@@ -240,7 +260,22 @@ const settingsHost = el("section");
 settingsDialog.append(settingsHeader, settingsHost);
 settingsModal.append(settingsDialog);
 
-root.append(header, main, aside, settingsModal);
+// History view host lives INSIDE the recording shell so wide-screen viewports
+// (≥1200px) can show it side-by-side with the recording UI (the slim sidebar
+// `aside` is hidden by CSS in that breakpoint). On narrower screens the host
+// is hidden via `[hidden]` and the slim sidebar takes its place; route-based
+// switching at `#/history` then toggles the visibility.
+const historyViewHost = el("div", "history-view-host");
+historyViewHost.hidden = true;
+
+// Drag-resize handle between main and history columns (desktop one-page
+// only; CSS hides it on narrow viewports). Persists width to localStorage
+// so the user's preferred split survives reloads.
+const historyResizer = new HistoryResizer({ shell: recordingShell });
+
+recordingShell.append(main, aside, historyResizer.element(), historyViewHost);
+
+root.append(header, recordingShell, settingsModal);
 
 // ---- Insecure-origin banner (above header) ---------------------------------
 if (!window.isSecureContext && window.location.hostname !== "localhost") {
@@ -282,7 +317,7 @@ const settingsPanel = new SettingsPanel({
     });
     if (result.sessionsImported > 0) {
       await store.prime();
-      history.render();
+      refreshHistory();
     }
     return result;
   },
@@ -290,30 +325,13 @@ const settingsPanel = new SettingsPanel({
 });
 
 // HistoryPanel and ActionsBar reference each other: ActionsBar's onAnswer
-// calls history.render() to refresh persisted runs, and HistoryPanel uses
+// calls refreshHistory() to refresh persisted runs, and HistoryPanel uses
 // actionsBar.getActionLabel() to localise the action_id chips into the
 // session preview. Cyclic — so declare `history` with definite-assignment
 // (!) and assign it after actionsBar is constructed. The HistoryPanel also
 // consumes audioStore + a re-ASR transcribe callback (added by the audio
 // replay change) — those are passed in at construction further below.
 let history!: HistoryPanel;
-
-/**
- * Language options for the re-ASR form. Whisper accepts ISO codes like
- * "en", "zh", "ja"; we list the most-used ones plus "" for auto-detect.
- * The list is small on purpose — the form is for tweaking, not for picking
- * an unfamiliar language.
- */
-const RE_ASR_LANGUAGE_OPTIONS = [
-  { value: "", label: t("settings.micAuto") },
-  { value: "en", label: "English" },
-  { value: "zh", label: "中文" },
-  { value: "ja", label: "日本語" },
-  { value: "ko", label: "한국어" },
-  { value: "es", label: "Español" },
-  { value: "fr", label: "Français" },
-  { value: "de", label: "Deutsch" },
-];
 
 const actionsBar = new ActionsBar({
   root: actionsHost,
@@ -345,7 +363,7 @@ const actionsBar = new ActionsBar({
     currentAnswerText = run.answer;
     answerBody.textContent = run.answer;
     answerCopyBtn.disabled = !run.answer;
-    history.render();
+    refreshHistory();
     // Auto-copy only on success — copying a localised "(request failed)" to
     // the clipboard would be hostile.
     if (meta.succeeded && run.answer && settingsPanel.getSettings().autoCopyAnswer) {
@@ -378,64 +396,141 @@ const actionsBar = new ActionsBar({
   getTranscript: () => transcript.getText(),
 });
 
+// Slim sidebar — most-recent N glance only. Clicking a row navigates to the
+// full master-detail HistoryView at `#/history/<id>`.
 history = new HistoryPanel({
   root: historyHost,
   store,
-  // Persisted action runs are stored by `action_id` (e.g. "passthrough").
-  // The history panel renders that ID into a localised label using whatever
-  // the actions registry currently calls it. If the registry hasn't loaded
-  // yet (first render right after construction), the resolver returns null
-  // and the panel falls back to the raw ID; we re-render once .load()
-  // resolves so the labels light up.
-  resolveActionLabel: (id) => actionsBar.getActionLabel(id),
-  // Audio replay: HistoryPanel fetches the blob from the backend on expand.
-  // Returns null when the session has no audio (POST /audio never ran, or it
-  // was cleared via bulk DELETE). 404 is mapped to null by fetchAudioFromApi.
-  getAudio: async (id) => {
-    const got = await fetchAudioFromApi(
-      loadSettings().backendUrl || window.location.origin,
-      id,
-    );
-    if (!got) return null;
-    return {
-      session_id: id,
-      mime_type: got.mime_type,
-      blob: got.blob,
-      duration_ms: 0, // waveform player decodes its own duration
-      byte_size: got.blob.size,
-      stored_at: Date.now(),
-    };
-  },
-  // Re-ASR: HistoryPanel renders a "transcribe again" form when audio is
-  // available. The transcribe callback wraps the same /transcribe endpoint
-  // used by the batch upload path; the new run is appended to the session
-  // so the user sees both transcriptions side by side.
-  reAsrDeps: {
-    transcribe: async (blob, opts) => {
-      const form = new FormData();
-      form.append("file", blob, `re-asr.${mimeToExt(blob.type)}`);
-      if (opts.prompt) form.append("prompt", opts.prompt);
-      if (opts.language) form.append("language", opts.language);
-      const r = await fetch(backendUrl("/transcribe"), { method: "POST", body: form });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const body = (await r.json()) as { text: string };
-      return body.text ?? "";
-    },
-    appendActionRun: (sessionId, run) => store.appendActionRun(sessionId, run),
-  },
-  reAsrDefaults: () => ({
-    prompt: "",
-    language: "",
-    languages: RE_ASR_LANGUAGE_OPTIONS,
-  }),
+  maxItems: 5,
 });
 
 // Prime the history cache from the backend BEFORE the panel renders its
 // first frame so persisted sessions appear instantly instead of after a
 // blink. ActionsBar load is independent; both can run concurrently.
 void Promise.all([store.prime(), actionsBar.load()]).then(() => {
-  history.render();
+  refreshHistory();
+  // If the user landed directly on #/history the route handler already fired
+  // synchronously below — re-render so the freshly primed cache is visible.
+  if (window.location.hash.startsWith("#/history")) {
+    historyView.show(parseSessionIdFromHash());
+  }
 });
+
+// ---- History master-detail view + hash routing ----------------------------
+const historyView = new HistoryView({
+  root: historyViewHost,
+  store,
+  resolveActionLabel: (id) => actionsBar.getActionLabel(id),
+  getAudio: async (id) => {
+    const got = await fetchAudioFromApi(
+      loadSettings().backendUrl || window.location.origin,
+      id,
+    );
+    if (!got) return null;
+    // duration_ms drives the waveform player's time axis and the drag-to-scrub
+    // math (`currentTime = (x/w) * duration_ms/1000`). Pull it from the cached
+    // session — after `prime()` and stopSession's PATCH, the value is either
+    // `ended_at - started_at` (preferred) or the finals-based fallback.
+    const session = store.list().find((s) => s.id === id);
+    const duration_ms = session ? sessionDurationMs(session) : 0;
+    return {
+      session_id: id,
+      mime_type: got.mime_type,
+      blob: got.blob,
+      duration_ms,
+      byte_size: got.blob.size,
+      stored_at: Date.now(),
+    };
+  },
+  listActions: () => actionsBarChoices(),
+  runActionAgain: async (_sessionId, _actionId, prompt) => {
+    // Re-run on a past session: hit /ask with the templated text only — no
+    // audio body, no STT round-trip. The answer is then persisted as a new
+    // ActionRun by HistoryView itself.
+    const r = await fetch(backendUrl("/ask"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: prompt }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const body = (await r.json()) as { answer: string };
+    return body.answer ?? "";
+  },
+});
+
+function actionsBarChoices(): ActionChoice[] {
+  // ActionsBar owns the localised label resolution + the loaded template
+  // list; map it onto the smaller HistoryView shape.
+  const tpls = actionsBar.getTemplates();
+  return tpls.map((tpl) => ({
+    id: tpl.id,
+    label: actionsBar.getActionLabel(tpl.id) ?? tpl.id,
+    template: tpl.template,
+  }));
+}
+
+function parseSessionIdFromHash(): string | null {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#/history/")) return null;
+  const rest = hash.slice("#/history/".length);
+  return rest && !rest.includes("/") ? rest : null;
+}
+
+// Single entry point for "store mutated, both history surfaces need to
+// reflect it". HistoryPanel is the slim sidebar (hidden on desktop ≥1200px
+// via CSS); HistoryView is the master-detail panel (always visible on
+// desktop one-page mode). Before this helper existed, callers only refreshed
+// the sidebar, so a fresh batch transcript wouldn't appear in the desktop
+// HistoryView until the user clicked a route or resized the window.
+function refreshHistory(): void {
+  history.render();
+  historyView.refresh();
+}
+
+// Desktop ≥1200px = "one-page mode": recording UI and HistoryView are always
+// both visible (slim sidebar hidden by CSS). The route still selects which
+// session is highlighted, but no longer hides the recording shell.
+const desktopOnePage = window.matchMedia("(min-width: 1200px)");
+let currentRoute: { name: "shell" } | { name: "history"; sessionId: string | null } =
+  { name: "shell" };
+
+function applyLayoutForRoute(): void {
+  const isDesktop = desktopOnePage.matches;
+  if (isDesktop) {
+    // Desktop: ignore route — both panes always visible.
+    recordingShell.classList.remove("is-history-route");
+    recordingShell.hidden = false;
+    historyViewHost.hidden = false;
+    historyView.show(
+      currentRoute.name === "history" ? currentRoute.sessionId : null,
+    );
+  } else if (currentRoute.name === "history") {
+    // Mobile/tablet at #/history: hide main+aside via class (NOT the whole
+    // shell — historyViewHost lives inside the shell now and would vanish
+    // together with it).
+    recordingShell.classList.add("is-history-route");
+    recordingShell.hidden = false;
+    historyViewHost.hidden = false;
+    historyView.show(currentRoute.sessionId);
+  } else {
+    recordingShell.classList.remove("is-history-route");
+    historyView.hide();
+    historyViewHost.hidden = true;
+    recordingShell.hidden = false;
+  }
+}
+
+onRouteChange((route) => {
+  currentRoute =
+    route.name === "history"
+      ? { name: "history", sessionId: route.sessionId }
+      : { name: "shell" };
+  applyLayoutForRoute();
+});
+
+// Re-apply layout when crossing the wide-screen breakpoint so the view stays
+// consistent with the viewport (e.g., user rotates tablet, resizes window).
+desktopOnePage.addEventListener("change", applyLayoutForRoute);
 
 // ---- Mode cards (morph in place) ------------------------------------------
 const batchCard = new ModeCard({
@@ -547,6 +642,31 @@ let lastLivePartialText = "";
  */
 let pendingStopFinalResolver: (() => void) | null = null;
 
+// Safety net for tab close / refresh during an active recording: fire a
+// best-effort PATCH so the backend persists ended_at + duration_ms even when
+// stopSession's normal await chain never gets to run. `keepalive: true` tells
+// the browser to deliver the request after the document unloads — the
+// modern, navigateAway-safe replacement for synchronous XHR in beforeunload.
+//
+// Uses `pagehide` (not `beforeunload`) because:
+//   - pagehide fires on the bfcache path that mobile Safari uses;
+//   - beforeunload no longer fires reliably for some PWA close paths.
+window.addEventListener("pagehide", () => {
+  if (currentSessionId === null) return;
+  const session = store.list().find((s) => s.id === currentSessionId);
+  if (!session || session.ended_at !== null) return;
+  const ended_at = Date.now();
+  fetch(backendUrl(`/v1/sessions/${currentSessionId}`), {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      ended_at,
+      duration_ms: ended_at - session.started_at,
+    }),
+    keepalive: true,
+  }).catch(() => {});
+});
+
 /** 250 ms silent PCM frame at 16 kHz mono int16, used to coax the server's
  *  VAD into endpointing the in-flight utterance on a graceful Live stop. */
 const SILENT_FRAME_BYTES = 4000 * 2;
@@ -592,7 +712,7 @@ async function startRecording(mode: CaptureMode): Promise<void> {
 
   if (mode === "live") {
     currentSessionId = store.startSession("live");
-    history.render();
+    refreshHistory();
     // WS row stays hidden while everything is fine; the connection indicator
     // surfaces itself only on reconnecting / failed states (see handler below).
     wsIndicatorHost.hidden = true;
@@ -687,7 +807,7 @@ async function discardRecording(): Promise<void> {
     dual = null;
     if (currentSessionId) {
       store.deleteSession(currentSessionId);
-      history.render();
+      refreshHistory();
     }
     currentSessionId = null;
     toast(t("toast.discarded"));
@@ -742,7 +862,10 @@ async function stopRecording(): Promise<void> {
     sock?.stop();
     sock = null;
     if (currentSessionId) {
-      store.stopSession(currentSessionId);
+      // Await so the PATCH lands AND the local cache mutation (ended_at
+      // assignment) happens before we check it below. Swallow network errors
+      // here — the pagehide keepalive handler is the last-resort retry.
+      await store.stopSession(currentSessionId).catch(() => {});
       const session = store.list().find((s) => s.id === currentSessionId);
       const dur = Date.now() - recordingStartedAt;
       let sessionDeleted = false;
@@ -771,7 +894,7 @@ async function stopRecording(): Promise<void> {
       ) {
         await persistAudio(currentSessionId, recording.blob, recording.duration_ms);
       }
-      history.render();
+      refreshHistory();
     }
     dual = null;
     currentSessionId = null;
@@ -825,7 +948,7 @@ async function processBatchRecording(
     if (loadSettings().audioSave !== false) {
       await persistAudio(sessionId, blob, durationMs);
     }
-    history.render();
+    refreshHistory();
     await maybeAutoCopy();
     resetIdle();
     hideRetryPrompt();
@@ -967,7 +1090,7 @@ function handleListenEvent(e: ListenEvent): void {
       if (loadSettings().autoScroll) {
         transcript.root.scrollTop = transcript.root.scrollHeight;
       }
-      history.render();
+      refreshHistory();
       liveTimeout?.onActivity();
       break;
     case "error":

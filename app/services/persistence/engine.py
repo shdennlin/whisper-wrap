@@ -16,7 +16,8 @@ from __future__ import annotations
 from collections.abc import Generator
 
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.orm import Session as SASession, sessionmaker
+from sqlalchemy.orm import Session as SASession
+from sqlalchemy.orm import sessionmaker
 
 
 def build_engine(database_url: str) -> Engine:

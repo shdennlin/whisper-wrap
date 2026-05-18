@@ -30,7 +30,9 @@ export interface SessionFull extends SessionDigest {
 }
 
 export interface SessionListResponse {
-  sessions: SessionDigest[];
+  // GET /v1/sessions returns full sessions (finals + action_runs eagerly
+  // loaded) so list rows can render previews and char counts on first paint.
+  sessions: SessionFull[];
   next_before_ms: number | null;
 }
 
@@ -42,9 +44,9 @@ export interface AudioMeta {
 
 /**
  * Shape consumed by HistoryPanel's `getAudio` callback. Mirrors the old
- * IndexedDB record so consumers don't need to change. `duration_ms` is
- * populated as 0 by the API path — the waveform player decodes it from the
- * blob itself.
+ * IndexedDB record so consumers don't need to change. `duration_ms` SHALL
+ * be populated by the caller (main.ts looks it up from the session cache)
+ * so the waveform player can size its time axis and drag-to-scrub math.
  */
 export interface StoredAudio {
   session_id: string;
@@ -172,12 +174,27 @@ export async function appendActionRunToApi(
   backendUrl: string,
   sessionId: string,
   body: ActionRun & { model_used?: string | null; succeeded?: boolean },
-): Promise<void> {
+): Promise<{ id: number }> {
   const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}/runs`), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  await ensureOk(r);
+  // Backend returns the full ActionRunOut shape including the autoincrement id.
+  return r.json();
+}
+
+export async function deleteActionRun(
+  backendUrl: string,
+  sessionId: string,
+  runId: number,
+): Promise<void> {
+  const r = await fetch(
+    url(backendUrl, `/v1/sessions/${sessionId}/runs/${runId}`),
+    { method: "DELETE" },
+  );
+  if (r.status === 204) return;
   await ensureOk(r);
 }
 

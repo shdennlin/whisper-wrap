@@ -1,6 +1,7 @@
 """Tests for the streaming wrapper and WS /listen (tasks 5.1-5.5)."""
 
 import json
+import logging
 import math
 import struct
 from unittest.mock import MagicMock
@@ -29,8 +30,7 @@ def voice_frame(ms: int = 250, amplitude: int = 10_000) -> bytes:
     """A loud 440 Hz sinusoid that crosses the RMS-energy VAD threshold."""
     n = (SAMPLE_RATE * ms) // 1000
     samples = [
-        int(amplitude * math.sin(2 * math.pi * 440 * i / SAMPLE_RATE))
-        for i in range(n)
+        int(amplitude * math.sin(2 * math.pi * 440 * i / SAMPLE_RATE)) for i in range(n)
     ]
     return struct.pack(f"<{n}h", *samples)
 
@@ -114,7 +114,9 @@ async def test_partial_event_shape_matches_spec(captured_session):
     assert p["end_ms"] >= p["start_ms"]
 
 
-async def test_multiple_utterances_per_connection_monotonic_timestamps(captured_session):
+async def test_multiple_utterances_per_connection_monotonic_timestamps(
+    captured_session,
+):
     """Two utterances separated by silence SHALL produce two finals with monotonic ts."""
     session, events, _ = captured_session
     # Utterance 1
@@ -151,7 +153,9 @@ async def test_no_final_emitted_when_only_partial_voice(captured_session):
     assert "final" not in types
 
 
-async def test_completed_utterance_then_disconnect_keeps_earlier_final(captured_session):
+async def test_completed_utterance_then_disconnect_keeps_earlier_final(
+    captured_session,
+):
     """A final from utterance A SHALL stand even if the session ends without further input."""
     session, events, _ = captured_session
     # Complete utterance A
@@ -216,10 +220,15 @@ def ws_client(monkeypatch):
     """TestClient with WhisperClient.transcribe_pcm stubbed; used for protocol tests."""
     monkeypatch.setattr(
         "app.main._build_backend",
-        lambda **kw: (MagicMock(name="WhisperBackend"), {
-            "backend": "ctranslate2", "format": "ct2",
-            "compute_type": "default", "local_dir": "/fake",
-        }),
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/fake",
+            },
+        ),
     )
 
     async def fake(samples, **kw):
@@ -257,6 +266,124 @@ def test_oversized_binary_frame_rejected_with_close(ws_client):
         msg = ws.receive_text()
         body = json.loads(msg)
         assert body == {"type": "error", "message": "frame size out of range"}
+
+
+@pytest.fixture
+def filter_enabled(monkeypatch):
+    """Default-on filter with the production threshold (500 ms)."""
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+    monkeypatch.setattr(app_cfg, "FILTER_MIN_DURATION_MS", 500)
+    return app_cfg
+
+
+@pytest.fixture
+def filter_disabled(monkeypatch):
+    """Kill-switch off — legacy emit-everything behavior."""
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", False)
+    monkeypatch.setattr(app_cfg, "FILTER_MIN_DURATION_MS", 500)
+    return app_cfg
+
+
+async def _drive_one_utterance(session, *, voice_frames: int, voice_ms: int = 250):
+    """Drive a single utterance: N voice frames then enough silence for final."""
+    for _ in range(voice_frames):
+        await session.feed_frame(voice_frame(voice_ms))
+    # 3 × 250 ms silence = 750 ms > 700 ms SILENCE_DURATION_MS, fires final.
+    for _ in range(3):
+        await session.feed_frame(silence_frame(250))
+    await session.drain()
+
+
+async def test_empty_text_final_is_dropped(filter_enabled, caplog):
+    """Punctuation-only Whisper output SHALL not emit a final frame."""
+    events = []
+
+    async def send_event(e):
+        events.append(e)
+
+    async def transcribe_fn(_samples):
+        return "。"  # CJK full stop — pure hallucination shape
+
+    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    with caplog.at_level(logging.INFO, logger="app.services.stream"):
+        # 2 voice frames = 500 ms speech (above min duration) so only empty_text trips
+        await _drive_one_utterance(session, voice_frames=2)
+
+    finals = [e for e in events if e.get("type") == "final"]
+    assert finals == [], f"final SHALL be suppressed, got {finals}"
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/listen"
+    assert drops[0].reason == "empty_text"
+
+
+async def test_sub_min_duration_final_is_dropped(filter_enabled, caplog):
+    """Speech < 500 ms SHALL not emit a final, regardless of content."""
+    events = []
+
+    async def send_event(e):
+        events.append(e)
+
+    async def transcribe_fn(_samples):
+        return "hi"  # valid text, but sub-duration drop should fire first
+
+    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    with caplog.at_level(logging.INFO, logger="app.services.stream"):
+        # 1 voice frame (250 ms) — below 500 ms threshold
+        await _drive_one_utterance(session, voice_frames=1)
+
+    finals = [e for e in events if e.get("type") == "final"]
+    assert finals == [], f"sub-duration final SHALL be suppressed, got {finals}"
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/listen"
+    assert drops[0].reason == "below_min_duration"
+
+
+async def test_valid_final_still_emitted(filter_enabled, caplog):
+    """Valid speech of adequate duration SHALL pass through unchanged."""
+    events = []
+
+    async def send_event(e):
+        events.append(e)
+
+    async def transcribe_fn(_samples):
+        return "今天天氣很好"
+
+    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    with caplog.at_level(logging.INFO, logger="app.services.stream"):
+        await _drive_one_utterance(session, voice_frames=3)  # 750 ms speech
+
+    finals = [e for e in events if e.get("type") == "final"]
+    assert len(finals) == 1
+    assert finals[0]["text"] == "今天天氣很好"
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+async def test_disabled_filter_emits_empty_final(filter_disabled, caplog):
+    """When FILTER_EMPTY_ENABLED=false, the legacy emit-everything path SHALL run."""
+    events = []
+
+    async def send_event(e):
+        events.append(e)
+
+    async def transcribe_fn(_samples):
+        return "。"  # would be dropped if filter were on
+
+    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    with caplog.at_level(logging.INFO, logger="app.services.stream"):
+        await _drive_one_utterance(session, voice_frames=2)
+
+    finals = [e for e in events if e.get("type") == "final"]
+    assert len(finals) == 1, "Disabled filter SHALL forward empty/punctuation output"
+    assert finals[0]["text"] == "。"
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
 
 
 def test_valid_silence_frame_accepted(ws_client):

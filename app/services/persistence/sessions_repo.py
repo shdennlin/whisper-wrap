@@ -8,9 +8,10 @@ write" — never "when to commit" or "how to enable FKs" (that lives in engine).
 
 from __future__ import annotations
 
-from sqlalchemy import event, func, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session as SASession, selectinload
+from sqlalchemy.orm import Session as SASession
+from sqlalchemy.orm import selectinload
 
 from app.services.persistence.models import ActionRun, Final, Session
 
@@ -36,8 +37,20 @@ def list_sessions(
     limit: int = 20,
     before_ms: int | None = None,
 ) -> list[Session]:
-    """Sessions ordered by `started_at DESC`, paginated via `before_ms` cursor."""
-    stmt = select(Session).order_by(Session.started_at.desc())
+    """Sessions ordered by `started_at DESC`, paginated via `before_ms` cursor.
+
+    Eager-loads finals + action_runs so the API can serialize SessionFull
+    without N+1 queries — the PWA's history rows need text previews and
+    char counts on the very first paint after refresh.
+    """
+    stmt = (
+        select(Session)
+        .order_by(Session.started_at.desc())
+        .options(
+            selectinload(Session.finals),
+            selectinload(Session.action_runs),
+        )
+    )
     if before_ms is not None:
         stmt = stmt.where(Session.started_at < before_ms)
     stmt = stmt.limit(limit)
@@ -161,6 +174,24 @@ def append_action_run(
     db.add(run)
     db.flush()
     return run
+
+
+def delete_action_run(db: SASession, session_id: str, run_id: int) -> bool:
+    """Delete one action_run row scoped by session_id.
+
+    Returns True iff exactly one row was deleted. The session-id constraint in
+    the WHERE clause means a run whose row exists under a DIFFERENT session
+    SHALL NOT be deleted (returns False, row untouched). Caller in
+    `app/api/sessions.py` translates the bool into 204 vs 404, and uses
+    `get_session(...)` to distinguish session-missing from run-missing for
+    the response detail.
+    """
+    stmt = delete(ActionRun).where(
+        ActionRun.id == run_id, ActionRun.session_id == session_id
+    )
+    result = db.execute(stmt)
+    db.flush()
+    return result.rowcount == 1
 
 
 def wipe_all_audio_paths(db: SASession) -> list[str]:

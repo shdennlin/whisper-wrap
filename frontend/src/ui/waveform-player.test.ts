@@ -318,7 +318,26 @@ describe("WaveformPlayer", () => {
     player.destroy();
   });
 
-  it("click on canvas seeks proportionally to click x", async () => {
+  function spyCurrentTime(audio: HTMLAudioElement): { value: number } {
+    const ref = { value: audio.currentTime };
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      get: () => ref.value,
+      set: (v: number) => {
+        ref.value = v;
+      },
+    });
+    return ref;
+  }
+
+  function pointerEvent(type: string, offsetX: number): PointerEvent {
+    const ev = new Event(type, { bubbles: true }) as PointerEvent;
+    Object.defineProperty(ev, "offsetX", { value: offsetX });
+    Object.defineProperty(ev, "pointerId", { value: 1 });
+    return ev;
+  }
+
+  it("pointerdown on canvas seeks proportionally to x", async () => {
     const root = mountRoot();
     const decode = vi.fn(async () => flatSamples());
     const player = new WaveformPlayer({
@@ -336,34 +355,77 @@ describe("WaveformPlayer", () => {
 
     const canvas = root.querySelector<HTMLCanvasElement>(".waveform-canvas")!;
     const audio = root.querySelector<HTMLAudioElement>("audio")!;
-    expect(audio).not.toBeNull();
+    const time = spyCurrentTime(audio);
 
-    const width = canvas.width;
-    expect(width).toBeGreaterThan(0);
-
-    // Track currentTime mutations via a setter spy on the instance.
-    let lastSet = audio.currentTime;
-    Object.defineProperty(audio, "currentTime", {
-      configurable: true,
-      get: () => lastSet,
-      set: (v: number) => {
-        lastSet = v;
-      },
-    });
-
-    // Build a click event with offsetX = width / 4 — happy-dom doesn't
-    // compute offsetX from clientX, so we set it directly on the event.
-    const ev = new MouseEvent("click", { bubbles: true });
-    Object.defineProperty(ev, "offsetX", { value: width / 4 });
-    canvas.dispatchEvent(ev);
+    canvas.dispatchEvent(pointerEvent("pointerdown", canvas.width / 4));
 
     // (width / 4) / width = 0.25; duration_ms / 1000 = 1.0 → 0.25 s.
-    expect(audio.currentTime).toBeCloseTo(0.25, 5);
+    expect(time.value).toBeCloseTo(0.25, 5);
 
     player.destroy();
   });
 
-  it("click on canvas while in error state is a no-op", async () => {
+  it("pointerdown then pointermove drag scrubs continuously", async () => {
+    const root = mountRoot();
+    const decode = vi.fn(async () => flatSamples());
+    const player = new WaveformPlayer({
+      root,
+      input: {
+        kind: "audio",
+        blob: makeBlob(),
+        mime_type: "audio/webm",
+        duration_ms: 1000,
+      },
+      decode,
+    });
+    await player.load();
+
+    const canvas = root.querySelector<HTMLCanvasElement>(".waveform-canvas")!;
+    const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    const time = spyCurrentTime(audio);
+
+    canvas.dispatchEvent(pointerEvent("pointerdown", canvas.width * 0.1));
+    expect(time.value).toBeCloseTo(0.1, 5);
+    canvas.dispatchEvent(pointerEvent("pointermove", canvas.width * 0.5));
+    expect(time.value).toBeCloseTo(0.5, 5);
+    canvas.dispatchEvent(pointerEvent("pointermove", canvas.width * 0.9));
+    expect(time.value).toBeCloseTo(0.9, 5);
+    canvas.dispatchEvent(pointerEvent("pointerup", canvas.width * 0.9));
+
+    // After release, a stray pointermove SHALL NOT seek (no active scrub).
+    canvas.dispatchEvent(pointerEvent("pointermove", canvas.width * 0.2));
+    expect(time.value).toBeCloseTo(0.9, 5);
+
+    player.destroy();
+  });
+
+  it("pointermove without prior pointerdown is a no-op", async () => {
+    const root = mountRoot();
+    const decode = vi.fn(async () => flatSamples());
+    const player = new WaveformPlayer({
+      root,
+      input: {
+        kind: "audio",
+        blob: makeBlob(),
+        mime_type: "audio/webm",
+        duration_ms: 1000,
+      },
+      decode,
+    });
+    await player.load();
+
+    const canvas = root.querySelector<HTMLCanvasElement>(".waveform-canvas")!;
+    const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    const time = spyCurrentTime(audio);
+    const before = time.value;
+
+    canvas.dispatchEvent(pointerEvent("pointermove", canvas.width / 2));
+    expect(time.value).toBe(before);
+
+    player.destroy();
+  });
+
+  it("pointerdown on canvas while in error state is a no-op", async () => {
     const root = mountRoot();
     const decode = vi.fn(() => Promise.reject(new Error("bad")));
     const player = new WaveformPlayer({
@@ -383,22 +445,12 @@ describe("WaveformPlayer", () => {
 
     const canvas = root.querySelector<HTMLCanvasElement>(".waveform-canvas")!;
     const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    const time = spyCurrentTime(audio);
+    const before = time.value;
 
-    const before = audio.currentTime;
-    let lastSet = before;
-    Object.defineProperty(audio, "currentTime", {
-      configurable: true,
-      get: () => lastSet,
-      set: (v: number) => {
-        lastSet = v;
-      },
-    });
+    canvas.dispatchEvent(pointerEvent("pointerdown", canvas.width / 4));
 
-    const ev = new MouseEvent("click", { bubbles: true });
-    Object.defineProperty(ev, "offsetX", { value: canvas.width / 4 });
-    canvas.dispatchEvent(ev);
-
-    expect(audio.currentTime).toBe(before);
+    expect(time.value).toBe(before);
     expect(player.state()).toBe("error");
 
     player.destroy();

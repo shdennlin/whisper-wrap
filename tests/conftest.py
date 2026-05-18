@@ -8,8 +8,6 @@ the lifespan tests under test_main.py don't need to opt in.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 
@@ -28,9 +26,7 @@ def _isolate_persistence(tmp_path, monkeypatch):
     from app.config import config as app_cfg
 
     monkeypatch.setattr(app_cfg, "DATA_DIR", Path(str(data_dir)))
-    monkeypatch.setattr(
-        app_cfg, "DATABASE_URL", f"sqlite:///{data_dir}/history.db"
-    )
+    monkeypatch.setattr(app_cfg, "DATABASE_URL", f"sqlite:///{data_dir}/history.db")
 
     yield
 

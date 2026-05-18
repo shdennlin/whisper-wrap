@@ -21,6 +21,7 @@ import {
   appendFinalToApi,
   bulkClearAudio,
   createSession,
+  deleteActionRun as deleteActionRunApi,
   deleteSession as deleteSessionApi,
   listSessions,
   patchSession,
@@ -36,8 +37,47 @@ export const DEFAULT_RETENTION = 20;
 export const MIN_USABLE_DURATION_MS = 500;
 
 export function sessionDurationMs(s: SessionRecord): number {
-  if (s.ended_at === null) return 0;
-  return Math.max(0, s.ended_at - s.started_at);
+  if (s.ended_at !== null) return Math.max(0, s.ended_at - s.started_at);
+  // ended_at missing (live session OR backend never received the PATCH on
+  // abrupt close). If we have finals, their max end_ms is a faithful
+  // speech-duration approximation — finals only land after transcription, so
+  // their presence means the session already ended.
+  if (s.finals.length === 0) return 0;
+  let maxEnd = 0;
+  for (const f of s.finals) if (f.end_ms > maxEnd) maxEnd = f.end_ms;
+  return maxEnd;
+}
+
+/** ISO-style local datetime — single source of truth for both the slim
+ *  sidebar and the master-detail HistoryView so a session never reads
+ *  differently in two places (`2026-05-18 14:04:58`). */
+export function formatSessionDate(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
+/** Latest AI response text for a session, or null if no runs.
+ *  Action_runs come back in arbitrary order; we sort by ran_at DESC and
+ *  return the freshest answer. iOS Safari requires synchronous extraction
+ *  inside the click handler so consumers SHALL call this AHEAD of the
+ *  `await navigator.clipboard.writeText` boundary. */
+export function latestActionAnswer(s: SessionRecord): string | null {
+  if (s.action_runs.length === 0) return null;
+  let best = s.action_runs[0];
+  for (const r of s.action_runs) if (r.ran_at > best.ran_at) best = r;
+  return best.answer;
+}
+
+/** Short one-line preview of a session's finals for the list rows. */
+export function sessionPreview(s: SessionRecord, maxChars = 60): string {
+  if (s.finals.length === 0) return "";
+  const joined = s.finals.map((f) => f.text).join(" ").replace(/\s+/g, " ").trim();
+  if (joined.length <= maxChars) return joined;
+  return joined.slice(0, maxChars - 1) + "…";
 }
 
 export function formatSessionDuration(ms: number): string {
@@ -59,6 +99,10 @@ export interface SessionFinal {
 }
 
 export interface ActionRun {
+  /** Backend autoincrement id, populated after a successful POST /runs round-trip
+   *  OR when the record came from the API on `prime()`. Absent only on transient
+   *  client-built records that have not yet been persisted. */
+  id?: number;
   action_id: string;
   prompt: string;
   answer: string;
@@ -88,8 +132,26 @@ export class HistoryStore {
   /** Newest-first cache of sessions. Mutated only via _setCache wrappers
    *  so we keep a single ordering invariant. */
   private cache: SessionRecord[] = [];
+  /** In-flight `POST /v1/sessions` promises, keyed by session id. Every
+   *  session-scoped write (appendFinal, appendActionRun, stopSession,
+   *  uploadSessionAudio, …) awaits this before its own request so a fast
+   *  WS final doesn't race ahead and hit a 404 ("session not found"). */
+  private pendingCreate = new Map<string, Promise<unknown>>();
 
   constructor(private readonly opts: HistoryStoreOptions = { backendUrl: () => "" }) {}
+
+  /** Resolve once the create POST for this id has settled (success or
+   *  failure). No-op if create already completed. Failures are swallowed
+   *  here — the create's own catch already surfaced them via onError. */
+  private async awaitCreate(id: string): Promise<void> {
+    const p = this.pendingCreate.get(id);
+    if (!p) return;
+    try {
+      await p;
+    } catch {
+      // ignored; create's own .catch handler already surfaced via onError
+    }
+  }
 
   /** Initial fetch — call once at startup before the history panel renders. */
   async prime(): Promise<void> {
@@ -120,8 +182,14 @@ export class HistoryStore {
       action_runs: [],
     };
     this.cache = [record, ...this.cache];
-    void createSession(this.opts.backendUrl(), { id, started_at, mode })
+    // Track the POST so session-scoped writes (appendFinal, etc.) can wait
+    // for it to land before issuing their own requests against /{id}.
+    const p = createSession(this.opts.backendUrl(), { id, started_at, mode })
       .catch((e) => this.opts.onError?.(e, { op: "startSession", sessionId: id }));
+    this.pendingCreate.set(
+      id,
+      p.finally(() => this.pendingCreate.delete(id)),
+    );
     return id;
   }
 
@@ -130,6 +198,7 @@ export class HistoryStore {
     if (!session) {
       throw new Error(`HistoryStore: unknown session id ${id}`);
     }
+    await this.awaitCreate(id);
     try {
       await appendFinalToApi(this.opts.backendUrl(), id, final);
       session.finals.push(final);
@@ -144,11 +213,36 @@ export class HistoryStore {
     if (!session) {
       throw new Error(`HistoryStore: unknown session id ${id}`);
     }
+    await this.awaitCreate(id);
     try {
-      await appendActionRunToApi(this.opts.backendUrl(), id, run);
-      session.action_runs.push(run);
+      const created = await appendActionRunToApi(
+        this.opts.backendUrl(),
+        id,
+        run,
+      );
+      // Cache the row with the server-assigned id so future deleteRun calls
+      // can target it. If the backend (somehow) omits id, fall back to the
+      // client input so the UI still sees the new entry.
+      session.action_runs.push({ ...run, id: created.id ?? run.id });
     } catch (e) {
       this.opts.onError?.(e, { op: "appendActionRun", sessionId: id });
+      throw e;
+    }
+  }
+
+  /** Delete a single action_run row. Returns void on 204; rejects with a
+   *  HistoryApiError on non-204 (cache untouched, `onError` fired). */
+  async deleteRun(sessionId: string, runId: number): Promise<void> {
+    const session = this.cache.find((s) => s.id === sessionId);
+    try {
+      await deleteActionRunApi(this.opts.backendUrl(), sessionId, runId);
+      if (session) {
+        session.action_runs = session.action_runs.filter(
+          (r) => r.id !== runId,
+        );
+      }
+    } catch (e) {
+      this.opts.onError?.(e, { op: "deleteRun", sessionId });
       throw e;
     }
   }
@@ -158,6 +252,7 @@ export class HistoryStore {
     if (!session) {
       throw new Error(`HistoryStore: unknown session id ${id}`);
     }
+    await this.awaitCreate(id);
     const ended_at = Date.now();
     try {
       await patchSession(this.opts.backendUrl(), id, {
@@ -208,6 +303,7 @@ export class HistoryStore {
     blob: Blob,
     mimeType: string,
   ): Promise<void> {
+    await this.awaitCreate(id);
     try {
       const meta = await uploadAudio(this.opts.backendUrl(), id, blob, mimeType);
       const session = this.cache.find((s) => s.id === id);
@@ -255,6 +351,7 @@ function sessionFromDigest(d: SessionFull | {
       : [],
     action_runs: full
       ? full.action_runs.map((r) => ({
+          id: r.id,
           action_id: r.action_id,
           prompt: r.prompt,
           answer: r.answer,

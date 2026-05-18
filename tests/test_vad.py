@@ -100,7 +100,9 @@ def test_factory_explicit_rms_never_imports_silero():
     # If SileroVad were even constructed, this side_effect would fire.
     with patch(
         "app.services.vad.SileroVad",
-        side_effect=AssertionError("SileroVad must not be constructed for VAD_BACKEND=rms"),
+        side_effect=AssertionError(
+            "SileroVad must not be constructed for VAD_BACKEND=rms"
+        ),
     ):
         backend = make_vad_backend("rms")
     assert isinstance(backend, RmsVad)
@@ -215,9 +217,7 @@ def test_stream_session_accepts_vad_backend_kwarg():
     # Because the fake VAD said silence, no utterance was entered and no
     # partial was emitted. fake_vad.is_speech was called exactly once.
     assert fake_vad.is_speech.call_count == 1
-    assert events == [], (
-        f"VAD said silence but events were emitted: {events!r}"
-    )
+    assert events == [], f"VAD said silence but events were emitted: {events!r}"
 
 
 def test_per_session_vad_state_isolation():

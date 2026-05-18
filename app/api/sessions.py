@@ -19,7 +19,6 @@ from app.api.schemas.sessions import (
     FinalIn,
     FinalOut,
     SessionCreate,
-    SessionDigest,
     SessionFull,
     SessionListResponse,
     SessionPatch,
@@ -85,15 +84,13 @@ def list_sessions(
     rows = sessions_repo.list_sessions(db, limit=limit, before_ms=before_ms)
     next_cursor = rows[-1].started_at if len(rows) == limit else None
     return SessionListResponse(
-        sessions=[SessionDigest.model_validate(r) for r in rows],
+        sessions=[SessionFull.model_validate(r) for r in rows],
         next_before_ms=next_cursor,
     )
 
 
 @router.get("/{session_id}", response_model=SessionFull)
-def get_session(
-    session_id: str, db: SASession = Depends(get_db)
-) -> SessionFull:
+def get_session(session_id: str, db: SASession = Depends(get_db)) -> SessionFull:
     sess = sessions_repo.get_session(db, session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -101,17 +98,17 @@ def get_session(
 
 
 @router.post("", response_model=SessionFull, status_code=201)
-def create_session(
-    body: SessionCreate, db: SASession = Depends(get_db)
-) -> SessionFull:
+def create_session(body: SessionCreate, db: SASession = Depends(get_db)) -> SessionFull:
     try:
         sess = sessions_repo.create_session(
             db, id=body.id, started_at=body.started_at, mode=body.mode
         )
         db.commit()
-    except IntegrityError:
+    except IntegrityError as err:
         db.rollback()
-        raise HTTPException(status_code=409, detail="session id already exists")
+        raise HTTPException(
+            status_code=409, detail="session id already exists"
+        ) from err
     # Refresh to include the empty finals / action_runs collections.
     fresh = sessions_repo.get_session(db, sess.id)
     assert fresh is not None
@@ -142,9 +139,7 @@ def patch_session(
 
 
 @router.delete("/{session_id}", status_code=204)
-def delete_session(
-    session_id: str, db: SASession = Depends(get_db)
-) -> Response:
+def delete_session(session_id: str, db: SASession = Depends(get_db)) -> Response:
     sess = sessions_repo.get_session(db, session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -165,9 +160,7 @@ def delete_session(
 # --- Finals + action_runs (append-only) ---------------------------------------
 
 
-@router.post(
-    "/{session_id}/finals", response_model=FinalOut, status_code=201
-)
+@router.post("/{session_id}/finals", response_model=FinalOut, status_code=201)
 def append_final(
     session_id: str, body: FinalIn, db: SASession = Depends(get_db)
 ) -> FinalOut:
@@ -186,9 +179,7 @@ def append_final(
     return FinalOut.model_validate(final)
 
 
-@router.post(
-    "/{session_id}/runs", response_model=ActionRunOut, status_code=201
-)
+@router.post("/{session_id}/runs", response_model=ActionRunOut, status_code=201)
 def append_action_run(
     session_id: str, body: ActionRunIn, db: SASession = Depends(get_db)
 ) -> ActionRunOut:
@@ -207,6 +198,30 @@ def append_action_run(
     )
     db.commit()
     return ActionRunOut.model_validate(run)
+
+
+@router.delete("/{session_id}/runs/{run_id}", status_code=204)
+def delete_action_run(
+    session_id: str,
+    run_id: int,
+    db: SASession = Depends(get_db),
+) -> Response:
+    """Remove one action_run row. Returns 204 on success, 404 otherwise.
+
+    Distinguishes session-missing from run-missing in the response detail so
+    the PWA can surface the right toast message. A run belonging to a
+    different session id is treated as "run not found" — the session-id
+    scope is enforced in the repo's WHERE clause.
+    """
+    deleted = sessions_repo.delete_action_run(db, session_id, run_id)
+    if deleted:
+        db.commit()
+        return Response(status_code=204)
+    # Differentiate session-missing from run-missing for clearer client errors.
+    sess = sessions_repo.get_session(db, session_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    raise HTTPException(status_code=404, detail="run not found")
 
 
 # --- Audio upload + stream ----------------------------------------------------
@@ -257,9 +272,7 @@ async def upload_audio(
 
 
 @router.get("/{session_id}/audio")
-def stream_audio(
-    session_id: str, db: SASession = Depends(get_db)
-) -> FileResponse:
+def stream_audio(session_id: str, db: SASession = Depends(get_db)) -> FileResponse:
     sess = sessions_repo.get_session(db, session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session not found")

@@ -10,7 +10,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 CaptureMode = Literal["batch", "live"]
 
 
@@ -103,9 +102,15 @@ class SessionFull(SessionDigest):
 
 
 class SessionListResponse(BaseModel):
-    """GET /v1/sessions envelope."""
+    """GET /v1/sessions envelope.
 
-    sessions: list[SessionDigest]
+    Returns SessionFull rows (with finals + action_runs eagerly loaded by the
+    repo) so the PWA's list view can show text previews and char counts on
+    the very first paint — historically this returned digest-only and the
+    list rows were always empty until the user opened a detail panel.
+    """
+
+    sessions: list[SessionFull]
     next_before_ms: int | None = None
 
 

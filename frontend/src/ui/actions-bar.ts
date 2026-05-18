@@ -237,6 +237,13 @@ export class ActionsBar {
     return action ? resolveLabel(action) : null;
   }
 
+  /** Read-only snapshot of the loaded action registry. Used by HistoryView's
+   *  "+ AI Action" picker so re-runs on past sessions can reuse the same
+   *  template list the chip bar reads. */
+  getTemplates(): ReadonlyArray<ActionTemplate> {
+    return this.actions;
+  }
+
   /** Update the model badge DOM in place. No-op if the badge element hasn't
    *  been built yet (load() hasn't run) — render() will read the latest
    *  modelStatus when it does build the badge. */

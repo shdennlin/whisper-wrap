@@ -166,9 +166,9 @@ async def lifespan(app: FastAPI):
     # engine on app.state. Done BEFORE model loading so any schema errors fail
     # fast (engine init is sub-second; model load can take 30s on cold ANE).
     config.ensure_data_dirs()
-    from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
 
+    from alembic import command as alembic_command
     from app.services.persistence import SessionLocal, build_engine
 
     alembic_cfg = AlembicConfig(str(Path("alembic.ini")))

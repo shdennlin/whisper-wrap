@@ -13,19 +13,22 @@ from app.services.llm import LLMClient, LLMUpstreamError
 def stubbed_app(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "app.main._build_backend",
-        lambda **kw: (MagicMock(name="WhisperBackend"), {
-            "backend": "ctranslate2", "format": "ct2",
-            "compute_type": "default", "local_dir": "/fake",
-        }),
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/fake",
+            },
+        ),
     )
 
     wav_path = tmp_path / "out.wav"
     wav_path.write_bytes(b"WAV")
 
     # Stub file/converter pipeline shared with /transcribe.
-    monkeypatch.setattr(
-        "app.api.ask.file_manager.validate_file_size", lambda *a: True
-    )
+    monkeypatch.setattr("app.api.ask.file_manager.validate_file_size", lambda *a: True)
     monkeypatch.setattr("app.api.ask.file_manager.is_audio_file", lambda *a: True)
     monkeypatch.setattr(
         "app.api.ask.file_manager.detect_mime_type", lambda *a: "audio/wav"
@@ -40,8 +43,15 @@ def stubbed_app(monkeypatch, tmp_path):
     return app
 
 
-def _install_llm(app, *, configured=True, ask_text="answer", stream_chunks=None,
-                 stream_error=None, ask_error=None):
+def _install_llm(
+    app,
+    *,
+    configured=True,
+    ask_text="answer",
+    stream_chunks=None,
+    stream_error=None,
+    ask_error=None,
+):
     """Inject a stubbed LLMClient onto app.state, returning it for assertions."""
 
     async def fake_ask(text):
@@ -98,9 +108,7 @@ def test_blocking_multipart_audio_transcribes_then_asks(stubbed_app, tmp_path):
         _install_llm(stubbed_app, ask_text="hi")
         _install_whisper(stubbed_app, transcript="who are you")
         with audio.open("rb") as f:
-            resp = c.post(
-                "/ask", files={"file": ("clip.mp3", f, "audio/mp3")}
-            )
+            resp = c.post("/ask", files={"file": ("clip.mp3", f, "audio/mp3")})
         assert resp.status_code == 200
         assert resp.json() == {"transcript": "who are you", "answer": "hi"}
 
@@ -217,9 +225,9 @@ def _parse_sse_events(body: str) -> list[dict]:
                 current = {}
             continue
         if line.startswith("event:"):
-            current["event"] = line[len("event:"):].strip()
+            current["event"] = line[len("event:") :].strip()
         elif line.startswith("data:"):
-            data_str = line[len("data:"):].strip()
+            data_str = line[len("data:") :].strip()
             current["data"] = json.loads(data_str)
     if current:
         events.append(current)
@@ -322,9 +330,9 @@ def test_blocking_missing_gemini_key_returns_502(stubbed_app):
         _install_llm(
             stubbed_app,
             configured=False,
-            ask_error=__import__("app.services.llm", fromlist=["LLMConfigError"]).LLMConfigError(
-                "GEMINI_API_KEY is not configured"
-            ),
+            ask_error=__import__(
+                "app.services.llm", fromlist=["LLMConfigError"]
+            ).LLMConfigError("GEMINI_API_KEY is not configured"),
         )
         resp = c.post("/ask", json={"text": "ping"})
         assert resp.status_code == 502
@@ -344,3 +352,150 @@ def test_streaming_missing_gemini_key_emits_single_event_error(stubbed_app):
         types = [e["event"] for e in events]
         assert types == ["error"]
         assert "GEMINI_API_KEY" in events[0]["data"]["error"]
+
+
+# =========================================================================
+# transcription-empty-filter integration
+# =========================================================================
+
+
+def _arm_caplog_post_lifespan(caplog):
+    import logging as _logging
+
+    _logging.getLogger().addHandler(caplog.handler)
+    caplog.set_level(_logging.INFO)
+
+
+def test_blocking_audio_empty_transcript_returns_400_and_skips_llm(
+    stubbed_app, monkeypatch, caplog
+):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        llm = _install_llm(stubbed_app, ask_text="should-not-be-called")
+        _install_whisper(stubbed_app, transcript="。")
+        # Wrap fake_ask to detect any invocation
+        original_ask = llm.ask
+        call_count = {"n": 0}
+
+        async def counted_ask(text):
+            call_count["n"] += 1
+            return await original_ask(text)
+
+        llm.ask = counted_ask
+
+        resp = c.post(
+            "/ask",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+
+    assert resp.status_code == 400
+    assert resp.json() == {"error": "no_speech_detected"}
+    assert call_count["n"] == 0, "LLM SHALL NOT be invoked when STT filtered"
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/ask"
+    assert drops[0].stream is False
+
+
+def test_streaming_audio_empty_transcript_emits_error_only_and_skips_llm(
+    stubbed_app, monkeypatch, caplog
+):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        llm = _install_llm(stubbed_app, stream_chunks=["should", "not", "stream"])
+        _install_whisper(stubbed_app, transcript="   ")
+
+        stream_calls = {"n": 0}
+        orig_stream = llm.ask_stream
+
+        async def counted_stream(text):
+            stream_calls["n"] += 1
+            async for chunk in orig_stream(text):
+                yield chunk
+
+        llm.ask_stream = counted_stream
+
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+
+    events = _parse_sse_events(resp.text)
+    types = [e["event"] for e in events]
+    assert types == ["error"], f"Expected only event:error, got {types}"
+    assert events[0]["data"] == {"error": "no_speech_detected"}
+    assert stream_calls["n"] == 0, "LLM stream SHALL NOT be invoked"
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/ask"
+    assert drops[0].stream is True
+
+
+def test_json_text_input_unaffected_by_filter(stubbed_app, monkeypatch, caplog):
+    """JSON text path SHALL bypass the filter entirely."""
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        llm = _install_llm(stubbed_app, ask_text="hi back")
+        _install_whisper(stubbed_app)
+        call_count = {"n": 0}
+        original_ask = llm.ask
+
+        async def counted_ask(text):
+            call_count["n"] += 1
+            return await original_ask(text)
+
+        llm.ask = counted_ask
+        resp = c.post("/ask", json={"text": "hello"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"transcript": None, "answer": "hi back"}
+    assert call_count["n"] == 1
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_disabled_filter_forwards_empty_audio_transcript_to_llm(
+    stubbed_app, monkeypatch, caplog
+):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", False)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        llm = _install_llm(stubbed_app, ask_text="answer")
+        _install_whisper(stubbed_app, transcript="。")
+        call_count = {"n": 0}
+        original_ask = llm.ask
+
+        async def counted_ask(text):
+            call_count["n"] += 1
+            return await original_ask(text)
+
+        llm.ask = counted_ask
+        resp = c.post(
+            "/ask",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"transcript": "。", "answer": "answer"}
+    assert call_count["n"] == 1, "With filter off, LLM SHALL be invoked"
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)

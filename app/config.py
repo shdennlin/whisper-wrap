@@ -25,6 +25,58 @@ def load_env_file(path: str = ".env") -> None:
     load_dotenv(path)
 
 
+def _parse_bool(raw: str | None, *, default: bool, var_name: str = "") -> bool:
+    """Parse a `"true"`/`"false"` env string with default fallback.
+
+    None or empty string → silent default. Any other non-matching value logs a
+    WARN naming `var_name` and falls back to default. Comparison is
+    case-insensitive.
+    """
+    if raw is None or raw == "":
+        return default
+    lowered = raw.strip().lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    logger.warning(
+        "Invalid value for %s=%r; using default %r",
+        var_name or "(unknown)",
+        raw,
+        default,
+    )
+    return default
+
+
+def _parse_int(raw: str | None, *, default: int, var_name: str = "") -> int:
+    """Parse a non-negative integer env string with default fallback.
+
+    None or empty string → silent default. Non-integer or negative value logs a
+    WARN naming `var_name` and falls back to default.
+    """
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid value for %s=%r; using default %r",
+            var_name or "(unknown)",
+            raw,
+            default,
+        )
+        return default
+    if value < 0:
+        logger.warning(
+            "Invalid value for %s=%r (must be non-negative); using default %r",
+            var_name or "(unknown)",
+            raw,
+            default,
+        )
+        return default
+    return value
+
+
 class Config:
     """Application configuration loaded from environment variables at construction time."""
 
@@ -62,7 +114,9 @@ class Config:
         # File handling
         self.MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
         self.TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "/tmp/whisper-wrap"))
-        self.UPLOAD_TIMEOUT_SECONDS: int = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "30"))
+        self.UPLOAD_TIMEOUT_SECONDS: int = int(
+            os.getenv("UPLOAD_TIMEOUT_SECONDS", "30")
+        )
 
         # Logging
         self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -74,6 +128,20 @@ class Config:
         self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "data"))
         self.DATABASE_URL: str = os.getenv(
             "DATABASE_URL", f"sqlite:///{self.DATA_DIR}/history.db"
+        )
+
+        # Transcription empty-filter (single source of truth for noise rejection
+        # across /listen, /transcribe, /ask, /v1/audio/transcriptions).
+        # Defaults-on; invalid env values log WARN + fall back to defaults.
+        self.FILTER_EMPTY_ENABLED: bool = _parse_bool(
+            os.getenv("FILTER_EMPTY_ENABLED"),
+            default=True,
+            var_name="FILTER_EMPTY_ENABLED",
+        )
+        self.FILTER_MIN_DURATION_MS: int = _parse_int(
+            os.getenv("FILTER_MIN_DURATION_MS"),
+            default=500,
+            var_name="FILTER_MIN_DURATION_MS",
         )
 
     @property

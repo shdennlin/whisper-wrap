@@ -15,6 +15,7 @@ from starlette.datastructures import UploadFile
 from app.config import config
 from app.services.converter import audio_converter
 from app.services.files import file_manager
+from app.services.postprocess import Drop, Keep, filter_empty_transcription
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +147,28 @@ async def transcribe(
         result = await whisper.transcribe(
             temp_wav, language=language, initial_prompt=prompt
         )
+        # Post-process filter: collapse pure-noise results to `{"text": ""}`
+        # so downstream consumers can ignore them uniformly.
+        decision = filter_empty_transcription(
+            text=result.text,
+            duration_ms=None,
+            enabled=config.FILTER_EMPTY_ENABLED,
+            min_duration_ms=config.FILTER_MIN_DURATION_MS,
+        )
+        if isinstance(decision, Drop):
+            logger.info(
+                "transcription_filtered",
+                extra={
+                    "endpoint": "/transcribe",
+                    "reason": decision.reason,
+                    "duration_ms": None,
+                    "raw_text_len": len(result.text),
+                },
+            )
+            return {"text": ""}
+        assert isinstance(decision, Keep)
         return {
-            "text": result.text,
+            "text": decision.text,
             "language": result.language,
             "segments": [
                 {"text": s.text, "start": s.start, "end": s.end}

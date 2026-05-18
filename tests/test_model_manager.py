@@ -34,9 +34,7 @@ def _run(
     env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
     env["PYTHON_BIN"] = sys.executable
     env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
-    env["WHISPER_WRAP_ENV_FILE"] = (
-        str(env_file) if env_file else str(tmp_path / ".env")
-    )
+    env["WHISPER_WRAP_ENV_FILE"] = str(env_file) if env_file else str(tmp_path / ".env")
     env["WHISPER_WRAP_REGISTRY"] = (
         str(registry) if registry else str(PROJECT_ROOT / "registry" / "models.yaml")
     )
@@ -141,7 +139,8 @@ def test_list_marks_installed_variants(tmp_path):
     ggml_line = next(line for line in result.stdout.splitlines() if "ggml" in line)
     assert "yes" in ggml_line
     ct2_line = next(
-        line for line in result.stdout.splitlines()
+        line
+        for line in result.stdout.splitlines()
         if "ct2 (int8_float16)" in line and "breeze" in line
     )
     # ct2 not installed → no "yes" flag
@@ -340,10 +339,7 @@ def test_list_rejects_zero_defaults(tmp_path):
     result = _run(tmp_path, "list", registry=bad)
     assert result.returncode != 0
     # Spec wording: "Registry has no default entry" or "exactly one entry"
-    assert (
-        "no default entry" in result.stderr
-        or "exactly one" in result.stderr
-    )
+    assert "no default entry" in result.stderr or "exactly one" in result.stderr
 
 
 def test_list_rejects_multiple_defaults(tmp_path):
@@ -371,10 +367,7 @@ def test_list_rejects_multiple_defaults(tmp_path):
     )
     result = _run(tmp_path, "list", registry=bad)
     assert result.returncode != 0
-    assert (
-        "multiple default" in result.stderr
-        or "exactly one" in result.stderr
-    )
+    assert "multiple default" in result.stderr or "exactly one" in result.stderr
 
 
 def test_list_rejects_empty_variants_list(tmp_path):

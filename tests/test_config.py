@@ -40,6 +40,8 @@ def clean_env(monkeypatch):
         "VAD_BACKEND",
         "DATA_DIR",
         "DATABASE_URL",
+        "FILTER_EMPTY_ENABLED",
+        "FILTER_MIN_DURATION_MS",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -206,3 +208,101 @@ def test_vad_backend_explicit_silero(clean_env):
 def test_vad_backend_explicit_rms(clean_env):
     clean_env.setenv("VAD_BACKEND", "rms")
     assert Config().VAD_BACKEND == "rms"
+
+
+def test_filter_defaults(clean_env):
+    """Per design Decision 5: defaults-on, 500 ms minimum duration."""
+    c = Config()
+    assert c.FILTER_EMPTY_ENABLED is True
+    assert c.FILTER_MIN_DURATION_MS == 500
+
+
+def test_filter_enabled_override_false(clean_env):
+    clean_env.setenv("FILTER_EMPTY_ENABLED", "false")
+    assert Config().FILTER_EMPTY_ENABLED is False
+
+
+def test_filter_enabled_override_true_explicit(clean_env):
+    clean_env.setenv("FILTER_EMPTY_ENABLED", "true")
+    assert Config().FILTER_EMPTY_ENABLED is True
+
+
+def test_filter_enabled_is_case_insensitive(clean_env):
+    clean_env.setenv("FILTER_EMPTY_ENABLED", "FALSE")
+    assert Config().FILTER_EMPTY_ENABLED is False
+
+
+def test_filter_enabled_empty_string_defaults_silently(clean_env, caplog):
+    """Empty value SHALL fall back to True without a WARN log."""
+    clean_env.setenv("FILTER_EMPTY_ENABLED", "")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        c = Config()
+    assert c.FILTER_EMPTY_ENABLED is True
+    assert not any("FILTER_EMPTY_ENABLED" in r.getMessage() for r in caplog.records)
+
+
+def test_filter_enabled_invalid_warns_and_defaults(clean_env, caplog):
+    clean_env.setenv("FILTER_EMPTY_ENABLED", "maybe")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        c = Config()
+    assert c.FILTER_EMPTY_ENABLED is True
+    warns = [r for r in caplog.records if "FILTER_EMPTY_ENABLED" in r.getMessage()]
+    assert len(warns) == 1
+
+
+def test_filter_min_duration_override(clean_env):
+    clean_env.setenv("FILTER_MIN_DURATION_MS", "250")
+    assert Config().FILTER_MIN_DURATION_MS == 250
+
+
+def test_filter_min_duration_zero_accepted(clean_env):
+    """Zero is non-negative and SHALL be accepted."""
+    clean_env.setenv("FILTER_MIN_DURATION_MS", "0")
+    assert Config().FILTER_MIN_DURATION_MS == 0
+
+
+def test_filter_min_duration_empty_string_defaults_silently(clean_env, caplog):
+    clean_env.setenv("FILTER_MIN_DURATION_MS", "")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        c = Config()
+    assert c.FILTER_MIN_DURATION_MS == 500
+    assert not any("FILTER_MIN_DURATION_MS" in r.getMessage() for r in caplog.records)
+
+
+def test_filter_min_duration_negative_warns_and_defaults(clean_env, caplog):
+    clean_env.setenv("FILTER_MIN_DURATION_MS", "-300")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        c = Config()
+    assert c.FILTER_MIN_DURATION_MS == 500
+    warns = [r for r in caplog.records if "FILTER_MIN_DURATION_MS" in r.getMessage()]
+    assert len(warns) == 1
+
+
+def test_filter_min_duration_non_integer_warns_and_defaults(clean_env, caplog):
+    clean_env.setenv("FILTER_MIN_DURATION_MS", "abc")
+    with caplog.at_level(logging.WARNING, logger="app.config"):
+        c = Config()
+    assert c.FILTER_MIN_DURATION_MS == 500
+    warns = [r for r in caplog.records if "FILTER_MIN_DURATION_MS" in r.getMessage()]
+    assert len(warns) == 1
+
+
+def test_parse_bool_helper_isolated():
+    """The helper SHALL be module-level and unit-testable."""
+    from app.config import _parse_bool
+
+    assert _parse_bool(None, default=True) is True
+    assert _parse_bool(None, default=False) is False
+    assert _parse_bool("", default=True) is True  # empty falls to default silently
+    assert _parse_bool("true", default=False) is True
+    assert _parse_bool("FALSE", default=True) is False
+    assert _parse_bool("True", default=False) is True
+
+
+def test_parse_int_helper_isolated():
+    from app.config import _parse_int
+
+    assert _parse_int(None, default=500) == 500
+    assert _parse_int("", default=500) == 500
+    assert _parse_int("750", default=500) == 750
+    assert _parse_int("0", default=500) == 0

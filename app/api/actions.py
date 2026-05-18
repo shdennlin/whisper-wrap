@@ -52,7 +52,6 @@ async def list_actions(request: Request) -> dict[str, Any]:
             for a in actions
         ],
         "categories": [
-            {"id": c.id, "label": c.label, "labels": dict(c.labels)}
-            for c in categories
+            {"id": c.id, "label": c.label, "labels": dict(c.labels)} for c in categories
         ],
     }

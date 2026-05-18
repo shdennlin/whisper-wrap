@@ -192,13 +192,44 @@ DEVICE=auto
 
 # Gemini (for /ask)
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.1-flash-lite
 # GEMINI_SYSTEM_PROMPT=          # Falls back to a Taiwan-friendly default
 
 # File handling
 MAX_FILE_SIZE_MB=100
 LOG_LEVEL=INFO
+
+# Transcription post-process filter
+# FILTER_EMPTY_ENABLED=true
+# FILTER_MIN_DURATION_MS=500
 ```
+
+### Transcription post-processing filter
+
+Whisper occasionally returns empty strings or pure punctuation (e.g. `。`, `。。。`)
+for noise inputs. The post-processing filter is **enabled by default** and
+suppresses those results across every transcription surface:
+
+- `WS /listen` — no `final` JSON frame is emitted for the dropped utterance.
+- `POST /transcribe` — the response body becomes `{"text": ""}`.
+- `POST /ask` — returns HTTP `400 {"error": "no_speech_detected"}` and **does not
+  invoke Gemini**, saving tokens on noise inputs. The streaming variant emits a
+  single `event: error` frame and closes.
+- `POST /v1/audio/transcriptions` and `POST /v1/audio/translations` — preserve
+  the OpenAI response schema with `text: ""` (and `segments: []` for
+  `verbose_json`); no custom fields are added.
+
+Two environment variables tune the filter:
+
+- `FILTER_EMPTY_ENABLED` (default `true`) — set to `false` to disable, e.g. when
+  diagnosing why a real utterance appears to have been dropped.
+- `FILTER_MIN_DURATION_MS` (default `500`) — speech shorter than this is dropped
+  on `/listen`. Lower to `300` if single CJK characters get filtered.
+
+Every drop is logged at `INFO` as a structured `transcription_filtered` record
+(`extra` fields: `endpoint`, `reason`, `response_format`/`stream`,
+`raw_text_len`) so operators can grep server logs to verify the filter is
+behaving as expected.
 
 ## 🐳 Docker Deployment
 

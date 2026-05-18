@@ -11,19 +11,32 @@ def stubbed_app(monkeypatch, tmp_path):
     """Boot app with mocked model + stubbed file pipeline so tests exercise only dispatch."""
     monkeypatch.setattr(
         "app.main._build_backend",
-        lambda **kw: (MagicMock(name="WhisperBackend"), {
-            "backend": "ctranslate2", "format": "ct2",
-            "compute_type": "default", "local_dir": "/fake",
-        }),
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/fake",
+            },
+        ),
     )
 
     wav_path = tmp_path / "out.wav"
     wav_path.write_bytes(b"WAV")
 
-    monkeypatch.setattr("app.api.transcribe.file_manager.validate_file_size", lambda *a: True)
-    monkeypatch.setattr("app.api.transcribe.file_manager.is_audio_file", lambda *a: True)
-    monkeypatch.setattr("app.api.transcribe.file_manager.detect_mime_type", lambda *a: "audio/wav")
-    monkeypatch.setattr("app.api.transcribe.audio_converter.convert_to_wav", lambda *a: wav_path)
+    monkeypatch.setattr(
+        "app.api.transcribe.file_manager.validate_file_size", lambda *a: True
+    )
+    monkeypatch.setattr(
+        "app.api.transcribe.file_manager.is_audio_file", lambda *a: True
+    )
+    monkeypatch.setattr(
+        "app.api.transcribe.file_manager.detect_mime_type", lambda *a: "audio/wav"
+    )
+    monkeypatch.setattr(
+        "app.api.transcribe.audio_converter.convert_to_wav", lambda *a: wav_path
+    )
     monkeypatch.setattr("app.api.transcribe.file_manager.cleanup_file", lambda *a: None)
 
     from app.main import app
@@ -223,3 +236,117 @@ def test_pipeline_error_returns_500(stubbed_app):
         )
         assert resp.status_code == 500
         assert "kaboom" in resp.json()["detail"]
+
+
+# ---------- transcription-empty-filter integration ----------
+
+
+def _stub_transcribe(stubbed_app, text: str):
+    from app.services._whisper_backend import TranscriptionResult
+
+    async def fake(*a, **kw):
+        return TranscriptionResult(
+            text=text, segments=[], language="en", duration_seconds=0.0
+        )
+
+    stubbed_app.state.whisper.transcribe = fake
+
+
+def _arm_caplog_post_lifespan(caplog):
+    """Re-attach caplog handler after lifespan; alembic.fileConfig clobbers it.
+
+    See `app/main.py` → alembic upgrade → `fileConfig` which replaces root
+    handlers per `alembic.ini`. Without this restore, INFO records emitted by
+    request handlers during the test would bypass caplog entirely.
+    """
+    import logging as _logging
+
+    _logging.getLogger().addHandler(caplog.handler)
+    caplog.set_level(_logging.INFO)
+
+
+def test_filter_drops_whitespace_only_to_empty_body(stubbed_app, monkeypatch, caplog):
+    """Whitespace-only Whisper output SHALL collapse to `{"text": ""}` + log."""
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+    monkeypatch.setattr(app_cfg, "FILTER_MIN_DURATION_MS", 500)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        _stub_transcribe(stubbed_app, "   ")
+        resp = c.post(
+            "/transcribe",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"text": ""}
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/transcribe"
+    assert drops[0].reason == "empty_text"
+
+
+def test_filter_drops_punctuation_only_to_empty_body(stubbed_app, monkeypatch, caplog):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+    monkeypatch.setattr(app_cfg, "FILTER_MIN_DURATION_MS", 500)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        _stub_transcribe(stubbed_app, ". , !")
+        resp = c.post(
+            "/transcribe",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"text": ""}
+    assert any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_filter_keeps_valid_text_unchanged(stubbed_app, monkeypatch, caplog):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        _stub_transcribe(stubbed_app, "hello")
+        resp = c.post(
+            "/transcribe",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "hello"
+    # Full-shape response preserved when not filtered.
+    assert "language" in resp.json()
+    assert "segments" in resp.json()
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_filter_disabled_forwards_empty_text(stubbed_app, monkeypatch, caplog):
+    """With FILTER_EMPTY_ENABLED=false the legacy full-shape body is returned."""
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", False)
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        _stub_transcribe(stubbed_app, "。")
+        resp = c.post(
+            "/transcribe",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+    assert resp.status_code == 200
+    # Legacy shape preserved when filter is off.
+    body = resp.json()
+    assert body["text"] == "。"
+    assert "language" in body
+    assert "segments" in body
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)

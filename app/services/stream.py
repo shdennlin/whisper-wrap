@@ -22,6 +22,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from app.config import config
+from app.services.postprocess import Drop, Keep, filter_empty_transcription
+
 if TYPE_CHECKING:
     from app.services.vad import VadBackend
 
@@ -33,10 +36,12 @@ SAMPLE_RATE = 16_000
 BYTES_PER_SAMPLE = 2
 
 # Streaming knobs (per design decision; tuned for ~250 ms client frame cadence)
-SILENCE_RMS_THRESHOLD = 500.0   # int16 RMS — anything below is silence
-SILENCE_DURATION_MS = 700       # consecutive silence required to end an utterance
-PARTIAL_INTERVAL_MS = 500       # min interval between partials during active speech
-PARTIAL_WINDOW_MS = 5000        # partial inference looks at last N ms of audio only (bounded cost)
+SILENCE_RMS_THRESHOLD = 500.0  # int16 RMS — anything below is silence
+SILENCE_DURATION_MS = 700  # consecutive silence required to end an utterance
+PARTIAL_INTERVAL_MS = 500  # min interval between partials during active speech
+PARTIAL_WINDOW_MS = (
+    5000  # partial inference looks at last N ms of audio only (bounded cost)
+)
 MAX_BUFFER_SECONDS = 30
 MAX_BUFFER_BYTES = MAX_BUFFER_SECONDS * SAMPLE_RATE * BYTES_PER_SAMPLE
 PARTIAL_WINDOW_BYTES = (PARTIAL_WINDOW_MS * SAMPLE_RATE * BYTES_PER_SAMPLE) // 1000
@@ -231,7 +236,8 @@ class StreamSession:
         # Default-on in v2.1; pass consensus_filter=None at construction to disable
         # for the regression benchmark (`tests/test_stream_consensus.py`).
         self.consensus_filter = (
-            consensus_filter if consensus_filter is not None
+            consensus_filter
+            if consensus_filter is not None
             else PartialConsensusFilter()
         )
         # v2.2: per-frame speech detection delegated to a pluggable VAD backend.
@@ -245,6 +251,11 @@ class StreamSession:
         self._utterance_start_ms = 0
         self._last_partial_ms = 0
         self._last_voice_ms = 0
+        # Tracks the START of the first voice frame in the current utterance so the
+        # post-process filter can measure speech duration accurately. Distinct from
+        # `_utterance_start_ms` which is the END of that frame (kept for backward
+        # compat as the `start_ms` field in emitted events).
+        self._speech_onset_ms = 0
         self._in_utterance = False
         self._overflow_warning_pending = False
         # Async backpressure: when a partial inference is in flight, drop the
@@ -277,7 +288,10 @@ class StreamSession:
             self._utterance_buffer = self._utterance_buffer[overflow:]
             if not self._overflow_warning_pending:
                 await self.send_event(
-                    {"type": "warning", "message": "buffer overflow, oldest audio dropped"}
+                    {
+                        "type": "warning",
+                        "message": "buffer overflow, oldest audio dropped",
+                    }
                 )
                 self._overflow_warning_pending = True
 
@@ -293,6 +307,9 @@ class StreamSession:
                 # anchor the utterance buffer at the current frame.
                 self._in_utterance = True
                 self._utterance_start_ms = now_ms
+                # Speech onset is the START of this frame, used by the empty-filter
+                # to compute true speech duration.
+                self._speech_onset_ms = now_ms - frame_duration_ms(pcm)
                 self._last_partial_ms = now_ms
                 self._utterance_buffer = bytearray(pcm)
                 self._overflow_warning_pending = False
@@ -328,7 +345,10 @@ class StreamSession:
 
         if final_due:
             # Wait for any in-flight partial so emit order stays partial→final.
-            if self._partial_in_flight is not None and not self._partial_in_flight.done():
+            if (
+                self._partial_in_flight is not None
+                and not self._partial_in_flight.done()
+            ):
                 try:
                     await self._partial_in_flight
                 except Exception:
@@ -378,7 +398,12 @@ class StreamSession:
         )
 
     async def _emit_final(self, end_ms: int) -> None:
-        """Final event: transcribe the FULL utterance buffer for best accuracy."""
+        """Final event: transcribe the FULL utterance buffer for best accuracy.
+
+        Applies the empty-filter post-process: when the result is judged noise
+        (pure punctuation, whitespace, or sub-minimum speech duration), the
+        final event is suppressed and the drop is logged for diagnostics.
+        """
         if not self._utterance_buffer:
             return
         samples = pcm_to_float32(bytes(self._utterance_buffer))
@@ -387,10 +412,30 @@ class StreamSession:
         except Exception as e:
             logger.exception("Final transcription failed: %s", e)
             return
+
+        speech_duration_ms = max(0, self._last_voice_ms - self._speech_onset_ms)
+        decision = filter_empty_transcription(
+            text=text,
+            duration_ms=speech_duration_ms,
+            enabled=config.FILTER_EMPTY_ENABLED,
+            min_duration_ms=config.FILTER_MIN_DURATION_MS,
+        )
+        if isinstance(decision, Drop):
+            logger.info(
+                "transcription_filtered",
+                extra={
+                    "endpoint": "/listen",
+                    "reason": decision.reason,
+                    "duration_ms": speech_duration_ms,
+                    "raw_text_len": len(text),
+                },
+            )
+            return
+        assert isinstance(decision, Keep)
         await self.send_event(
             {
                 "type": "final",
-                "text": text,
+                "text": decision.text,
                 "start_ms": self._utterance_start_ms,
                 "end_ms": end_ms,
             }

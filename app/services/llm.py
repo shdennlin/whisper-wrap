@@ -7,8 +7,8 @@ configured system prompt verbatim on every call.
 Fallback policy (per spec):
 - `GEMINI_SYSTEM_PROMPT` unset (None) → silently use the baked-in Taiwan persona.
 - `GEMINI_SYSTEM_PROMPT` empty string  → use the persona AND emit a one-line WARNING.
-- `GEMINI_MODEL` unset (None) → silently use `gemini-2.5-flash`.
-- `GEMINI_MODEL` empty string  → use `gemini-2.5-flash` AND emit a one-line WARNING.
+- `GEMINI_MODEL` unset (None) → silently use `gemini-3.1-flash-lite`.
+- `GEMINI_MODEL` empty string  → use `gemini-3.1-flash-lite` AND emit a one-line WARNING.
 """
 
 import asyncio
@@ -20,7 +20,7 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 # Baked-in default system prompt: short Taiwan-friendly assistant persona that the
 # operator can override via `GEMINI_SYSTEM_PROMPT`.

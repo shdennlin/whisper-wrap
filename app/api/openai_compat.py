@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile
 from app.config import config
 from app.services.converter import audio_converter
 from app.services.files import file_manager
+from app.services.postprocess import Drop, Keep, filter_empty_transcription
 from app.services.subtitle_format import format_srt, format_vtt
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,39 @@ def _segments_to_verbose_json(segments) -> list[dict]:
         }
         for idx, seg in enumerate(segments)
     ]
+
+
+def _empty_response_for_format(
+    response_format: str,
+    *,
+    task: str,
+    language: str,
+    duration: float,
+) -> Response:
+    """Build the OpenAI-shaped empty-content response for a filtered transcription.
+
+    Per spec: NO custom fields. Each format returns the same shape an empty
+    transcription would naturally yield, so SDK clients keep parsing.
+    """
+    if response_format == "json":
+        return JSONResponse(content={"text": ""})
+    if response_format == "text":
+        return PlainTextResponse(content="", media_type="text/plain; charset=utf-8")
+    if response_format == "srt":
+        return PlainTextResponse(content="", media_type="text/plain; charset=utf-8")
+    if response_format == "vtt":
+        return Response(content="WEBVTT\n\n", media_type="text/vtt; charset=utf-8")
+    # verbose_json — preserve metadata so clients keying off language/duration
+    # still get accurate values; segments is empty per OpenAI's silent-audio shape.
+    return JSONResponse(
+        content={
+            "task": task,
+            "language": language,
+            "duration": duration,
+            "text": "",
+            "segments": [],
+        }
+    )
 
 
 def _log_model_field(received: str, active: str) -> None:
@@ -230,16 +264,43 @@ async def _transcribe_or_translate(
         if task == "translate":
             language_field = "en"
         else:
-            language_field = (
-                language if language else getattr(result, "language", "en")
+            language_field = language if language else getattr(result, "language", "en")
+
+        # Post-process filter: collapse to per-format empty shapes when the
+        # backend produces noise. The OpenAI response schema is preserved
+        # exactly (no custom fields) so third-party clients keep parsing.
+        decision = filter_empty_transcription(
+            text=result.text,
+            duration_ms=None,
+            enabled=config.FILTER_EMPTY_ENABLED,
+            min_duration_ms=config.FILTER_MIN_DURATION_MS,
+        )
+        if isinstance(decision, Drop):
+            endpoint_path = f"/v1/audio/{'translations' if task == 'translate' else 'transcriptions'}"
+            logger.info(
+                "transcription_filtered",
+                extra={
+                    "endpoint": endpoint_path,
+                    "reason": decision.reason,
+                    "response_format": response_format,
+                    "raw_text_len": len(result.text),
+                },
             )
+            return _empty_response_for_format(
+                response_format,
+                task=task,
+                language=language_field,
+                duration=float(getattr(result, "duration_seconds", 0.0)),
+            )
+        assert isinstance(decision, Keep)
+        result_text = decision.text
 
         if response_format == "json":
-            return JSONResponse(content={"text": result.text})
+            return JSONResponse(content={"text": result_text})
 
         if response_format == "text":
             return PlainTextResponse(
-                content=result.text,
+                content=result_text,
                 media_type="text/plain; charset=utf-8",
             )
 
@@ -267,7 +328,7 @@ async def _transcribe_or_translate(
                 "task": task,
                 "language": language_field,
                 "duration": float(getattr(result, "duration_seconds", 0.0)),
-                "text": result.text,
+                "text": result_text,
                 "segments": _segments_to_verbose_json(result.segments),
             }
         )

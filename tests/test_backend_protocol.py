@@ -32,7 +32,9 @@ def test_protocol_surface():
     )
 
     # Protocol declares the two async methods
-    assert hasattr(WhisperBackend, "transcribe"), "WhisperBackend must declare transcribe"
+    assert hasattr(WhisperBackend, "transcribe"), (
+        "WhisperBackend must declare transcribe"
+    )
     assert hasattr(WhisperBackend, "transcribe_pcm"), (
         "WhisperBackend must declare transcribe_pcm"
     )

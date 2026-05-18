@@ -213,15 +213,23 @@ def test_transcribe_verbose_json(client, tmp_path):
 # ---------- Task 2.3: `model` field aliasing ----------
 
 
-@pytest.mark.parametrize("alias", ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"])
+@pytest.mark.parametrize(
+    "alias", ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+)
 def test_model_alias_silent(client, tmp_path, caplog, alias):
     """The three reserved OpenAI model IDs are accepted with no WARNING log."""
     with caplog.at_level(logging.WARNING, logger="app.api.openai_compat"):
         resp = _post_transcribe(client, tmp_path, model=alias)
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"text": "hello world. how are you."}
-    compat_warnings = [r for r in caplog.records if r.name == "app.api.openai_compat" and r.levelno >= logging.WARNING]
-    assert compat_warnings == [], f"expected no WARNING, got {[r.message for r in compat_warnings]}"
+    compat_warnings = [
+        r
+        for r in caplog.records
+        if r.name == "app.api.openai_compat" and r.levelno >= logging.WARNING
+    ]
+    assert compat_warnings == [], (
+        f"expected no WARNING, got {[r.message for r in compat_warnings]}"
+    )
 
 
 def test_model_unknown_logs_warning(client, tmp_path, caplog):
@@ -230,8 +238,14 @@ def test_model_unknown_logs_warning(client, tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="app.api.openai_compat"):
         resp = _post_transcribe(client, tmp_path, model="some-other-model")
     assert resp.status_code == 200
-    compat_warnings = [r for r in caplog.records if r.name == "app.api.openai_compat" and r.levelno >= logging.WARNING]
-    assert len(compat_warnings) == 1, f"expected exactly 1 WARNING, got {[r.message for r in compat_warnings]}"
+    compat_warnings = [
+        r
+        for r in caplog.records
+        if r.name == "app.api.openai_compat" and r.levelno >= logging.WARNING
+    ]
+    assert len(compat_warnings) == 1, (
+        f"expected exactly 1 WARNING, got {[r.message for r in compat_warnings]}"
+    )
     msg = compat_warnings[0].getMessage()
     assert "some-other-model" in msg
     # Active model name is the registry key when MODEL_NAME is set; the stubbed
@@ -292,7 +306,9 @@ def test_invalid_response_format_400(client, tmp_path):
     assert err["param"] == "response_format"
     msg = err["message"]
     for accepted in ("json", "text", "srt", "verbose_json", "vtt"):
-        assert accepted in msg, f"expected accepted format {accepted!r} mentioned in error message, got {msg!r}"
+        assert accepted in msg, (
+            f"expected accepted format {accepted!r} mentioned in error message, got {msg!r}"
+        )
 
 
 # ---------- Task 3.1: /v1/audio/translations ----------
@@ -403,4 +419,179 @@ def test_backend_failure_500_openai_shape(stubbed_app, tmp_path):
         msg = err["message"]
         assert "/Users/" not in msg
         assert "Traceback" not in msg
-        assert "File \"" not in msg
+        assert 'File "' not in msg
+
+
+# =========================================================================
+# transcription-empty-filter integration
+# =========================================================================
+
+
+def _arm_caplog_post_lifespan(caplog):
+    import logging as _logging
+
+    _logging.getLogger().addHandler(caplog.handler)
+    caplog.set_level(_logging.INFO)
+
+
+@pytest.fixture
+def empty_transcribe_app(stubbed_app):
+    """Stub backend that returns whitespace-only text + empty segments."""
+
+    async def fake(*a, **kw):
+        return TranscriptionResult(
+            text="   ",
+            segments=[],
+            language="en",
+            duration_seconds=0.4,
+        )
+
+    with TestClient(stubbed_app) as c:
+        stubbed_app.state.whisper.transcribe = fake
+        yield c
+
+
+def _filter_on(monkeypatch):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", True)
+
+
+def _filter_off(monkeypatch):
+    from app.config import config as app_cfg
+
+    monkeypatch.setattr(app_cfg, "FILTER_EMPTY_ENABLED", False)
+
+
+def test_filtered_json_format_returns_empty_text(
+    empty_transcribe_app, tmp_path, monkeypatch, caplog
+):
+    _filter_on(monkeypatch)
+    _arm_caplog_post_lifespan(caplog)
+    resp = _post_transcribe(empty_transcribe_app, tmp_path, model="whisper-1")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json() == {"text": ""}
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/v1/audio/transcriptions"
+    assert drops[0].response_format == "json"
+
+
+def test_filtered_text_format_returns_empty_body(
+    empty_transcribe_app, tmp_path, monkeypatch, caplog
+):
+    _filter_on(monkeypatch)
+    _arm_caplog_post_lifespan(caplog)
+    resp = _post_transcribe(
+        empty_transcribe_app, tmp_path, model="whisper-1", response_format="text"
+    )
+    assert resp.status_code == 200
+    assert resp.text == ""
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert "charset=utf-8" in resp.headers["content-type"].lower()
+    assert any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_filtered_verbose_json_preserves_schema_with_empty_segments(
+    empty_transcribe_app, tmp_path, monkeypatch, caplog
+):
+    _filter_on(monkeypatch)
+    _arm_caplog_post_lifespan(caplog)
+    resp = _post_transcribe(
+        empty_transcribe_app,
+        tmp_path,
+        model="whisper-1",
+        response_format="verbose_json",
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Exact key set — OpenAI compat must not gain custom fields.
+    assert set(body.keys()) == {"task", "language", "duration", "text", "segments"}
+    assert body["task"] == "transcribe"
+    assert body["language"] == "en"
+    assert body["duration"] == pytest.approx(0.4)
+    assert body["text"] == ""
+    assert body["segments"] == []
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].response_format == "verbose_json"
+
+
+def test_filtered_srt_format_returns_empty_body(
+    empty_transcribe_app, tmp_path, monkeypatch, caplog
+):
+    _filter_on(monkeypatch)
+    _arm_caplog_post_lifespan(caplog)
+    resp = _post_transcribe(
+        empty_transcribe_app, tmp_path, model="whisper-1", response_format="srt"
+    )
+    assert resp.status_code == 200
+    assert resp.text == ""
+    # Match the codebase's existing srt content-type (text/plain) for consistency.
+    assert resp.headers["content-type"].startswith("text/plain")
+    assert any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_filtered_vtt_format_returns_webvtt_header(
+    empty_transcribe_app, tmp_path, monkeypatch, caplog
+):
+    _filter_on(monkeypatch)
+    _arm_caplog_post_lifespan(caplog)
+    resp = _post_transcribe(
+        empty_transcribe_app, tmp_path, model="whisper-1", response_format="vtt"
+    )
+    assert resp.status_code == 200
+    assert resp.text == "WEBVTT\n\n"
+    assert resp.headers["content-type"].startswith("text/vtt")
+    assert any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_filtered_translations_endpoint_uses_translate_task(
+    stubbed_app, tmp_path, monkeypatch, caplog
+):
+    _filter_on(monkeypatch)
+
+    async def fake(*a, **kw):
+        return TranscriptionResult(
+            text="", segments=[], language="fr", duration_seconds=1.2
+        )
+
+    with TestClient(stubbed_app) as c:
+        _arm_caplog_post_lifespan(caplog)
+        stubbed_app.state.whisper.transcribe = fake
+        audio = tmp_path / "in.wav"
+        audio.write_bytes(b"fake")
+        with audio.open("rb") as f:
+            resp = c.post(
+                "/v1/audio/translations",
+                files={"file": ("c.wav", f, "audio/wav")},
+                data={"model": "whisper-1", "response_format": "verbose_json"},
+            )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "task": "translate",
+        "language": "en",  # translations always report en
+        "duration": pytest.approx(1.2),
+        "text": "",
+        "segments": [],
+    }
+
+    drops = [r for r in caplog.records if r.getMessage() == "transcription_filtered"]
+    assert len(drops) == 1
+    assert drops[0].endpoint == "/v1/audio/translations"
+
+
+def test_filter_disabled_forwards_whitespace_unchanged(
+    empty_transcribe_app, tmp_path, monkeypatch, caplog
+):
+    _filter_off(monkeypatch)
+    _arm_caplog_post_lifespan(caplog)
+    resp = _post_transcribe(empty_transcribe_app, tmp_path, model="whisper-1")
+    assert resp.status_code == 200
+    assert resp.json() == {"text": "   "}
+    assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)

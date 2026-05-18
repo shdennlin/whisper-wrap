@@ -113,15 +113,11 @@ def _validate_entry(name: str, entry: dict[str, Any]) -> None:
         )
     for idx, variant in enumerate(variants):
         if not isinstance(variant, dict):
-            raise RegistryError(
-                f"Entry '{name}' variant #{idx} must be a mapping"
-            )
+            raise RegistryError(f"Entry '{name}' variant #{idx} must be a mapping")
         _validate_variant(name, idx, variant)
 
 
-def _validate_variant(
-    entry_name: str, idx: int, variant: dict[str, Any]
-) -> None:
+def _validate_variant(entry_name: str, idx: int, variant: dict[str, Any]) -> None:
     missing = [f for f in REQUIRED_VARIANT_FIELDS if f not in variant]
     if missing:
         raise RegistryError(
@@ -194,7 +190,7 @@ def resolve_variant(
     if not matching:
         raise RegistryError(
             f"No variant of the active model targets platform={platform!r}. "
-            f"Set BACKEND_FORMAT=<{ '|'.join(ACCEPTED_FORMATS) }> to choose explicitly."
+            f"Set BACKEND_FORMAT=<{'|'.join(ACCEPTED_FORMATS)}> to choose explicitly."
         )
     return matching[0]
 

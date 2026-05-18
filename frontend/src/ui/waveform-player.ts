@@ -2,9 +2,10 @@
  * WaveformPlayer — canvas-based replay component for the history card.
  *
  * Renders a peaks waveform, a play / pause button, and a `m:ss / m:ss`
- * time readout. Click-to-seek is by pixel position on the canvas. The
- * <audio> element is the time source; we tick at ~30 Hz via
- * requestAnimationFrame to move the cursor (timeupdate fires at
+ * time readout. Click + drag-scrub on the canvas seeks by pixel position
+ * (pointer events: a single tap seeks once, pointerdown + drag scrubs
+ * continuously). The <audio> element is the time source; we tick at ~30 Hz
+ * via requestAnimationFrame to move the cursor (timeupdate fires at
  * browser-dependent rates — design.md "Player state machine").
  *
  * The component decouples decoding via the constructor's `decode` option
@@ -57,9 +58,12 @@ export class WaveformPlayer {
   private peaks: Array<[number, number]> | null = null;
   private _state: PlayerState = "idle";
   private rafId: number | null = null;
+  private isScrubbing = false;
 
   // Bound handlers so destroy() can remove them.
-  private readonly onCanvasClick: (ev: MouseEvent) => void;
+  private readonly onCanvasPointerDown: (ev: PointerEvent) => void;
+  private readonly onCanvasPointerMove: (ev: PointerEvent) => void;
+  private readonly onCanvasPointerUp: (ev: PointerEvent) => void;
   private readonly onPlayClick: () => void;
 
   constructor(opts: PlayerOpts) {
@@ -93,12 +97,20 @@ export class WaveformPlayer {
     this.audioEl.preload = "none";
 
     // Bound listeners — saved so destroy() can detach them cleanly.
-    this.onCanvasClick = (ev: MouseEvent): void => this.handleCanvasClick(ev);
+    this.onCanvasPointerDown = (ev: PointerEvent): void =>
+      this.handleCanvasPointerDown(ev);
+    this.onCanvasPointerMove = (ev: PointerEvent): void =>
+      this.handleCanvasPointerMove(ev);
+    this.onCanvasPointerUp = (ev: PointerEvent): void =>
+      this.handleCanvasPointerUp(ev);
     this.onPlayClick = (): void => {
       void this.handlePlayClick();
     };
 
-    this.canvas.addEventListener("click", this.onCanvasClick);
+    this.canvas.addEventListener("pointerdown", this.onCanvasPointerDown);
+    this.canvas.addEventListener("pointermove", this.onCanvasPointerMove);
+    this.canvas.addEventListener("pointerup", this.onCanvasPointerUp);
+    this.canvas.addEventListener("pointercancel", this.onCanvasPointerUp);
     this.playBtn.addEventListener("click", this.onPlayClick);
 
     this.root.append(
@@ -161,7 +173,10 @@ export class WaveformPlayer {
   }
 
   destroy(): void {
-    this.canvas.removeEventListener("click", this.onCanvasClick);
+    this.canvas.removeEventListener("pointerdown", this.onCanvasPointerDown);
+    this.canvas.removeEventListener("pointermove", this.onCanvasPointerMove);
+    this.canvas.removeEventListener("pointerup", this.onCanvasPointerUp);
+    this.canvas.removeEventListener("pointercancel", this.onCanvasPointerUp);
     this.playBtn.removeEventListener("click", this.onPlayClick);
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -309,22 +324,53 @@ export class WaveformPlayer {
     }
   }
 
-  private handleCanvasClick(ev: MouseEvent): void {
+  private canSeek(): boolean {
+    if (this.input.kind !== "audio") return false;
+    return (
+      this._state === "ready" ||
+      this._state === "playing" ||
+      this._state === "paused"
+    );
+  }
+
+  private seekToOffsetX(offsetX: number): void {
     if (this.input.kind !== "audio") return;
-    if (
-      this._state !== "ready" &&
-      this._state !== "playing" &&
-      this._state !== "paused"
-    ) {
-      return;
-    }
     const w = this.canvas.width;
     if (w <= 0) return;
-    const x = Math.max(0, Math.min(w, ev.offsetX));
+    const x = Math.max(0, Math.min(w, offsetX));
     const durSec = this.input.duration_ms / 1000;
     this.audioEl.currentTime = (x / w) * durSec;
     this.drawCursor();
     this.updateTimeText();
+  }
+
+  private handleCanvasPointerDown(ev: PointerEvent): void {
+    if (!this.canSeek()) return;
+    // Capture so a fast drag that leaves the canvas still routes pointermove
+    // back here. happy-dom may not implement this — guard so tests don't blow up.
+    try {
+      this.canvas.setPointerCapture?.(ev.pointerId);
+    } catch {
+      // ignored
+    }
+    this.isScrubbing = true;
+    this.seekToOffsetX(ev.offsetX);
+  }
+
+  private handleCanvasPointerMove(ev: PointerEvent): void {
+    if (!this.isScrubbing) return;
+    if (!this.canSeek()) return;
+    this.seekToOffsetX(ev.offsetX);
+  }
+
+  private handleCanvasPointerUp(ev: PointerEvent): void {
+    if (!this.isScrubbing) return;
+    this.isScrubbing = false;
+    try {
+      this.canvas.releasePointerCapture?.(ev.pointerId);
+    } catch {
+      // ignored
+    }
   }
 
   private startTicker(): void {

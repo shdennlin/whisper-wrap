@@ -82,8 +82,7 @@ def _normalize_locale_mapping(raw: object, error_owner: str) -> dict[str, str]:
     """
     if not isinstance(raw, Mapping):
         raise ActionRegistryError(
-            f"{error_owner} must be a string or mapping "
-            f"(got {type(raw).__name__})"
+            f"{error_owner} must be a string or mapping (got {type(raw).__name__})"
         )
     if not raw:
         raise ActionRegistryError(
@@ -112,9 +111,7 @@ def _normalize_label(raw: object, action_id: str) -> dict[str, str]:
     """Normalize a YAML action `label` value into a non-empty `{locale: text}` mapping."""
     if isinstance(raw, str):
         if not raw:
-            raise ActionRegistryError(
-                f"action {action_id!r} has an empty label string"
-            )
+            raise ActionRegistryError(f"action {action_id!r} has an empty label string")
         return {DEFAULT_LOCALE: raw}
     return _normalize_locale_mapping(raw, f"action {action_id!r} label")
 
@@ -159,8 +156,7 @@ def _normalize_category(
             )
         if "labels" not in raw:
             raise ActionRegistryError(
-                f"action {action_id!r} category mapping is missing a "
-                f"`labels` field"
+                f"action {action_id!r} category mapping is missing a `labels` field"
             )
         cat_labels = _normalize_locale_mapping(
             raw["labels"],
@@ -177,9 +173,7 @@ def _normalize_category_definition_label(raw: object, cat_id: str) -> dict[str, 
     """Normalize a top-level category `label` (same rules as action label)."""
     if isinstance(raw, str):
         if not raw:
-            raise ActionRegistryError(
-                f"category {cat_id!r} has an empty label string"
-            )
+            raise ActionRegistryError(f"category {cat_id!r} has an empty label string")
         return {DEFAULT_LOCALE: raw}
     return _normalize_locale_mapping(raw, f"category {cat_id!r} label")
 
@@ -226,8 +220,7 @@ def load_categories(path: Path) -> list[CategoryDefinition]:
     for idx, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise ActionRegistryError(
-                f"{path}: category #{idx} is not a mapping "
-                f"(got {type(entry).__name__})"
+                f"{path}: category #{idx} is not a mapping (got {type(entry).__name__})"
             )
         cat_id = entry.get("id")
         if not isinstance(cat_id, str) or not cat_id:
@@ -235,9 +228,7 @@ def load_categories(path: Path) -> list[CategoryDefinition]:
                 f"{path}: category #{idx} is missing a non-empty string `id`"
             )
         if cat_id in seen_ids:
-            raise ActionRegistryError(
-                f"{path}: duplicate category id {cat_id!r}"
-            )
+            raise ActionRegistryError(f"{path}: duplicate category id {cat_id!r}")
         seen_ids.add(cat_id)
 
         if "label" not in entry:
@@ -295,7 +286,9 @@ def load_actions(path: Path) -> list[ActionTemplate]:
                 f"{path}: entry #{idx} is not a mapping (got {type(entry).__name__})"
             )
 
-        missing = [f for f in _REQUIRED_FIELDS if f not in entry or entry[f] in (None, "")]
+        missing = [
+            f for f in _REQUIRED_FIELDS if f not in entry or entry[f] in (None, "")
+        ]
         if missing:
             entry_id = entry.get("id", f"#{idx}")
             raise ActionRegistryError(
@@ -304,9 +297,7 @@ def load_actions(path: Path) -> list[ActionTemplate]:
 
         action_id = str(entry["id"])
         if action_id in seen_ids:
-            raise ActionRegistryError(
-                f"{path}: duplicate action id {action_id!r}"
-            )
+            raise ActionRegistryError(f"{path}: duplicate action id {action_id!r}")
         seen_ids.add(action_id)
 
         labels = _normalize_label(entry["label"], action_id)
@@ -335,9 +326,7 @@ def load_actions(path: Path) -> list[ActionTemplate]:
         description: str | None = None
         description_labels: Mapping[str, str] | None = None
         if "description" in entry and entry["description"] is not None:
-            description_labels = _normalize_description(
-                entry["description"], action_id
-            )
+            description_labels = _normalize_description(entry["description"], action_id)
             description = _legacy_label(description_labels)
 
         result.append(

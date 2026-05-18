@@ -10,10 +10,15 @@ from fastapi.testclient import TestClient
 def stubbed_app(monkeypatch):
     monkeypatch.setattr(
         "app.main._build_backend",
-        lambda **kw: (MagicMock(name="WhisperBackend"), {
-            "backend": "ctranslate2", "format": "ct2",
-            "compute_type": "default", "local_dir": "/fake",
-        }),
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/fake",
+            },
+        ),
     )
     from app.main import app
 
@@ -51,10 +56,15 @@ def test_status_model_name_is_path_when_model_dir_override(monkeypatch, stubbed_
     """When MODEL_DIR is set, model.name SHALL be the resolved path (not MODEL_NAME)."""
     monkeypatch.setattr(
         "app.main._build_backend",
-        lambda **kw: (MagicMock(name="WhisperBackend"), {
-            "backend": "ctranslate2", "format": "ct2",
-            "compute_type": "default", "local_dir": "/opt/breeze-ct2",
-        }),
+        lambda **kw: (
+            MagicMock(name="WhisperBackend"),
+            {
+                "backend": "ctranslate2",
+                "format": "ct2",
+                "compute_type": "default",
+                "local_dir": "/opt/breeze-ct2",
+            },
+        ),
     )
     monkeypatch.setattr("app.config.config.MODEL_DIR", "/opt/breeze-ct2")
     with TestClient(stubbed_app) as c:
@@ -216,9 +226,11 @@ def test_status_includes_vad_block_silero(monkeypatch, stubbed_app):
             },
         ),
     )
+
     # Force the lifespan to pick silero
     class FakeSilero:
         pass
+
     FakeSilero.__name__ = "SileroVad"
     monkeypatch.setattr(
         "app.services.vad.make_vad_backend",
@@ -243,8 +255,10 @@ def test_status_includes_vad_block_rms(monkeypatch, stubbed_app):
             },
         ),
     )
+
     class FakeRms:
         pass
+
     FakeRms.__name__ = "RmsVad"
     monkeypatch.setattr(
         "app.services.vad.make_vad_backend",

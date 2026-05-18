@@ -146,7 +146,7 @@ model is loaded).
   },
   "gemini": {
     "configured": true,
-    "model": "gemini-2.5-flash"
+    "model": "gemini-3.1-flash-lite"
   }
 }
 ```
@@ -209,7 +209,7 @@ DEVICE=auto
 
 # Gemini (for /ask)
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.1-flash-lite
 
 # File handling
 MAX_FILE_SIZE_MB=100

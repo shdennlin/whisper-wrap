@@ -80,9 +80,7 @@ def test_create_then_get(client):
 
 def test_create_duplicate_returns_409(client):
     _create(client, "dup")
-    r = client.post(
-        "/v1/sessions", json={"id": "dup", "started_at": 0, "mode": "live"}
-    )
+    r = client.post("/v1/sessions", json={"id": "dup", "started_at": 0, "mode": "live"})
     assert r.status_code == 409
 
 
@@ -106,9 +104,7 @@ def test_list_ordered_desc_with_cursor(client):
 
 def test_patch_partial(client):
     _create(client, "p")
-    r = client.patch(
-        "/v1/sessions/p", json={"ended_at": 500, "duration_ms": 500}
-    )
+    r = client.patch("/v1/sessions/p", json={"ended_at": 500, "duration_ms": 500})
     assert r.status_code == 200
     body = r.json()
     assert body["ended_at"] == 500
@@ -197,7 +193,7 @@ def test_runs_on_missing_session_returns_404(client):
 
 def test_audio_upload_get_byte_equal(client):
     _create(client, "a-eq")
-    payload = b"\x1A\x45\xDF\xA3" + b"random-bytes" * 32  # ~256 bytes
+    payload = b"\x1a\x45\xdf\xa3" + b"random-bytes" * 32  # ~256 bytes
     r = client.post(
         "/v1/sessions/a-eq/audio",
         files={"file": ("clip.webm", payload, "audio/webm")},
@@ -295,3 +291,78 @@ def test_audio_bulk_clear_removes_files_and_nulls_columns(client):
         assert body["audio_path"] is None
         assert body["audio_mime_type"] is None
         assert body["audio_size_bytes"] is None
+
+
+# ===========================================================================
+# DELETE /v1/sessions/{session_id}/runs/{run_id}
+# ===========================================================================
+
+
+def _append_run(client, sid, action_id="summarize", prompt="p", answer="a", ran_at=1):
+    r = client.post(
+        f"/v1/sessions/{sid}/runs",
+        json={
+            "action_id": action_id,
+            "prompt": prompt,
+            "answer": answer,
+            "ran_at": ran_at,
+        },
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_delete_run_happy_path_returns_204_and_removes_row(client):
+    """Deleting one run leaves sibling runs intact in /v1/sessions/<id>."""
+    _create(client, "del-run-1")
+    r1 = _append_run(client, "del-run-1", ran_at=1)
+    r2 = _append_run(client, "del-run-1", ran_at=2)
+    r3 = _append_run(client, "del-run-1", ran_at=3)
+
+    resp = client.delete(f"/v1/sessions/del-run-1/runs/{r2['id']}")
+    assert resp.status_code == 204
+    assert resp.content == b""
+
+    body = client.get("/v1/sessions/del-run-1").json()
+    remaining_ids = [r["id"] for r in body["action_runs"]]
+    assert remaining_ids == [r1["id"], r3["id"]]
+
+
+def test_delete_run_unknown_run_id_returns_404_run_not_found(client):
+    _create(client, "del-run-2")
+    resp = client.delete("/v1/sessions/del-run-2/runs/9999")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "run not found"}
+
+
+def test_delete_run_unknown_session_id_returns_404_session_not_found(client):
+    resp = client.delete("/v1/sessions/no-such-session/runs/1")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "session not found"}
+
+
+def test_delete_run_from_wrong_session_returns_404_run_not_found(client):
+    """A run id whose row exists under session A SHALL NOT be deleted under session B."""
+    _create(client, "owner")
+    _create(client, "stranger")
+    owned_run = _append_run(client, "owner", ran_at=1)
+
+    resp = client.delete(f"/v1/sessions/stranger/runs/{owned_run['id']}")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "run not found"}
+
+    # The row SHALL still exist under the original owner.
+    body = client.get("/v1/sessions/owner").json()
+    assert [r["id"] for r in body["action_runs"]] == [owned_run["id"]]
+
+
+def test_delete_run_idempotency_second_delete_returns_404(client):
+    _create(client, "del-run-3")
+    run = _append_run(client, "del-run-3", ran_at=1)
+
+    first = client.delete(f"/v1/sessions/del-run-3/runs/{run['id']}")
+    assert first.status_code == 204
+
+    second = client.delete(f"/v1/sessions/del-run-3/runs/{run['id']}")
+    assert second.status_code == 404
+    assert second.json() == {"detail": "run not found"}

@@ -156,7 +156,7 @@ MODEL_NAME=breeze-asr-25     # registry key; variants resolved by platform
 COMPUTE_TYPE=default         # ct2 only; on Apple Silicon CPU MUST be "default"
 DEVICE=auto                  # ct2 only
 GEMINI_API_KEY=              # required for /ask
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 
 v1-era env vars (`WHISPER_SERVER_*`, `WHISPER_AUTO_RESTART`, `WHISPER_BINARY_PATH`, `WHISPER_MAX_RETRIES`, `MODEL_PATH`) are silently ignored — v2 was never released externally so no migration shim was kept.

@@ -244,7 +244,10 @@ def test_built_in_entries(tmp_path):
     ggml = next(v for v in breeze_variants if v["format"] == "ggml")
     assert ggml["quant"] == "q6_k"
     assert "darwin" in ggml["default_on"]
-    assert "linux" in next(v for v in breeze_variants if v["format"] == "ct2")["default_on"]
+    assert (
+        "linux"
+        in next(v for v in breeze_variants if v["format"] == "ct2")["default_on"]
+    )
 
     # large-v3-turbo has only ct2
     turbo = entries["large-v3-turbo"]["variants"]
@@ -391,9 +394,7 @@ def test_variant_resolution_no_match_fails(tmp_path):
     )
     entries = load_registry(p)
     with pytest.raises(RegistryError, match=r"BACKEND_FORMAT"):
-        resolve_variant(
-            entries["mac-only"], platform="linux", backend_format=None
-        )
+        resolve_variant(entries["mac-only"], platform="linux", backend_format=None)
 
 
 def test_variant_resolution_ggml_on_linux_fails(tmp_path):
@@ -437,9 +438,7 @@ def test_variant_resolution_backend_format_no_matching_variant(tmp_path):
     )
     entries = load_registry(p)
     with pytest.raises(RegistryError, match=r"ggml"):
-        resolve_variant(
-            entries["ct2-only"], platform="darwin", backend_format="ggml"
-        )
+        resolve_variant(entries["ct2-only"], platform="darwin", backend_format="ggml")
 
 
 # ---------- default_model_name + resolve_model_dir ----------
@@ -469,14 +468,14 @@ def test_resolve_model_dir_picks_variant_local_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.registry.DEFAULT_REGISTRY_PATH", p)
 
     # darwin → ggml variant → breeze-asr-25-ggml
-    assert resolve_model_dir(
-        "breeze-asr-25", None, platform="darwin"
-    ) == str(DEFAULT_MODELS_ROOT / "breeze-asr-25-ggml")
+    assert resolve_model_dir("breeze-asr-25", None, platform="darwin") == str(
+        DEFAULT_MODELS_ROOT / "breeze-asr-25-ggml"
+    )
 
     # linux → ct2 variant → breeze-asr-25-ct2
-    assert resolve_model_dir(
-        "breeze-asr-25", None, platform="linux"
-    ) == str(DEFAULT_MODELS_ROOT / "breeze-asr-25-ct2")
+    assert resolve_model_dir("breeze-asr-25", None, platform="linux") == str(
+        DEFAULT_MODELS_ROOT / "breeze-asr-25-ct2"
+    )
 
 
 def test_resolve_model_dir_backend_format_override(tmp_path, monkeypatch):

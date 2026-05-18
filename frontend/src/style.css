@@ -57,22 +57,95 @@ html, body { overflow-x: hidden; }
 body { min-height: 100vh; }
 
 #app {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  grid-template-rows: auto 1fr;
-  grid-template-areas: "header header" "main aside";
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
 }
 
+/* Recording shell — main + aside laid out as a 2-column grid on desktop.
+ * Replaces the former #app grid (which assigned areas to main/aside as
+ * direct children) now that those siblings live inside a wrapper so the
+ * route handler can toggle the whole shell with one flag. */
+.recording-shell {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    "main aside"
+    "history history";
+  flex: 1;
+  min-height: 0;
+}
+.recording-shell > main { grid-area: main; min-width: 0; }
+.recording-shell > aside { grid-area: aside; }
+.recording-shell > .history-view-host { grid-area: history; min-height: 0; }
+
 @media (max-width: 800px) {
-  #app {
+  .recording-shell {
     grid-template-columns: 1fr;
-    grid-template-areas: "header" "main" "aside";
+    grid-template-areas:
+      "main"
+      "aside"
+      "history";
   }
 }
 
+/* Mobile/tablet at #/history: hide main+aside, keep history-view-host
+ * visible. We toggle via class on the shell (NOT the shell's `hidden`
+ * attribute) because the history-view-host is now embedded inside the
+ * shell — hiding the whole shell would hide the history too. */
+.recording-shell.is-history-route > main,
+.recording-shell.is-history-route > aside {
+  display: none;
+}
+.recording-shell.is-history-route {
+  grid-template-rows: 1fr;
+  grid-template-areas: "history";
+}
+
+/* Resizer is hidden by default (only desktop one-page uses it). */
+.recording-shell > .history-resizer { display: none; }
+
+/* Desktop one-page: ≥1200px viewport shows recording (left) + HistoryView
+ * (right) simultaneously. Slim sidebar (`aside`) is hidden — HistoryView
+ * takes that role with full session list, search and inline detail. Column
+ * width is driven by the --history-width CSS variable so the resize handle
+ * can persist user preference without touching markup. */
+@media (min-width: 1200px) {
+  .recording-shell,
+  .recording-shell.is-history-route {
+    grid-template-columns: 1fr 6px var(--history-width, 520px);
+    grid-template-rows: 1fr;
+    grid-template-areas: "main resizer history";
+  }
+  .recording-shell > aside,
+  .recording-shell.is-history-route > aside { display: none; }
+  /* Desktop ignores the mobile-only `is-history-route` main-hider. */
+  .recording-shell.is-history-route > main { display: block; }
+  .recording-shell > .history-resizer {
+    display: block;
+    grid-area: resizer;
+    cursor: col-resize;
+    background: var(--border);
+    transition: background 0.15s;
+    user-select: none;
+    touch-action: none;
+  }
+  .recording-shell > .history-resizer:hover,
+  body.is-resizing-history .recording-shell > .history-resizer {
+    background: var(--accent, #7aa2f7);
+  }
+  /* While dragging, suppress text selection across the whole page so the
+   * cursor doesn't accidentally select adjacent transcript content. */
+  body.is-resizing-history { user-select: none; cursor: col-resize; }
+  /* The in-app Back button is meaningless when both panes are always-on. */
+  .history-back-btn { display: none; }
+}
+
+.recording-shell[hidden],
+.history-view-host[hidden] { display: none; }
+
 .app-header {
-  grid-area: header;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; gap: 1rem;
@@ -738,3 +811,144 @@ body { min-height: 100vh; }
 .history-body { white-space: pre-wrap; font-size: 0.85rem; margin: 0.25rem 0; }
 
 .toast { position: fixed; bottom: 1rem; right: 1rem; background: var(--fg); color: var(--bg); padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.85rem; }
+
+/* ===== History master-detail view (history-ux-overhaul) =====
+ *
+ * Full-width pseudo-route mounted at `#/history` / `#/history/<id>`. Replaces
+ * the cramped sidebar reading experience with a left rail (session list +
+ * search) and a right detail panel (transcript + AI runs + waveform).
+ */
+.history-view-host { padding: 1rem; }
+.history-view { display: flex; gap: 1rem; height: calc(100vh - 8rem); min-height: 0; }
+/* When embedded in the recording shell (desktop one-page), let the view
+ * size to its column rather than the viewport — otherwise the fixed 100vh
+ * pushes the rail+detail below the visible area on shorter screens. */
+@media (min-width: 1200px) {
+  .recording-shell > .history-view-host { padding: 0.5rem; overflow: hidden; }
+  .recording-shell > .history-view-host > .history-view {
+    height: 100%; gap: 0.5rem;
+  }
+  .recording-shell > .history-view-host .history-rail { flex: 0 0 220px; }
+}
+.history-rail {
+  flex: 0 0 280px; display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev, var(--bg));
+}
+.history-search {
+  padding: 0.5rem; font-size: 0.85rem; border: none; border-bottom: 1px solid var(--border);
+  background: transparent; color: inherit; outline: none;
+}
+.history-list { list-style: none; margin: 0; padding: 0.25rem; overflow-y: auto; min-height: 0; flex: 1; }
+.history-row { padding: 0.5rem; cursor: pointer; border-radius: 4px; }
+.history-row:hover { background: var(--border-soft, rgba(127, 127, 127, 0.1)); }
+.history-row.is-selected { background: var(--border-soft, rgba(127, 127, 127, 0.18)); font-weight: 600; }
+.history-row-date { font-size: 0.85rem; }
+.history-row-meta { font-size: 0.75rem; opacity: 0.7; }
+.history-rail-empty { padding: 1rem; font-size: 0.85rem; opacity: 0.7; }
+
+.history-detail {
+  flex: 1; min-width: 0; min-height: 0; overflow-y: auto;
+  padding: 1rem; border: 1px solid var(--border); border-radius: 6px;
+}
+.history-detail-empty { padding: 2rem; text-align: center; opacity: 0.7; }
+.history-detail-header { margin-bottom: 0.75rem; }
+.history-detail-meta { font-size: 0.85rem; opacity: 0.7; margin: 0; }
+.history-transcript {
+  white-space: pre-wrap; font-size: 0.9rem; line-height: 1.5; margin: 0 0 1rem;
+  max-height: 40vh; overflow-y: auto;
+}
+
+.history-runs { margin-top: 1rem; }
+.history-runs h3 { font-size: 0.95rem; margin: 0 0 0.5rem; }
+.history-run {
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem;
+  margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem;
+}
+.history-run-header { display: flex; align-items: baseline; gap: 0.5rem; }
+.history-run-label { font-size: 0.85rem; }
+.history-run-time { font-size: 0.75rem; opacity: 0.7; margin-left: auto; }
+.history-run-delete {
+  padding: 0.15rem 0.4rem; font-size: 0.7rem; border: 1px solid var(--border);
+  border-radius: 3px; background: transparent; color: inherit; cursor: pointer;
+}
+.history-run-answer { white-space: pre-wrap; font-size: 0.85rem; margin: 0; }
+
+.history-add-action { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.history-add-action-btn {
+  align-self: flex-start; padding: 0.3rem 0.75rem; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.history-add-action-btn:disabled { opacity: 0.5; cursor: progress; }
+.history-action-picker { display: flex; gap: 0.5rem; align-items: center; }
+.history-action-select { padding: 0.25rem; font-size: 0.85rem; }
+.history-action-apply {
+  padding: 0.25rem 0.6rem; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+
+.history-player-host { margin-top: 1rem; }
+
+/* Header history toggle: simple icon button, same shape as theme/settings. */
+.history-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer; font-size: 1.1rem;
+}
+
+/* Mobile: collapse to single-pane. Rail-only when no session selected,
+ * detail-only once a row is tapped (the route handler hides the rail by
+ * adding `data-has-selection` on the wrapper would be ideal — for now we
+ * rely on the user using the browser back button to return to the rail). */
+@media (max-width: 768px) {
+  .history-view { flex-direction: column; height: auto; }
+  .history-rail { flex: 0 0 auto; max-height: 40vh; }
+  .history-detail { padding: 0.5rem; }
+}
+
+/* Slim sidebar header (after history-ux-overhaul: panel is recent-N only) */
+.history-panel-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.history-view-all {
+  font-size: 0.8rem; padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.history-meta { padding: 0.25rem 0; }
+.history-preview {
+  font-size: 0.85rem; line-height: 1.35; color: var(--fg);
+  margin: 0.25rem 0 0.4rem;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.history-preview.is-empty { opacity: 0.5; font-style: italic; }
+.history-row-preview {
+  font-size: 0.8rem; line-height: 1.3; opacity: 0.85; margin-top: 0.2rem;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.history-row-preview.is-empty { opacity: 0.45; font-style: italic; }
+.history-row-actions {
+  display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.4rem;
+}
+.history-row-actions button {
+  padding: 0.15rem 0.4rem; font-size: 0.7rem;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.history-row-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.history-run-copy {
+  padding: 0.15rem 0.4rem; font-size: 0.7rem;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+
+/* In-app Back button at the top of the rail. */
+.history-back-btn {
+  align-self: flex-start; margin: 0.5rem; padding: 0.25rem 0.6rem;
+  font-size: 0.85rem; border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}

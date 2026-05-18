@@ -698,7 +698,8 @@ actions:
         result = load_actions(yaml_file)
     assert result[0].category == "experimental"
     warns = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if r.levelno >= logging.WARNING
         and "exp-action" in r.getMessage()
         and "experimental" in r.getMessage()
@@ -1026,4 +1027,8 @@ def test_transform_new_chips_contracts():
     assert "{transcript}" in ed.template
     assert ed.category == "transform"
     assert "subject:" in ed.template.lower()
-    assert "closing" in ed.template.lower() or "signoff" in ed.template.lower() or "sign-off" in ed.template.lower()
+    assert (
+        "closing" in ed.template.lower()
+        or "signoff" in ed.template.lower()
+        or "sign-off" in ed.template.lower()
+    )

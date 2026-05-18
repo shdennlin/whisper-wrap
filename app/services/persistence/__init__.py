@@ -10,6 +10,7 @@ re-exported here so callers can `from app.services.persistence import ...`
 without learning the internal split.
 """
 
+from app.services.persistence import sessions_repo
 from app.services.persistence.engine import (
     SessionLocal,
     build_engine,
@@ -19,9 +20,10 @@ from app.services.persistence.models import (
     ActionRun,
     Base,
     Final,
+)
+from app.services.persistence.models import (
     Session as SessionModel,
 )
-from app.services.persistence import sessions_repo
 
 __all__ = [
     "ActionRun",
