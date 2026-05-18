@@ -37,15 +37,22 @@ export const DEFAULT_RETENTION = 20;
 export const MIN_USABLE_DURATION_MS = 500;
 
 export function sessionDurationMs(s: SessionRecord): number {
+  // Finals' max end_ms is the authoritative recording duration. In BATCH
+  // mode the session lifecycle covers only the upload+STT roundtrip (~30ms,
+  // because `startSession` runs AFTER `batch.stop()` returns), NOT the audio
+  // length — so `ended_at - started_at` is misleadingly tiny and would render
+  // as "0.0s". In LIVE mode both signals agree (finals are timestamped
+  // relative to recordingStartedAt which equals started_at). Prefer finals
+  // unconditionally so batch + live both read correctly.
+  if (s.finals.length > 0) {
+    let maxEnd = 0;
+    for (const f of s.finals) if (f.end_ms > maxEnd) maxEnd = f.end_ms;
+    return maxEnd;
+  }
+  // No finals: lifecycle gap is the only signal we have. Useful for live
+  // sessions that ended without any final (server-side STT silence).
   if (s.ended_at !== null) return Math.max(0, s.ended_at - s.started_at);
-  // ended_at missing (live session OR backend never received the PATCH on
-  // abrupt close). If we have finals, their max end_ms is a faithful
-  // speech-duration approximation — finals only land after transcription, so
-  // their presence means the session already ended.
-  if (s.finals.length === 0) return 0;
-  let maxEnd = 0;
-  for (const f of s.finals) if (f.end_ms > maxEnd) maxEnd = f.end_ms;
-  return maxEnd;
+  return 0;
 }
 
 /** ISO-style local datetime — single source of truth for both the slim

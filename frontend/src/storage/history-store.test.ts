@@ -66,6 +66,20 @@ describe("sessionDurationMs", () => {
       }),
     ).toBe(2_400);
   });
+
+  it("prefers finals.end_ms over ended_at - started_at (batch mode bug)", () => {
+    // Batch reality: startSession runs after batch.stop() returns, so the
+    // session lifecycle gap is the upload+STT roundtrip (~30ms here), NOT
+    // the recording length. The final carries the real durationMs.
+    expect(
+      sessionDurationMs({
+        ...base,
+        started_at: 1_000,
+        ended_at: 1_030,
+        finals: [{ text: "transcript", start_ms: 0, end_ms: 20_250 }],
+      }),
+    ).toBe(20_250);
+  });
 });
 
 describe("HistoryStore (API-backed)", () => {
