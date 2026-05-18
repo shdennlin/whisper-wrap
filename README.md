@@ -7,12 +7,12 @@ Single-process FastAPI server for **in-process audio transcription, live caption
 
 v2.1 ships two Whisper backends in the same codebase and picks one at startup based on the host OS:
 
-- **macOS** — [`pywhispercpp`](https://github.com/absadiki/pywhispercpp) (whisper.cpp binding) with Core ML encoder on the Apple Neural Engine. Decision rationale: CTranslate2 has no Metal/Core ML path so it falls back to CPU; same Mac mini reaches 5-7× real-time via ANE.
-- **Linux** — [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) (CTranslate2). Keeps the GPU/CUDA path open for the future PVE deployment.
+- **macOS** — [`pywhispercpp`](https://github.com/absadiki/pywhispercpp) (whisper.cpp binding) with Core ML encoder on the Apple Neural Engine. On Mac, CTranslate2 has no Metal/Core ML path and falls back to CPU; the pywhispercpp + Core ML path reaches 5-7× real-time on Apple Silicon via ANE.
+- **Linux** — [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) (CTranslate2). Keeps the CPU/CUDA path open for future GPU deployments.
 
 Both backends conform to the same `WhisperBackend` Protocol; the `/transcribe`, `/ask`, and `WS /listen` endpoints don't know which one is loaded. Override the auto-selection with `BACKEND_FORMAT=ct2` or `BACKEND_FORMAT=ggml`.
 
-> v2 was never released externally, so v2.1 carries no migration. The `registry/models.yaml` schema is new (variants list per model).
+> **Tested surface**: macOS (Apple Silicon) with the ggml + Core ML path is the primary developer setup and is exercised regularly. The Linux CUDA path and the Docker image are **untested** — they exist in code but have not been verified end-to-end. If you run either, please file an issue with what worked and what didn't.
 
 ## 🚀 Quick Start
 
@@ -260,6 +260,11 @@ Every drop is logged at `INFO` as a structured `transcription_filtered` record
 behaving as expected.
 
 ## 🐳 Docker Deployment
+
+> ⚠ **Untested**. The Dockerfile + `make docker` target exist in the repo but
+> have not been verified end-to-end. ARM Macs cannot reach the Metal / Neural
+> Engine from inside Docker (CT2 falls back to CPU, ggml does not work in
+> container). If you run this and it works, please file an issue.
 
 ```bash
 # Quick start with Docker (uses default model: breeze-asr-25)

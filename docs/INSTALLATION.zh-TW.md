@@ -17,10 +17,15 @@ whisper-wrap 完整安裝指南，包含系統需求與相依套件。
 
 whisper-wrap v2.1 內建兩種後端，並於啟動時擇一使用：
 
-| 平台         | 預設後端                | 變體 `format`    | 加速方式                       |
-| ------------ | ----------------------- | ---------------- | ------------------------------ |
-| macOS        | `pywhispercpp`          | `ggml`           | Apple Neural Engine（Core ML） |
-| Linux        | `faster-whisper`        | `ct2`            | 透過 CTranslate2 使用 CPU / CUDA |
+| 平台         | 預設後端                | 變體 `format`    | 加速方式                                   |
+| ------------ | ----------------------- | ---------------- | ------------------------------------------ |
+| macOS        | `pywhispercpp`          | `ggml`           | Apple Neural Engine（Core ML）             |
+| Linux        | `faster-whisper`        | `ct2`            | 透過 CTranslate2 使用 CPU / CUDA（尚未測試）|
+
+> ⚠ Linux CUDA 路徑**尚未經過 end-to-end 測試**。Code 路徑存在、
+> faster-whisper 本身支援透過 CTranslate2 走 CUDA，但維護者目前只
+> 在 macOS Apple Silicon 上驗證過。如果你在 CUDA 主機上實際跑過，
+> 歡迎開 issue 回報。
 
 可使用 `BACKEND_FORMAT=ct2` 或 `BACKEND_FORMAT=ggml` 進行覆寫：
 

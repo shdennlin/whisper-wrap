@@ -17,10 +17,15 @@ Complete setup guide for whisper-wrap with system requirements and dependencies.
 
 whisper-wrap v2.1 ships two backends and picks one at startup:
 
-| Platform     | Default backend         | Variant `format` | Acceleration                |
-| ------------ | ----------------------- | ---------------- | --------------------------- |
-| macOS        | `pywhispercpp`          | `ggml`           | Apple Neural Engine (Core ML) |
-| Linux        | `faster-whisper`        | `ct2`            | CPU / CUDA via CTranslate2  |
+| Platform     | Default backend         | Variant `format` | Acceleration                          |
+| ------------ | ----------------------- | ---------------- | ------------------------------------- |
+| macOS        | `pywhispercpp`          | `ggml`           | Apple Neural Engine (Core ML)         |
+| Linux        | `faster-whisper`        | `ct2`            | CPU / CUDA via CTranslate2 (untested) |
+
+> ⚠ The Linux CUDA path is **untested end-to-end**. The code paths exist
+> and faster-whisper supports CUDA via CTranslate2, but the maintainer has
+> only verified the macOS Apple Silicon setup. If you run it on a CUDA host,
+> please file an issue.
 
 Override with `BACKEND_FORMAT=ct2` or `BACKEND_FORMAT=ggml`:
 
