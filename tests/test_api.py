@@ -350,3 +350,59 @@ def test_filter_disabled_forwards_empty_text(stubbed_app, monkeypatch, caplog):
     assert "language" in body
     assert "segments" in body
     assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+# =========================================================================
+# Auto-session-logger integration (default on, opt-out via ?log=false)
+# =========================================================================
+
+
+def test_transcribe_auto_logs_by_default_and_returns_session_id(stubbed_app):
+    """External clients (Shortcut, curl) get a session id back AND a row in
+    the PWA history without any extra calls."""
+    with TestClient(stubbed_app) as c:
+        _stub_transcribe(stubbed_app, "hello world")
+        resp = c.post(
+            "/transcribe",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["text"] == "hello world"
+        assert "session_id" in body
+        sid = body["session_id"]
+        # Verify the row exists with the transcript as the final.
+        full = c.get(f"/v1/sessions/{sid}").json()
+        assert full["finals"][0]["text"] == "hello world"
+        assert full["mode"] == "batch"
+
+
+def test_transcribe_log_false_omits_session_id_and_creates_no_row(stubbed_app):
+    """The PWA path: log=false MUST suppress both response field AND DB write."""
+    with TestClient(stubbed_app) as c:
+        _stub_transcribe(stubbed_app, "hello world")
+        resp = c.post(
+            "/transcribe?log=false",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        assert resp.status_code == 200
+        assert "session_id" not in resp.json()
+        listing = c.get("/v1/sessions").json()
+        assert listing["sessions"] == []
+
+
+def test_transcribe_filter_dropped_does_not_create_session(stubbed_app):
+    """A filtered noise result MUST NOT pollute history."""
+    with TestClient(stubbed_app) as c:
+        _stub_transcribe(stubbed_app, "。")
+        resp = c.post(
+            "/transcribe",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"text": ""}
+        listing = c.get("/v1/sessions").json()
+        assert listing["sessions"] == []

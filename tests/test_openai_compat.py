@@ -595,3 +595,19 @@ def test_filter_disabled_forwards_whitespace_unchanged(
     assert resp.status_code == 200
     assert resp.json() == {"text": "   "}
     assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+def test_openai_compat_auto_logs_silently(client, tmp_path):
+    """Side-effect: OpenAI compat endpoints MUST NOT alter response schema
+    (no `session_id` field) but SHALL still persist the call so the PWA
+    history surfaces SDK-driven transcriptions."""
+    resp = _post_transcribe(client, tmp_path, model="whisper-1")
+    assert resp.status_code == 200
+    # Schema preservation: response is EXACTLY the OpenAI-documented shape.
+    assert resp.json() == {"text": "hello world. how are you."}
+    # Side effect: a session WAS created.
+    listing = client.get("/v1/sessions").json()
+    assert len(listing["sessions"]) == 1
+    sid = listing["sessions"][0]["id"]
+    full = client.get(f"/v1/sessions/{sid}").json()
+    assert full["finals"][0]["text"] == "hello world. how are you."

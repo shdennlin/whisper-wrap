@@ -30,6 +30,7 @@ from app.api.transcribe import (
     _normalize_content_type,
 )
 from app.config import config
+from app.services import auto_session_logger
 from app.services.converter import audio_converter
 from app.services.files import file_manager
 from app.services.llm import LLMConfigError, LLMUpstreamError
@@ -139,6 +140,14 @@ async def ask(
     prompt: str | None = Query(
         None, description="Initial prompt seed for audio transcription"
     ),
+    log: bool = Query(
+        True,
+        description=(
+            "If true (default), persist this call as a one-shot session + "
+            "passthrough action_run so it appears in the PWA history. The PWA "
+            "sends log=false because it manages its own session lifecycle."
+        ),
+    ),
 ) -> Any:
     content_type = _normalize_content_type(request.headers.get("content-type"))
 
@@ -198,7 +207,24 @@ async def ask(
         except LLMUpstreamError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
 
-        return {"transcript": transcript_for_response, "answer": answer}
+        response: dict[str, Any] = {
+            "transcript": transcript_for_response,
+            "answer": answer,
+        }
+        if log:
+            # Audio path → final.text = transcript; JSON text path → final.text
+            # = user_text (so the row shows the question, not blank).
+            final_text = (
+                transcript_for_response
+                if transcript_for_response is not None
+                else (user_text or "")
+            )
+            sid = auto_session_logger.log_ask_session(
+                transcript=final_text, answer=answer
+            )
+            if sid is not None:
+                response["session_id"] = sid
+        return response
 
     # ---- Streaming mode ----
     async def event_stream():
@@ -250,8 +276,10 @@ async def ask(
             yield _sse_event("transcript", {"text": stream_decision.text})
             llm_input = stream_decision.text
 
+        full_answer_parts: list[str] = []
         try:
             async for delta in llm_client.ask_stream(llm_input):
+                full_answer_parts.append(delta)
                 yield _sse_event("token", {"text": delta})
         except LLMConfigError as e:
             yield _sse_event("error", {"error": str(e)})
@@ -263,6 +291,18 @@ async def ask(
             yield _sse_event("error", {"error": f"LLM stream failed: {e}"})
             return
 
+        # Auto-log AFTER the stream completes successfully. Emit a `session`
+        # event before `done` so clients can capture the id without waiting
+        # on `done` parsing semantics. Failures are swallowed by the logger.
+        if log:
+            full_answer = "".join(full_answer_parts)
+            # Audio path → final.text = transcript; JSON text path → user_text.
+            final_text = llm_input  # already equals transcript or user_text
+            sid = auto_session_logger.log_ask_session(
+                transcript=final_text, answer=full_answer
+            )
+            if sid is not None:
+                yield _sse_event("session", {"session_id": sid})
         yield _sse_event("done", {"finish_reason": "stop"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

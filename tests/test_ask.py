@@ -93,10 +93,12 @@ def _install_whisper(app, *, transcript="hello world", error=None):
 
 
 def test_blocking_json_text_returns_transcript_null_and_answer(stubbed_app):
+    # log=false isolates this test from the auto-session-logger side effect;
+    # the auto-log behavior has its own coverage below.
     with TestClient(stubbed_app) as c:
         _install_llm(stubbed_app, ask_text="42")
         _install_whisper(stubbed_app)
-        resp = c.post("/ask", json={"text": "what is the answer?"})
+        resp = c.post("/ask?log=false", json={"text": "what is the answer?"})
         assert resp.status_code == 200
         assert resp.json() == {"transcript": None, "answer": "42"}
 
@@ -108,7 +110,9 @@ def test_blocking_multipart_audio_transcribes_then_asks(stubbed_app, tmp_path):
         _install_llm(stubbed_app, ask_text="hi")
         _install_whisper(stubbed_app, transcript="who are you")
         with audio.open("rb") as f:
-            resp = c.post("/ask", files={"file": ("clip.mp3", f, "audio/mp3")})
+            resp = c.post(
+                "/ask?log=false", files={"file": ("clip.mp3", f, "audio/mp3")}
+            )
         assert resp.status_code == 200
         assert resp.json() == {"transcript": "who are you", "answer": "hi"}
 
@@ -118,7 +122,7 @@ def test_blocking_raw_audio_octet_stream(stubbed_app):
         _install_llm(stubbed_app, ask_text="ok")
         _install_whisper(stubbed_app, transcript="raw audio text")
         resp = c.post(
-            "/ask",
+            "/ask?log=false",
             headers={"Content-Type": "application/octet-stream"},
             content=b"raw bytes",
         )
@@ -240,7 +244,7 @@ def test_streaming_success_emits_transcript_tokens_done(stubbed_app):
         _install_whisper(stubbed_app, transcript="say hi")
         resp = c.post(
             "/ask",
-            params={"stream": "true"},
+            params={"stream": "true", "log": "false"},
             headers={"Content-Type": "audio/wav"},
             content=b"raw",
         )
@@ -311,7 +315,7 @@ def test_streaming_json_text_path_emits_transcript_null(stubbed_app):
         _install_llm(stubbed_app, stream_chunks=["ok"])
         resp = c.post(
             "/ask",
-            params={"stream": "true"},
+            params={"stream": "true", "log": "false"},
             json={"text": "ping"},
         )
         events = _parse_sse_events(resp.text)
@@ -462,7 +466,7 @@ def test_json_text_input_unaffected_by_filter(stubbed_app, monkeypatch, caplog):
             return await original_ask(text)
 
         llm.ask = counted_ask
-        resp = c.post("/ask", json={"text": "hello"})
+        resp = c.post("/ask?log=false", json={"text": "hello"})
 
     assert resp.status_code == 200
     assert resp.json() == {"transcript": None, "answer": "hi back"}
@@ -490,7 +494,7 @@ def test_disabled_filter_forwards_empty_audio_transcript_to_llm(
 
         llm.ask = counted_ask
         resp = c.post(
-            "/ask",
+            "/ask?log=false",
             headers={"Content-Type": "audio/wav"},
             content=b"raw",
         )
@@ -499,3 +503,74 @@ def test_disabled_filter_forwards_empty_audio_transcript_to_llm(
     assert resp.json() == {"transcript": "。", "answer": "answer"}
     assert call_count["n"] == 1, "With filter off, LLM SHALL be invoked"
     assert not any(r.getMessage() == "transcription_filtered" for r in caplog.records)
+
+
+# =========================================================================
+# Auto-session-logger integration (default on, opt-out via ?log=false)
+# =========================================================================
+
+
+def test_blocking_ask_auto_logs_by_default_and_returns_session_id(stubbed_app):
+    """Default behavior: external clients (Shortcut, curl) get a session id
+    back AND a row in the PWA history. The PWA itself sends `log=false`."""
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, ask_text="42")
+        _install_whisper(stubbed_app, transcript="what is the answer?")
+        resp = c.post(
+            "/ask",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["transcript"] == "what is the answer?"
+        assert body["answer"] == "42"
+        assert "session_id" in body
+        sid = body["session_id"]
+        # The id SHALL appear in the PWA's /v1/sessions list
+        listing = c.get("/v1/sessions").json()
+        assert any(s["id"] == sid for s in listing["sessions"])
+        # Look up the session and verify the answer landed as a passthrough run.
+        full = c.get(f"/v1/sessions/{sid}").json()
+        assert any(
+            r["action_id"] == "passthrough" and r["answer"] == "42"
+            for r in full["action_runs"]
+        )
+
+
+def test_blocking_ask_log_false_suppresses_session_creation(stubbed_app):
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, ask_text="hi")
+        _install_whisper(stubbed_app, transcript="who are you")
+        resp = c.post(
+            "/ask?log=false",
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        body = resp.json()
+        assert "session_id" not in body
+        listing = c.get("/v1/sessions").json()
+        assert listing["sessions"] == []
+
+
+def test_streaming_ask_emits_session_event_before_done_when_logged(stubbed_app):
+    """Default behavior (log=true): a `session` event SHALL fire between the
+    last `token` and the terminating `done`, carrying the auto-logged id."""
+    with TestClient(stubbed_app) as c:
+        _install_llm(stubbed_app, stream_chunks=["hel", "lo"])
+        _install_whisper(stubbed_app, transcript="say hi")
+        resp = c.post(
+            "/ask",
+            params={"stream": "true"},
+            headers={"Content-Type": "audio/wav"},
+            content=b"raw",
+        )
+        events = _parse_sse_events(resp.text)
+        types = [e["event"] for e in events]
+        assert types == ["transcript", "token", "token", "session", "done"]
+        session_event = events[3]
+        assert "session_id" in session_event["data"]
+        sid = session_event["data"]["session_id"]
+        # Verify the row landed and the answer is fully captured.
+        full = c.get(f"/v1/sessions/{sid}").json()
+        assert full["action_runs"][0]["answer"] == "hello"

@@ -348,7 +348,10 @@ const actionsBar = new ActionsBar({
     } satisfies ActionsResponse;
   },
   postAsk: async (prompt) => {
-    const r = await fetch(backendUrl("/ask"), {
+    // log=false: action_runs land via /v1/sessions/{id}/runs on the
+    // PWA-owned session. Without this, every chip click would also create
+    // a separate one-shot auto-session, double-logging the answer.
+    const r = await fetch(backendUrl("/ask?log=false"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: prompt }),
@@ -446,8 +449,9 @@ const historyView = new HistoryView({
   runActionAgain: async (_sessionId, _actionId, prompt) => {
     // Re-run on a past session: hit /ask with the templated text only — no
     // audio body, no STT round-trip. The answer is then persisted as a new
-    // ActionRun by HistoryView itself.
-    const r = await fetch(backendUrl("/ask"), {
+    // ActionRun on the existing PWA-owned session by HistoryView itself, so
+    // log=false avoids creating a second auto-logged sibling session.
+    const r = await fetch(backendUrl("/ask?log=false"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: prompt }),
@@ -1051,7 +1055,10 @@ function resetIdle(): void {
 }
 
 async function uploadForTranscription(blob: Blob, mimeType: string): Promise<string> {
-  const r = await fetch(backendUrl("/transcribe"), {
+  // log=false: the PWA owns its own session lifecycle via /v1/sessions/*.
+  // External API consumers (Shortcut, curl) default to log=true so they
+  // also appear in the history view.
+  const r = await fetch(backendUrl("/transcribe?log=false"), {
     method: "POST",
     headers: { "content-type": mimeType || "application/octet-stream" },
     body: blob,

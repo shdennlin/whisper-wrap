@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from starlette.datastructures import UploadFile
 
 from app.config import config
+from app.services import auto_session_logger
 from app.services.converter import audio_converter
 from app.services.files import file_manager
 from app.services.postprocess import Drop, Keep, filter_empty_transcription
@@ -88,6 +89,14 @@ async def transcribe(
     prompt: str | None = Query(
         None,
         description="Initial prompt seed forwarded to the model to bias punctuation and style",
+    ),
+    log: bool = Query(
+        True,
+        description=(
+            "If true (default), persist this call as a one-shot session so it "
+            "appears in the PWA history. The PWA itself sends log=false because "
+            "it manages its own session lifecycle via /v1/sessions."
+        ),
     ),
 ) -> dict[str, Any]:
     """Transcribe an audio body.
@@ -167,7 +176,7 @@ async def transcribe(
             )
             return {"text": ""}
         assert isinstance(decision, Keep)
-        return {
+        response: dict[str, Any] = {
             "text": decision.text,
             "language": result.language,
             "segments": [
@@ -175,6 +184,13 @@ async def transcribe(
                 for s in result.segments
             ],
         }
+        if log:
+            sid = auto_session_logger.log_transcribe_session(
+                transcript=decision.text
+            )
+            if sid is not None:
+                response["session_id"] = sid
+        return response
 
     except HTTPException:
         raise

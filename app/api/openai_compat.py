@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.datastructures import UploadFile
 
 from app.config import config
+from app.services import auto_session_logger
 from app.services.converter import audio_converter
 from app.services.files import file_manager
 from app.services.postprocess import Drop, Keep, filter_empty_transcription
@@ -294,6 +295,12 @@ async def _transcribe_or_translate(
             )
         assert isinstance(decision, Keep)
         result_text = decision.text
+
+        # Auto-log: OpenAI compat endpoints SHALL NOT alter their response
+        # schema (third-party SDKs hard-code field names), so the session id
+        # is logged as a side effect only — never returned to the caller.
+        # Failures are swallowed by the logger.
+        auto_session_logger.log_transcribe_session(transcript=result_text)
 
         if response_format == "json":
             return JSONResponse(content={"text": result_text})
