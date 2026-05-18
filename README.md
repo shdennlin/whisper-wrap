@@ -13,17 +13,37 @@ Both backends conform to the same `WhisperBackend` Protocol; the `/transcribe`, 
 
 ## 🚀 Quick Start
 
+### Prerequisites (one-time on a fresh machine)
+
 ```bash
-# Install deps + download the default model (Breeze ASR 25, CT2 int8_float16)
+# macOS
+brew install ffmpeg libmagic
+curl -fsSL https://astral.sh/uv/install.sh | sh      # Python deps
+curl -fsSL https://bun.sh/install | bash             # PWA bundler
+
+# Linux
+sudo apt-get install ffmpeg libmagic1 libmagic-dev   # (or yum / pacman)
+curl -fsSL https://astral.sh/uv/install.sh | sh
+curl -fsSL https://bun.sh/install | bash
+```
+
+### Run it
+
+```bash
+# Install deps + download the default model + build the PWA (5-15 min)
 make setup
 
-# Start the server
+# Start the server (foreground; Ctrl-C to stop)
 make dev
 
 # Test transcription
 curl -X POST http://localhost:8000/transcribe \
      -F "file=@your-audio-file.mp3"
 ```
+
+Open `http://localhost:8000/app/` for the PWA, `http://localhost:8000/status` for health.
+
+**Want autostart + crash-recovery?** See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — `make install-launchd` on macOS, systemd unit sketch for Linux.
 
 ## ✨ Features
 
@@ -255,9 +275,9 @@ make lint               # Code quality checks
 ## 📚 Documentation
 
 - **[Installation Guide](docs/INSTALLATION.md)** - System requirements, dependencies, setup
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - End-to-end Mac mini recipe, launchd autostart, log management
 - **[API Documentation](docs/API.md)** - Complete API reference with examples
-- **[Deployment Guide](docs/DEPLOYMENT.md)** - Docker, production, monitoring
-- **[Development Guide](docs/DEVELOPMENT.md)** - Contributing, testing, make targets
+- **[HTTPS via Tailscale](docs/HTTPS-TAILSCALE.md)** - Reach the PWA from your phone with mic permission
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ## 🎯 Common Use Cases

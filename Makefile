@@ -14,7 +14,8 @@ SCRIPT := ./scripts/model-manager.sh
 
 .PHONY: help setup check-system-deps install-system-deps install \
         download-default-model models download-model set-model delete-model \
-        test lint format clean run dev docker deps samples transcribe-sample
+        test lint format clean run dev docker deps samples transcribe-sample \
+        install-launchd uninstall-launchd launchd-status launchd-logs
 
 help:
 	@echo "whisper-wrap (v2)"
@@ -44,6 +45,12 @@ help:
 	@echo ""
 	@echo "Docker:"
 	@echo "  docker             - Build and start via docker-compose"
+	@echo ""
+	@echo "Autostart (macOS launchd):"
+	@echo "  install-launchd    - Install ~/Library/LaunchAgents/com.whisper-wrap.plist + load"
+	@echo "  uninstall-launchd  - Unload and remove the launchd agent"
+	@echo "  launchd-status     - Print the agent's launchctl status"
+	@echo "  launchd-logs       - Tail stdout + stderr from ~/Library/Logs/whisper-wrap/"
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -160,3 +167,38 @@ deps:
 	@which uv >/dev/null || { echo "uv missing"; exit 1; }
 	@which ffmpeg >/dev/null || { echo "ffmpeg missing"; exit 1; }
 	@echo "OK"
+
+# ── Autostart (macOS launchd) ────────────────────────────────────────────────
+#
+# Generates ~/Library/LaunchAgents/com.whisper-wrap.plist from
+# scripts/com.whisper-wrap.plist.template by substituting the current
+# WORKDIR + HOME + PATH. Loading registers the agent so it starts on login,
+# restarts on crash, and writes logs to ~/Library/Logs/whisper-wrap/.
+
+LAUNCHD_PLIST := $$HOME/Library/LaunchAgents/com.whisper-wrap.plist
+LAUNCHD_LOGDIR := $$HOME/Library/Logs/whisper-wrap
+
+install-launchd:
+	@test "$$(uname -s)" = "Darwin" || { echo "install-launchd is macOS-only"; exit 1; }
+	@mkdir -p "$$HOME/Library/LaunchAgents" "$(LAUNCHD_LOGDIR)"
+	@sed -e "s|__WORKDIR__|$(CURDIR)|g" \
+	     -e "s|__HOME__|$$HOME|g" \
+	     -e "s|__PATH__|$$PATH|g" \
+	     scripts/com.whisper-wrap.plist.template > "$(LAUNCHD_PLIST)"
+	@launchctl unload "$(LAUNCHD_PLIST)" 2>/dev/null || true
+	@launchctl load "$(LAUNCHD_PLIST)"
+	@echo "Loaded: $(LAUNCHD_PLIST)"
+	@echo "Tail logs: make launchd-logs"
+
+uninstall-launchd:
+	@test "$$(uname -s)" = "Darwin" || { echo "uninstall-launchd is macOS-only"; exit 1; }
+	@launchctl unload "$(LAUNCHD_PLIST)" 2>/dev/null || true
+	@rm -f "$(LAUNCHD_PLIST)"
+	@echo "Removed: $(LAUNCHD_PLIST) (logs in $(LAUNCHD_LOGDIR) kept)"
+
+launchd-status:
+	@launchctl list | grep com.whisper-wrap || echo "Not loaded. Run: make install-launchd"
+
+launchd-logs:
+	@test -d "$(LAUNCHD_LOGDIR)" || { echo "No log dir yet: $(LAUNCHD_LOGDIR)"; exit 1; }
+	@tail -n 50 -F "$(LAUNCHD_LOGDIR)/stdout.log" "$(LAUNCHD_LOGDIR)/stderr.log"
