@@ -60,6 +60,7 @@ def _variants_registry(tmp_path: Path) -> Path:
             variants:
               - format: ct2
                 repo_id: shdennlin/breeze-asr-25-ct2
+                subfolder: int8_float16
                 compute_type: int8_float16
                 local_dir: breeze-asr-25-ct2
                 default_on: [linux]
@@ -248,6 +249,112 @@ def test_download_default_fetches_only_active_variant(tmp_path):
     assert "(ct2)" not in result.stdout
     # Hint about ALL=1 SHOULD appear since this model has >1 variant.
     assert "ALL=1" in result.stdout
+
+
+def _make_fake_hf(tmp_path: Path) -> Path:
+    """Return a tmpdir containing a fake `hf` script that records its args.
+
+    The fake also creates the artefacts the script expects post-download
+    (model.bin / tokenizer.json for ct2; the .bin and encoder dir for ggml)
+    so cmd_download's variant_installed() check passes.
+    """
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(exist_ok=True)
+    hf = bin_dir / "hf"
+    log = tmp_path / "hf-args.log"
+    hf.write_text(
+        """#!/bin/bash
+# Append every argv as one line so the test can assert on includes.
+echo "$@" >> "$LOGFILE"
+
+# Synthesise the on-disk artefacts the script's installed-check expects.
+# Parse --local-dir and walk back to figure out what to lay down.
+dest=""
+includes=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --local-dir) dest="$2"; shift 2;;
+        --include) includes+=("$2"); shift 2;;
+        *) shift;;
+    esac
+done
+
+mkdir -p "$dest"
+for inc in "${includes[@]}"; do
+    # `q6_k.bin` → file; `encoder.mlmodelc/*` → dir + sentinel file;
+    # `int8_float16/*` → ct2 subfolder layout.
+    if [[ "$inc" == */* ]]; then
+        sub="${inc%/*}"
+        mkdir -p "$dest/$sub"
+        if [[ "$sub" == *.mlmodelc ]]; then
+            : > "$dest/$sub/coremldata.bin"
+        else
+            : > "$dest/$sub/model.bin"
+            echo '{}' > "$dest/$sub/tokenizer.json"
+        fi
+    else
+        : > "$dest/$inc"
+    fi
+done
+"""
+    )
+    hf.chmod(0o755)
+    return bin_dir
+
+
+def test_download_ggml_passes_filename_and_encoder_includes(tmp_path):
+    """ggml repos host many quantizations side-by-side; the download MUST pass
+    --include filters so we only fetch the .bin we declared + the Core ML
+    encoder directory — not every q-level (~11 GB for breeze-asr-25-ggml)."""
+    bin_dir = _make_fake_hf(tmp_path)
+    log = tmp_path / "hf-args.log"
+    registry = _variants_registry(tmp_path)
+
+    env = os.environ.copy()
+    env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PYTHON_BIN"] = sys.executable
+    env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
+    env["WHISPER_WRAP_ENV_FILE"] = str(tmp_path / ".env")
+    env["WHISPER_WRAP_REGISTRY"] = str(registry)
+    env["LOGFILE"] = str(log)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["BACKEND_FORMAT"] = "ggml"   # pin so the test is platform-independent
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "download", "breeze"],
+        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert log.exists(), "fake hf was not invoked"
+    args = log.read_text()
+    # Both filters MUST appear; without them we'd fetch every quantization.
+    assert "--include ggml-breeze-asr-25-q6_k.bin" in args
+    assert "--include ggml-breeze-asr-25-encoder.mlmodelc/*" in args
+
+
+def test_download_ct2_passes_subfolder_include(tmp_path):
+    """Sanity: existing ct2-with-subfolder filter still works."""
+    bin_dir = _make_fake_hf(tmp_path)
+    log = tmp_path / "hf-args.log"
+    registry = _variants_registry(tmp_path)
+
+    env = os.environ.copy()
+    env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PYTHON_BIN"] = sys.executable
+    env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
+    env["WHISPER_WRAP_ENV_FILE"] = str(tmp_path / ".env")
+    env["WHISPER_WRAP_REGISTRY"] = str(registry)
+    env["LOGFILE"] = str(log)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["BACKEND_FORMAT"] = "ct2"
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "download", "breeze"],
+        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    args = log.read_text()
+    assert "--include int8_float16/*" in args
 
 
 def test_download_all_flag_fetches_every_variant(tmp_path):

@@ -319,7 +319,20 @@ download_variant() {
 
     local hf_args=(download "$repo_id" --local-dir "$dest")
     if [ -n "$subfolder" ]; then
+        # ct2 repos may host multiple quantizations under sibling subfolders
+        # (e.g. int8_float16/, float16/, …). Restrict to the one we want.
         hf_args+=(--include "$subfolder/*")
+    fi
+    if [ -n "$filename" ]; then
+        # ggml repos often host every quantization side-by-side at the repo
+        # root (q4_k_m, q5_k_m, q6_k, q8_0, fp16, …) — pulling them all is
+        # ~11 GB for breeze-asr-25-ggml. Narrow to the single .bin we want.
+        hf_args+=(--include "$filename")
+    fi
+    if [ -n "$coreml" ]; then
+        # The Core ML encoder is a directory inside the repo; grab everything
+        # under it so the .mlmodelc bundle stays intact.
+        hf_args+=(--include "$coreml/*")
     fi
     if [ -n "$revision" ]; then
         hf_args+=(--revision "$revision")
