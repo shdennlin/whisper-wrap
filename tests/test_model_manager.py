@@ -135,13 +135,19 @@ def test_list_marks_installed_variants(tmp_path):
     )
     result = _run(tmp_path, "list", registry=registry)
     assert result.returncode == 0, result.stderr
-    # The ggml row SHALL be marked installed; the ct2 row SHALL NOT.
-    ggml_line = next(line for line in result.stdout.splitlines() if "ggml" in line)
+    # The ggml ROW (not the header line) SHALL be marked installed; ct2 SHALL NOT.
+    # The "Active model" header also mentions "ggml" — discriminate by table
+    # rows always carrying the HF repo string.
+    ggml_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if "ggml (q6_k)" in line and "shdennlin" in line
+    )
     assert "yes" in ggml_line
     ct2_line = next(
         line
         for line in result.stdout.splitlines()
-        if "ct2 (int8_float16)" in line and "breeze" in line
+        if "ct2 (int8_float16)" in line and "breeze" in line and "shdennlin" in line
     )
     # ct2 not installed → no "yes" flag
     assert "yes" not in ct2_line

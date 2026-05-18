@@ -175,11 +175,17 @@ MODEL=<name>` fetches every variant declared for that model.
 
 ### Sources (Hugging Face)
 
-| Model | Variant | Backend | Hugging Face repo |
-|-------|---------|---------|-------------------|
-| `breeze-asr-25` | `ct2` | faster-whisper (Linux default) | [shdennlin/breeze-asr-25-ct2](https://huggingface.co/shdennlin/breeze-asr-25-ct2) |
-| `breeze-asr-25` | `ggml` | pywhispercpp + Core ML (macOS default) | [shdennlin/breeze-asr-25-ggml](https://huggingface.co/shdennlin/breeze-asr-25-ggml) |
-| `large-v3-turbo` | `ct2` | faster-whisper | [Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo) |
+| Model | Variant | Backend | Quant / Compute | Size | Hugging Face repo |
+|-------|---------|---------|-----------------|------|-------------------|
+| `breeze-asr-25` | `ct2` | faster-whisper (Linux default) | `int8_float16` | ~1.5 GB | [shdennlin/breeze-asr-25-ct2](https://huggingface.co/shdennlin/breeze-asr-25-ct2) |
+| `breeze-asr-25` | `ggml` | pywhispercpp + Core ML (macOS default) | `q6_k` | ~1.5 GB | [shdennlin/breeze-asr-25-ggml](https://huggingface.co/shdennlin/breeze-asr-25-ggml) |
+| `large-v3-turbo` | `ct2` | faster-whisper | `int8_float16` | ~1.6 GB | [Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo) |
+
+**Quant / compute notes**:
+- `q6_k` — whisper.cpp 6-bit K-quants. Near-FP16 quality at ~37% of the original file size. The ggml variant also ships a bundled Core ML `.mlmodelc` encoder for ANE acceleration.
+- `int8_float16` — CTranslate2 mixed precision: int8 weights, float16 activations. Standard CT2 path on CUDA. On Apple Silicon CPU it automatically falls back to `default` — the `COMPUTE_TYPE` env var has no effect there.
+
+**Upstream provenance**: The `shdennlin/breeze-asr-25-*` repos are quantized + converted from MediaTek's original Breeze ASR 25 release. The `Systran/faster-whisper-large-v3-turbo` repo is the CT2 repackaging of OpenAI's [`openai/whisper-large-v3-turbo`](https://huggingface.co/openai/whisper-large-v3-turbo).
 
 To add another model (e.g. `large-v3`, `medium`, `base`), append an entry to
 `registry/models.yaml` pointing at any CT2-format Hugging Face repo. See the

@@ -167,9 +167,31 @@ all_variants_installed() {
 }
 
 list_entries() {
+    # Surface .env's MODEL_NAME / BACKEND_FORMAT to the python snippet so the
+    # "Active model" header reflects the same selection the lifespan will use.
+    # Existing env vars win (allows `MODEL_NAME=x make models` for a what-if).
+    local model_name="${MODEL_NAME:-}"
+    local backend_format="${BACKEND_FORMAT:-}"
+    # `|| true` swallows grep's exit-1 when the key isn't present; without it,
+    # `set -euo pipefail` would kill the script before we even print the table.
+    if [ -f "$ENV_FILE" ]; then
+        if [ -z "$model_name" ]; then
+            model_name=$(grep -E '^MODEL_NAME=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+        fi
+        if [ -z "$backend_format" ]; then
+            backend_format=$(grep -E '^BACKEND_FORMAT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+        fi
+    fi
+
+    MODEL_NAME="$model_name" BACKEND_FORMAT="$backend_format" \
     PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE" "$MODELS_DIR" <<'PY'
 import os, sys
-from app.services.registry import load_registry, RegistryError
+from app.services.registry import (
+    RegistryError,
+    default_model_name,
+    load_registry,
+    resolve_variant,
+)
 try:
     entries = load_registry(sys.argv[1])
 except RegistryError as e:
@@ -202,6 +224,32 @@ def variant_installed(v: dict) -> bool:
     return False
 
 
+# ------------ Active model header (resolves same way the lifespan does) ------
+active_name = os.environ.get("MODEL_NAME") or ""
+if not active_name:
+    try:
+        active_name = default_model_name(sys.argv[1])
+    except RegistryError:
+        active_name = ""
+backend_format = os.environ.get("BACKEND_FORMAT") or None
+plat = "darwin" if sys.platform == "darwin" else "linux"
+
+if active_name and active_name in entries:
+    try:
+        active_variant = resolve_variant(
+            entries[active_name], platform=plat, backend_format=backend_format
+        )
+        status = "installed" if variant_installed(active_variant) else "NOT INSTALLED — run: make download-model MODEL=" + active_name
+        print(f"Active model: {active_name} → {variant_label(active_variant)} [{status}]")
+    except RegistryError as e:
+        print(f"Active model: {active_name} (variant unresolved: {e})")
+elif active_name:
+    print(f"Active model: {active_name} (NOT in registry — check MODEL_NAME in .env)")
+else:
+    print("Active model: <unset> (no default found in registry)")
+print()
+
+# ------------ Full registry table -------------------------------------------
 print(f"{'MODEL':<22} {'DEFAULT':<8} {'VARIANT':<22} {'INSTALLED':<10} REPO")
 for name, e in entries.items():
     default_flag = "*" if e.get("default") else ""

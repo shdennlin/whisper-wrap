@@ -161,11 +161,17 @@ whisper-wrap 在 registry 中內附兩個模型。每個模型有一個或多個
 
 ### 來源（Hugging Face）
 
-| 模型 | 變體 | Backend | Hugging Face repo |
-|-------|---------|---------|-------------------|
-| `breeze-asr-25` | `ct2` | faster-whisper（Linux 預設） | [shdennlin/breeze-asr-25-ct2](https://huggingface.co/shdennlin/breeze-asr-25-ct2) |
-| `breeze-asr-25` | `ggml` | pywhispercpp + Core ML（macOS 預設） | [shdennlin/breeze-asr-25-ggml](https://huggingface.co/shdennlin/breeze-asr-25-ggml) |
-| `large-v3-turbo` | `ct2` | faster-whisper | [Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo) |
+| 模型 | 變體 | Backend | 量化 / Compute | 大小 | Hugging Face repo |
+|-------|---------|---------|----------------|------|-------------------|
+| `breeze-asr-25` | `ct2` | faster-whisper（Linux 預設） | `int8_float16` | ~1.5 GB | [shdennlin/breeze-asr-25-ct2](https://huggingface.co/shdennlin/breeze-asr-25-ct2) |
+| `breeze-asr-25` | `ggml` | pywhispercpp + Core ML（macOS 預設） | `q6_k` | ~1.5 GB | [shdennlin/breeze-asr-25-ggml](https://huggingface.co/shdennlin/breeze-asr-25-ggml) |
+| `large-v3-turbo` | `ct2` | faster-whisper | `int8_float16` | ~1.6 GB | [Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo) |
+
+**量化 / Compute 說明**：
+- `q6_k` — whisper.cpp 6-bit K-quants。檔案約為原始 FP16 的 37%，品質接近無損。ggml 變體同時包含一個 Core ML `.mlmodelc` encoder，用來在 ANE 上加速。
+- `int8_float16` — CTranslate2 mixed precision：int8 權重 + float16 啟動值。在 CUDA 上是 CT2 的標準路徑。Apple Silicon CPU 跑 ct2 時會自動 fallback 到 `default`——`COMPUTE_TYPE` 環境變數在那個情境下沒有效果。
+
+**上游來源**：`shdennlin/breeze-asr-25-*` 是基於 MediaTek 原版 Breeze ASR 25 進行量化 + 格式轉換後的版本。`Systran/faster-whisper-large-v3-turbo` 則是 OpenAI [`openai/whisper-large-v3-turbo`](https://huggingface.co/openai/whisper-large-v3-turbo) 的 CT2 重新封裝版。
 
 若想加入其他模型（例如 `large-v3`、`medium`、`base`），在 `registry/models.yaml` 內新增一個項目，指向任意 CT2 格式的 Hugging Face repo 即可。請參考該檔案最上方的 schema 註解。建議的 CT2 repo：[`Systran/faster-whisper-large-v3`](https://huggingface.co/Systran/faster-whisper-large-v3)、[`Systran/faster-whisper-medium`](https://huggingface.co/Systran/faster-whisper-medium)、[`Systran/faster-whisper-base`](https://huggingface.co/Systran/faster-whisper-base)。
 
