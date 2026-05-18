@@ -1,5 +1,7 @@
 # API Documentation
 
+**English** | [繁體中文](API.zh-TW.md)
+
 Complete API reference for whisper-wrap transcription service.
 
 ## Base URL

@@ -1,5 +1,7 @@
 # HTTPS via Tailscale cert
 
+**English** | [繁體中文](HTTPS-TAILSCALE.zh-TW.md)
+
 The PWA requires HTTPS or `localhost` for the browser microphone API. Localhost
 works out of the box; to use the PWA from a phone or another machine on your
 LAN, you need a trusted HTTPS certificate for the whisper-wrap host. Tailscale

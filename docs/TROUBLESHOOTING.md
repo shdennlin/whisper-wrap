@@ -1,5 +1,7 @@
 # Troubleshooting Guide
 
+**English** | [繁體中文](TROUBLESHOOTING.zh-TW.md)
+
 Common issues and solutions for whisper-wrap deployment and operation.
 
 ## Quick Diagnostics

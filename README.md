@@ -1,5 +1,8 @@
 # whisper-wrap
 
+**English** | [繁體中文](README.zh-TW.md)
+
+
 Single-process FastAPI server for **in-process audio transcription, live captioning, and Gemini-backed Q&A**.
 
 v2.1 ships two Whisper backends in the same codebase and picks one at startup based on the host OS:
@@ -161,37 +164,42 @@ have a Tailscale cert — see [`docs/HTTPS-TAILSCALE.md`](docs/HTTPS-TAILSCALE.m
 
 ## 🤖 Model Management
 
-whisper-wrap includes a built-in model registry with 6 pre-configured models:
+whisper-wrap ships two models in the registry. Each model has one or more
+**variants** (a packaging for a specific backend) — `make download-model
+MODEL=<name>` fetches every variant declared for that model.
 
 | Model | Size | Languages | Description |
 |-------|------|-----------|-------------|
-| `large-v3-turbo` | 1.6GB | Multilingual | Fast, general purpose |
-| **`large-v3-turbo-q8`** | 874MB | Multilingual | 8-bit quantized (default) |
-| `breeze-asr-25` | 3.1GB | zh-TW, en | Taiwanese Mandarin + English code-switching |
-| `breeze-asr-25-q8` | 1.7GB | zh-TW, en | Breeze ASR 25 (8-bit quantized) |
-| `large-v3` | 3.1GB | Multilingual | Highest accuracy, slower |
-| `medium` | 1.5GB | Multilingual | Balanced speed/accuracy |
-| `base` | 148MB | Multilingual | Lightweight, fast |
+| **`breeze-asr-25`** ✅ default | 1.5-2.0 GB | zh-TW, en | MediaTek Breeze ASR 25 — Taiwanese Mandarin + English code-switching |
+| `large-v3-turbo` | 1.6 GB | Multilingual | OpenAI Whisper large-v3-turbo — multilingual fallback |
+
+### Sources (Hugging Face)
+
+| Model | Variant | Backend | Hugging Face repo |
+|-------|---------|---------|-------------------|
+| `breeze-asr-25` | `ct2` | faster-whisper (Linux default) | [shdennlin/breeze-asr-25-ct2](https://huggingface.co/shdennlin/breeze-asr-25-ct2) |
+| `breeze-asr-25` | `ggml` | pywhispercpp + Core ML (macOS default) | [shdennlin/breeze-asr-25-ggml](https://huggingface.co/shdennlin/breeze-asr-25-ggml) |
+| `large-v3-turbo` | `ct2` | faster-whisper | [Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo) |
+
+To add another model (e.g. `large-v3`, `medium`, `base`), append an entry to
+`registry/models.yaml` pointing at any CT2-format Hugging Face repo. See the
+schema comments at the top of that file. Suggested CT2 repos:
+[`Systran/faster-whisper-large-v3`](https://huggingface.co/Systran/faster-whisper-large-v3),
+[`Systran/faster-whisper-medium`](https://huggingface.co/Systran/faster-whisper-medium),
+[`Systran/faster-whisper-base`](https://huggingface.co/Systran/faster-whisper-base).
 
 ```bash
-# List available models and their install status
+# List registry entries with install status
 make models
 
-# Download a model
+# Download every variant of a model
 make download-model MODEL=breeze-asr-25
 
-# Switch active model
+# Switch the active model (refuses unless model is downloaded)
 make set-model MODEL=breeze-asr-25
 
-# Delete a model
-make delete-model MODEL=base
-```
-
-Or use the CLI wrapper:
-```bash
-./whisper-wrap models              # List models
-./whisper-wrap download breeze-asr-25   # Download
-./whisper-wrap use breeze-asr-25        # Switch model
+# Delete a model from disk (does NOT remove the registry entry)
+make delete-model MODEL=large-v3-turbo
 ```
 
 ## ⚙️ Configuration

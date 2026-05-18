@@ -1,5 +1,8 @@
 # Installation Guide
 
+**English** | [繁體中文](INSTALLATION.zh-TW.md)
+
+
 Complete setup guide for whisper-wrap with system requirements and dependencies.
 
 > **Deployment scope: LAN / localhost only.**
@@ -73,16 +76,19 @@ is created at clone time via `models/.gitkeep`; downloaded artefacts are gitigno
 
 The v1 GGML registry shipped `large-v3-turbo-q8`, `large-v3`, `medium`, `base`, and a
 GGML `breeze-asr-25`. v2 ships only **`breeze-asr-25`** (default, CT2 `int8_float16`
-from `shdennlin/breeze-asr-25-ct2`) and **`large-v3-turbo`** (from
-`Systran/faster-whisper-large-v3-turbo`). If you depended on a dropped entry, add an
-equivalent CT2 entry to your local `registry/models.yaml`. Suggested replacements:
+from [shdennlin/breeze-asr-25-ct2](https://huggingface.co/shdennlin/breeze-asr-25-ct2),
+plus a ggml variant at [shdennlin/breeze-asr-25-ggml](https://huggingface.co/shdennlin/breeze-asr-25-ggml))
+and **`large-v3-turbo`** (from
+[Systran/faster-whisper-large-v3-turbo](https://huggingface.co/Systran/faster-whisper-large-v3-turbo)).
+If you depended on a dropped entry, add an equivalent CT2 entry to your local
+`registry/models.yaml`. Suggested replacements:
 
-| v1 (GGML)             | v2 (CT2) repo                                  |
-| --------------------- | ---------------------------------------------- |
-| `large-v3-turbo-q8`   | `Systran/faster-whisper-large-v3-turbo`        |
-| `large-v3`            | `Systran/faster-whisper-large-v3`              |
-| `medium`              | `Systran/faster-whisper-medium`                |
-| `base`                | `Systran/faster-whisper-base`                  |
+| v1 (GGML)             | v2 (CT2) repo                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `large-v3-turbo-q8`   | [`Systran/faster-whisper-large-v3-turbo`](https://huggingface.co/Systran/faster-whisper-large-v3-turbo)                   |
+| `large-v3`            | [`Systran/faster-whisper-large-v3`](https://huggingface.co/Systran/faster-whisper-large-v3)                               |
+| `medium`              | [`Systran/faster-whisper-medium`](https://huggingface.co/Systran/faster-whisper-medium)                                   |
+| `base`                | [`Systran/faster-whisper-base`](https://huggingface.co/Systran/faster-whisper-base)                                       |
 
 ## System Requirements
 

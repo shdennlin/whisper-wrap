@@ -1,5 +1,8 @@
 # Deployment Guide
 
+**English** | [繁體中文](DEPLOYMENT.zh-TW.md)
+
+
 End-to-end recipe for running whisper-wrap as a 24/7 service on a Mac
 mini (or any Mac left on at home). Covers fresh-machine install,
 autostart via launchd, log management, and remote access.
