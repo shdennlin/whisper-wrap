@@ -200,6 +200,87 @@ def test_download_already_installed_skips(tmp_path):
     assert "already installed" in result.stdout
 
 
+def _run_with_env(tmp_path: Path, *args, extra_env: dict, registry: Path | None = None):
+    """Like _run but lets a test override env vars (BACKEND_FORMAT, ALL flag)."""
+    env = os.environ.copy()
+    env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PYTHON_BIN"] = sys.executable
+    env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
+    env["WHISPER_WRAP_ENV_FILE"] = str(tmp_path / ".env")
+    env["WHISPER_WRAP_REGISTRY"] = (
+        str(registry) if registry else str(PROJECT_ROOT / "registry" / "models.yaml")
+    )
+    env.update(extra_env)
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=PROJECT_ROOT,
+    )
+
+
+def test_download_default_fetches_only_active_variant(tmp_path):
+    """Without ALL=1, download SHALL only touch the variant matching the current
+    platform/BACKEND_FORMAT. Verified by installing only the active variant and
+    confirming the script reports success without trying to fetch the other one."""
+    registry = _variants_registry(tmp_path)
+    models_dir = tmp_path / "models"
+    # Install only the ggml variant; pin BACKEND_FORMAT=ggml so the test is
+    # platform-independent (CI is Linux, this Mac would also work without pin).
+    _install_ggml_variant(
+        models_dir,
+        "breeze-asr-25-ggml",
+        "ggml-breeze-asr-25-q6_k.bin",
+        "ggml-breeze-asr-25-encoder.mlmodelc",
+    )
+    result = _run_with_env(
+        tmp_path,
+        "download",
+        "breeze",
+        extra_env={"BACKEND_FORMAT": "ggml"},
+        registry=registry,
+    )
+    assert result.returncode == 0, result.stderr
+    # Single-variant mode: log mentions ggml, NOT ct2 (ct2 would have triggered
+    # a real `hf download` because the ct2 dir doesn't exist).
+    assert "variant #0 (ggml)" in result.stdout
+    assert "(ct2)" not in result.stdout
+    # Hint about ALL=1 SHOULD appear since this model has >1 variant.
+    assert "ALL=1" in result.stdout
+
+
+def test_download_all_flag_fetches_every_variant(tmp_path):
+    """WHISPER_WRAP_ALL_VARIANTS=1 (set by `ALL=1 make download-model`) SHALL
+    restore the legacy behavior of fetching every variant."""
+    registry = _variants_registry(tmp_path)
+    models_dir = tmp_path / "models"
+    # Pre-install both variants so the script can succeed without hitting the
+    # network in either case.
+    _install_ct2_variant(models_dir, "breeze-asr-25-ct2")
+    _install_ggml_variant(
+        models_dir,
+        "breeze-asr-25-ggml",
+        "ggml-breeze-asr-25-q6_k.bin",
+        "ggml-breeze-asr-25-encoder.mlmodelc",
+    )
+    result = _run_with_env(
+        tmp_path,
+        "download",
+        "breeze",
+        extra_env={"WHISPER_WRAP_ALL_VARIANTS": "1"},
+        registry=registry,
+    )
+    assert result.returncode == 0, result.stderr
+    # All-variants mode: log mentions both formats and both rows say
+    # "already installed".
+    assert "(ALL=1)" in result.stdout
+    assert "variant #0 (ct2)" in result.stdout
+    assert "variant #1 (ggml)" in result.stdout
+    # Skip messages for both
+    assert result.stdout.count("already installed") == 2
+
+
 # ---------- set: ≥1 variant installed ----------
 
 

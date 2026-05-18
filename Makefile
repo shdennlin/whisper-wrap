@@ -29,7 +29,8 @@ help:
 	@echo ""
 	@echo "Models:"
 	@echo "  models             - List registry entries with install status"
-	@echo "  download-model     - Download a model: make download-model MODEL=breeze-asr-25"
+	@echo "  download-model     - Download active variant: make download-model MODEL=breeze-asr-25"
+	@echo "                       (add ALL=1 to fetch every variant of the model)"
 	@echo "  set-model          - Set active model: make set-model MODEL=breeze-asr-25"
 	@echo "  delete-model       - Delete a model: make delete-model MODEL=large-v3-turbo"
 	@echo "  download-default-model - Download the registry entry marked default: true"
@@ -109,13 +110,16 @@ install:
 download-default-model:
 	@DEFAULT_NAME=$$(bash $(SCRIPT) default); \
 	echo "Downloading default model: $$DEFAULT_NAME"; \
-	bash $(SCRIPT) download "$$DEFAULT_NAME"
+	WHISPER_WRAP_ALL_VARIANTS=$(if $(ALL),1,) bash $(SCRIPT) download "$$DEFAULT_NAME"
 
 models:
 	@bash $(SCRIPT) list
 
+# Default: fetch only the variant that matches the current platform.
+# Use `ALL=1 make download-model MODEL=<name>` to fetch every variant of the
+# model (handy for cross-platform / benchmark setups).
 download-model:
-	@bash $(SCRIPT) download $(MODEL)
+	@WHISPER_WRAP_ALL_VARIANTS=$(if $(ALL),1,) bash $(SCRIPT) download $(MODEL)
 
 set-model:
 	@bash $(SCRIPT) set $(MODEL)

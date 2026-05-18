@@ -55,7 +55,7 @@ Open `http://localhost:8000/app/` for the PWA, `http://localhost:8000/status` fo
 - **`/ask` with optional SSE streaming**: audio or text in, Gemini answer out. `?stream=true` returns `text/event-stream` with `transcript` → `token*` → `done` events.
 - **`/listen` WebSocket**: live captioning — 16 kHz mono `pcm_s16le` frames in, timestamped `partial`/`final` events out. v2.1 adds a partial-consensus filter (simplified LocalAgreement-2) so `partial` text no longer thrashes between inferences. v2.2 swaps the RMS-energy VAD for [silero-vad](https://github.com/snakers4/silero-vad) (neural; with RMS fallback) so utterance endpointing is robust against environmental noise and quiet speech.
 - **Rich `/status`**: loaded model details, runtime device, compute type, Gemini configuration, uptime — useful for distinguishing Mac mini vs GPU deployments at a glance.
-- **Variants-aware model registry** (v2.1): `registry/models.yaml` ships `breeze-asr-25` with both a `ct2` and a `ggml` variant (`q6_k` quantisation + bundled `.mlmodelc` Core ML encoder), plus `large-v3-turbo` as the multilingual fallback. `make download-model MODEL=<name>` fetches every variant for that model.
+- **Variants-aware model registry** (v2.1): `registry/models.yaml` ships `breeze-asr-25` with both a `ct2` and a `ggml` variant (`q6_k` quantisation + bundled `.mlmodelc` Core ML encoder), plus `large-v3-turbo` as the multilingual fallback. `make download-model MODEL=<name>` fetches only the variant your platform will load; add `ALL=1` to fetch every variant.
 - **iOS Shortcuts ready**: bundled shortcut for one-tap voice transcription.
 
 ## 🏗️ Architecture
@@ -165,8 +165,9 @@ have a Tailscale cert — see [`docs/HTTPS-TAILSCALE.md`](docs/HTTPS-TAILSCALE.m
 ## 🤖 Model Management
 
 whisper-wrap ships two models in the registry. Each model has one or more
-**variants** (a packaging for a specific backend) — `make download-model
-MODEL=<name>` fetches every variant declared for that model.
+**variants** (a packaging for a specific backend). `make download-model
+MODEL=<name>` fetches the variant matching your platform; pass `ALL=1` to
+fetch every declared variant of that model.
 
 | Model | Size | Languages | Description |
 |-------|------|-----------|-------------|
@@ -195,16 +196,21 @@ schema comments at the top of that file. Suggested CT2 repos:
 [`Systran/faster-whisper-base`](https://huggingface.co/Systran/faster-whisper-base).
 
 ```bash
-# List registry entries with install status
+# List registry entries + show which variant is active on this platform
 make models
 
-# Download every variant of a model
+# Download ONLY the variant that will be used on this platform
+# (macOS → ggml, Linux → ct2). ~1.5 GB.
 make download-model MODEL=breeze-asr-25
 
-# Switch the active model (refuses unless model is downloaded)
+# Download EVERY variant of the model (~3 GB for breeze-asr-25).
+# Use when benchmarking ct2 vs ggml on the same host.
+ALL=1 make download-model MODEL=breeze-asr-25
+
+# Switch the active model (refuses unless its active variant is downloaded)
 make set-model MODEL=breeze-asr-25
 
-# Delete a model from disk (does NOT remove the registry entry)
+# Delete every variant directory of a model from disk
 make delete-model MODEL=large-v3-turbo
 ```
 

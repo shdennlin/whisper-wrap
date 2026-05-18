@@ -367,16 +367,72 @@ cmd_download() {
         die "Model '$target' declares zero variants (registry should have caught this)."
     fi
 
-    echo "Downloading $count variant(s) of '$target' into $MODELS_DIR/"
+    local fetch_all="${WHISPER_WRAP_ALL_VARIANTS:-}"
 
-    for i in $(seq 0 $((count - 1))); do
-        local variant_json
-        variant_json="$("$PYTHON_BIN" -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])[int(sys.argv[2])]))" "$variants_json" "$i")"
-        download_variant "$variant_json" "$target" "$i"
-    done
+    if [ "$fetch_all" = "1" ] || [ "$fetch_all" = "true" ]; then
+        # Power-user path: fetch every variant (e.g. for cross-platform / benchmark).
+        echo "Downloading all $count variant(s) of '$target' into $MODELS_DIR/ (ALL=1)"
+        for i in $(seq 0 $((count - 1))); do
+            local variant_json
+            variant_json="$("$PYTHON_BIN" -c "import json,sys; print(json.dumps(json.loads(sys.argv[1])[int(sys.argv[2])]))" "$variants_json" "$i")"
+            download_variant "$variant_json" "$target" "$i"
+        done
+        echo
+        echo "OK: '$target' installed (all variants present)"
+        return 0
+    fi
 
+    # Default path: fetch only the variant that will actually be loaded on this
+    # platform. Mirrors lifespan's resolve_variant() so `make models` and
+    # `make download-model` agree on what's "active".
+    local active_variant_json
+    active_variant_json="$(get_active_variant_json "$target")"
+    download_variant "$active_variant_json" "$target" 0
     echo
-    echo "OK: '$target' installed (all variants present)"
+    echo "OK: '$target' active variant installed."
+    if [ "$count" -gt 1 ]; then
+        echo "    Other variants exist for this model. To fetch them too:"
+        echo "      ALL=1 make download-model MODEL=$target"
+    fi
+}
+
+# Resolve a single variant JSON using the same logic the lifespan uses:
+# (1) BACKEND_FORMAT override → first variant with matching format
+# (2) platform default → first variant whose `default_on` lists current OS
+get_active_variant_json() {
+    local target="$1"
+
+    # Pick up BACKEND_FORMAT from env or .env, same fallback chain as list_entries.
+    local backend_format="${BACKEND_FORMAT:-}"
+    if [ -z "$backend_format" ] && [ -f "$ENV_FILE" ]; then
+        backend_format=$(grep -E '^BACKEND_FORMAT=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    fi
+
+    BACKEND_FORMAT="$backend_format" PYTHONPATH="$PYTHONPATH_DIR" "$PYTHON_BIN" - "$REGISTRY_FILE" "$target" <<'PY'
+import json, os, sys
+from app.services.registry import (
+    RegistryError,
+    load_registry,
+    resolve_variant,
+)
+try:
+    entries = load_registry(sys.argv[1])
+except RegistryError as e:
+    print(f"Registry validation failed: {e}", file=sys.stderr)
+    sys.exit(2)
+name = sys.argv[2]
+if name not in entries:
+    print(f"Unknown model: {name}", file=sys.stderr)
+    sys.exit(3)
+plat = "darwin" if sys.platform == "darwin" else "linux"
+bf = os.environ.get("BACKEND_FORMAT") or None
+try:
+    v = resolve_variant(entries[name], platform=plat, backend_format=bf)
+except RegistryError as e:
+    print(f"Variant resolution failed: {e}", file=sys.stderr)
+    sys.exit(4)
+print(json.dumps(v))
+PY
 }
 
 cmd_set() {

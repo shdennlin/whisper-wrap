@@ -55,7 +55,7 @@ curl -X POST http://localhost:8000/transcribe \
 - **`/ask` 支援可選的 SSE 串流**：輸入音訊或文字，輸出 Gemini 的回覆。`?stream=true` 會回傳 `text/event-stream`，事件依序為 `transcript` → `token*` → `done`。
 - **`/listen` WebSocket**：即時字幕 — 輸入 16 kHz mono `pcm_s16le` 音框，輸出帶 timestamp 的 `partial`/`final` 事件。v2.1 新增 partial-consensus filter（簡化版 LocalAgreement-2），讓 `partial` 文字不再於每次推論間反覆抖動。v2.2 將原本的 RMS-energy VAD 換成 [silero-vad](https://github.com/snakers4/silero-vad)（neural，並保留 RMS fallback），讓 utterance 端點偵測在環境噪音與小聲說話下都更穩定。
 - **豐富的 `/status`**：載入的模型細節、runtime device、compute type、Gemini 設定、uptime — 對於一眼分辨 Mac mini 與 GPU 部署非常實用。
-- **支援 variants 的模型 registry**（v2.1）：`registry/models.yaml` 提供 `breeze-asr-25`，同時包含 `ct2` 與 `ggml` 兩種 variant（`q6_k` quantisation + 內附的 `.mlmodelc` Core ML encoder），另有 `large-v3-turbo` 作為多語 fallback。`make download-model MODEL=<name>` 會抓取該模型的所有 variant。
+- **支援 variants 的模型 registry**（v2.1）：`registry/models.yaml` 提供 `breeze-asr-25`，同時包含 `ct2` 與 `ggml` 兩種 variant（`q6_k` quantisation + 內附的 `.mlmodelc` Core ML encoder），另有 `large-v3-turbo` 作為多語 fallback。`make download-model MODEL=<name>` 只會抓取本機平台會載入的 variant；加 `ALL=1` 才會抓全部。
 - **iOS Shortcuts 開箱即用**：附帶的捷徑可一鍵語音轉寫。
 
 ## 🏗️ 架構
@@ -152,7 +152,7 @@ make dev                # 同時提供 whisper-wrap 與 PWA，網址 http://loca
 
 ## 🤖 模型管理
 
-whisper-wrap 在 registry 中內附兩個模型。每個模型有一個或多個「**變體**」（對應特定 backend 的封裝）— `make download-model MODEL=<name>` 會抓取該模型宣告的所有變體。
+whisper-wrap 在 registry 中內附兩個模型。每個模型有一個或多個「**變體**」（對應特定 backend 的封裝）。`make download-model MODEL=<name>` 會抓取本機平台對應的變體；加 `ALL=1` 才會抓取所有宣告的變體。
 
 | 模型 | 大小 | 語言 | 說明 |
 |-------|------|-----------|-------------|
@@ -176,16 +176,20 @@ whisper-wrap 在 registry 中內附兩個模型。每個模型有一個或多個
 若想加入其他模型（例如 `large-v3`、`medium`、`base`），在 `registry/models.yaml` 內新增一個項目，指向任意 CT2 格式的 Hugging Face repo 即可。請參考該檔案最上方的 schema 註解。建議的 CT2 repo：[`Systran/faster-whisper-large-v3`](https://huggingface.co/Systran/faster-whisper-large-v3)、[`Systran/faster-whisper-medium`](https://huggingface.co/Systran/faster-whisper-medium)、[`Systran/faster-whisper-base`](https://huggingface.co/Systran/faster-whisper-base)。
 
 ```bash
-# 列出 registry 內所有項目與安裝狀態
+# 列出 registry 內所有項目 + 顯示目前平台啟用的變體
 make models
 
-# 下載某個模型的所有變體
+# 只下載本機平台會用到的變體（macOS → ggml、Linux → ct2），約 1.5 GB
 make download-model MODEL=breeze-asr-25
 
-# 切換目前使用的模型（若尚未下載會拒絕）
+# 下載該模型的所有變體（breeze-asr-25 約 3 GB）
+# 用在同台機器要 benchmark ct2 vs ggml 的場景
+ALL=1 make download-model MODEL=breeze-asr-25
+
+# 切換目前使用的模型（若該模型的 active variant 尚未下載會拒絕）
 make set-model MODEL=breeze-asr-25
 
-# 從磁碟刪除模型（不會移除 registry 中的項目）
+# 從磁碟刪除某模型的所有變體目錄
 make delete-model MODEL=large-v3-turbo
 ```
 
