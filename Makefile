@@ -81,6 +81,8 @@ define require_tls_env
 @test -n "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY env var is unset" && exit 1)
 @test -f "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT path does not exist: $$WHISPER_CERT" && exit 1)
 @test -f "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY path does not exist: $$WHISPER_KEY" && exit 1)
+@test -r "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT exists but is not readable by $$(id -un) (likely root-owned from 'sudo tailscale cert'); run: sudo chown $$(id -un):staff $$WHISPER_CERT && chmod 644 $$WHISPER_CERT" && exit 1)
+@test -r "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY exists but is not readable by $$(id -un); run: sudo chown $$(id -un):staff $$WHISPER_KEY && chmod 600 $$WHISPER_KEY" && exit 1)
 endef
 
 dev-https:
