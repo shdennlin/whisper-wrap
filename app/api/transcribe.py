@@ -185,8 +185,14 @@ async def transcribe(
             ],
         }
         if log:
+            duration_ms = (
+                int(result.duration_seconds * 1000)
+                if result.duration_seconds
+                else None
+            )
             sid = auto_session_logger.log_transcribe_session(
                 transcript=decision.text,
+                duration_ms=duration_ms,
                 audio_blob=body,
                 audio_mime_type=detected_mime,
             )

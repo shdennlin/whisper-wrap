@@ -106,8 +106,13 @@ async def _run_audio_pipeline(
     suffix: str,
     language: str,
     prompt: str | None,
-) -> str:
-    """Write to disk, validate format/size, convert to WAV, transcribe. Returns text."""
+) -> tuple[str, float]:
+    """Write to disk, validate format/size, convert to WAV, transcribe.
+
+    Returns (text, duration_seconds). Duration is forwarded to the
+    auto-session-logger so PWA history detail can show a real elapsed
+    time (and let the waveform player scrub) instead of 0.0s.
+    """
     temp_input = file_manager.create_temp_file(suffix=suffix)
     temp_wav = None
     try:
@@ -130,7 +135,7 @@ async def _run_audio_pipeline(
         result = await whisper.transcribe(
             temp_wav, language=language, initial_prompt=prompt
         )
-        return result.text
+        return result.text, result.duration_seconds or 0.0
     finally:
         if temp_input:
             file_manager.cleanup_file(temp_input)
@@ -179,10 +184,15 @@ async def ask(
 
     llm_client = request.app.state.llm_client
 
+    # Audio duration (seconds) lazily filled by the audio pipeline so the
+    # auto-session-logger can stamp it on the session row. Stays None when
+    # the call is JSON-text mode (no audio to measure).
+    audio_duration_s: float | None = None
+
     # ---- Blocking mode ----
     if not stream:
         if user_text is None:
-            transcript = await _run_audio_pipeline(
+            transcript, audio_duration_s = await _run_audio_pipeline(
                 request, audio_body, audio_suffix, language, prompt
             )
             # Post-process: skip the LLM (and the Gemini bill) when STT yields
@@ -233,6 +243,11 @@ async def ask(
             sid = auto_session_logger.log_ask_session(
                 transcript=final_text,
                 answer=answer,
+                duration_ms=(
+                    int(audio_duration_s * 1000)
+                    if audio_duration_s
+                    else None
+                ),
                 audio_blob=audio_body,
                 audio_mime_type=audio_mime,
             )
@@ -254,7 +269,7 @@ async def ask(
         else:
             # Audio path: run pipeline. STT failure → event:error WITHOUT transcript.
             try:
-                transcript_text = await _run_audio_pipeline(
+                transcript_text, audio_duration_s = await _run_audio_pipeline(
                     request, audio_body, audio_suffix, language, prompt
                 )
             except HTTPException as he:
@@ -315,6 +330,11 @@ async def ask(
             sid = auto_session_logger.log_ask_session(
                 transcript=final_text,
                 answer=full_answer,
+                duration_ms=(
+                    int(audio_duration_s * 1000)
+                    if audio_duration_s
+                    else None
+                ),
                 audio_blob=audio_body,
                 audio_mime_type=audio_mime,
             )

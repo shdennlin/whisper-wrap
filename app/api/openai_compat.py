@@ -302,8 +302,10 @@ async def _transcribe_or_translate(
         # Failures are swallowed by the logger. Persist the raw audio so
         # third-party tooling (Shortcut, openai-py, etc.) gets the same
         # waveform + Re-transcribe affordance the PWA enjoys.
+        compat_duration_s = getattr(result, "duration_seconds", 0.0) or 0.0
         auto_session_logger.log_transcribe_session(
             transcript=result_text,
+            duration_ms=int(compat_duration_s * 1000) if compat_duration_s else None,
             audio_blob=body,
             audio_mime_type=upload.content_type or "application/octet-stream",
         )

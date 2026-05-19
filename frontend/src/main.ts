@@ -1134,6 +1134,22 @@ function handleListenEvent(e: ListenEvent): void {
   }
 }
 
+// ---- Background-tab freshness ---------------------------------------------
+// When the user backgrounds the PWA, calls /transcribe (Shortcut / curl /
+// OpenAI-compat) from another app, then returns, the rail used to be stale
+// — store.prime() only ran at startup. Listen for visibilitychange and
+// re-prime + refresh whenever the tab becomes visible again. Throttled to
+// once per 5 seconds so rapid app-switches don't hammer /v1/sessions.
+let lastVisibilityReprime = 0;
+const REPRIME_MIN_INTERVAL_MS = 5_000;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  const now = Date.now();
+  if (now - lastVisibilityReprime < REPRIME_MIN_INTERVAL_MS) return;
+  lastVisibilityReprime = now;
+  void store.prime().then(() => refreshHistory());
+});
+
 // ---- Service worker --------------------------------------------------------
 // registerType: "prompt" means the new SW stays in "waiting" until we call
 // updateSW(true) — that posts SKIP_WAITING + reloads. On iOS standalone PWAs
