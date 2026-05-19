@@ -135,7 +135,7 @@ This unloads the agent and removes the plist; log files in
 | Symptom | Likely cause | Fix |
 | - | - | - |
 | `make launchd-status` shows no entry after install | The plist was rejected (XML error / bad path) | `plutil ~/Library/LaunchAgents/com.whisper-wrap.plist` to validate |
-| Process keeps restarting fast | Startup crash in `make run` (missing model, bad `.env`) | `tail -F ~/Library/Logs/whisper-wrap/stderr.log` |
+| Process keeps restarting fast | Startup crash in `make run` / `make run-https` (missing model, missing/quoted cert path, bad `.env`) | `tail -F ~/Library/Logs/whisper-wrap/stderr.log` |
 | Updated `.env` not picked up | launchd snapshots env at load time | `make uninstall-launchd && make install-launchd` |
 | Want to bounce after code change | Re-load to pick up the new tree | `make uninstall-launchd && make install-launchd` |
 
@@ -153,14 +153,17 @@ See `docs/HTTPS-TAILSCALE.md` for the full recipe. Short version:
 
 ```bash
 sudo tailscale cert <hostname>.<tailnet>.ts.net   # one-time per Mac
-export WHISPER_CERT="$PWD/<hostname>.<tailnet>.ts.net.crt"
-export WHISPER_KEY="$PWD/<hostname>.<tailnet>.ts.net.key"
-make dev-https
+# Add to .env (unquoted, no `export` — Make's include treats quotes literally):
+#   WHISPER_CERT=/abs/path/to/<hostname>.<tailnet>.ts.net.crt
+#   WHISPER_KEY=/abs/path/to/<hostname>.<tailnet>.ts.net.key
+make run-https     # production (or `make dev-https` for --reload during dev)
 ```
 
-For autostart over HTTPS via launchd, change `ProgramArguments` in the
-plist to `make dev-https` and add `WHISPER_CERT` / `WHISPER_KEY` to the
-`EnvironmentVariables` dict.
+The shipped plist template (`scripts/com.whisper-wrap.plist.template`)
+already invokes `make run-https`, so once `WHISPER_CERT` / `WHISPER_KEY`
+are in `.env`, `make install-launchd` autostarts over HTTPS. To stay on
+plain HTTP, edit the template's last `<string>` to `exec make run`
+before installing.
 
 ## 7. iPhone Shortcut integration
 

@@ -45,9 +45,11 @@ export WHISPER_KEY="$PWD/mac-mini.tailXXXXX.ts.net.key"
 make dev-https
 ```
 
-`make dev-https` runs uvicorn with `--ssl-certfile` / `--ssl-keyfile` pointed
-at the env vars. If either env var is unset or points at a missing file the
-target fails with a clear message.
+`make dev-https` runs uvicorn with `--reload --ssl-certfile / --ssl-keyfile`
+pointed at the env vars — use it during development. For production (no
+reload), use `make run-https`. Both share the same cert-presence guard and
+fail with a clear message if either env var is unset or points at a missing
+file.
 
 Now any machine on your tailnet — including your phone — can open:
 
@@ -99,8 +101,9 @@ launchctl load ~/Library/LaunchAgents/com.whisper-wrap.cert-renew.plist
 
 The agent runs once on load and then every 60 days, re-running `tailscale cert`
 in your whisper-wrap directory. The newly-issued cert overwrites the old one
-in-place; restart `make dev-https` afterwards (or accept that the next restart
-picks up the new cert).
+in-place; restart whisper-wrap afterwards (`make uninstall-launchd && make
+install-launchd` if you're running under launchd, or Ctrl-C + re-run
+`make dev-https` / `make run-https` if you're running interactively).
 
 ## Troubleshooting
 
@@ -108,7 +111,7 @@ picks up the new cert).
 | - | - |
 | `tailscale cert` says HTTPS is disabled | Re-check the Admin Console step above and wait ~30 seconds for the setting to propagate. |
 | Browser shows a cert warning on `https://...ts.net:8000/app/` | Confirm the machine accessing the URL is logged into the same tailnet. Non-tailnet machines won't see the cert as trusted. |
-| `make dev-https` errors with "WHISPER_CERT path does not exist" | The cert file was deleted or renamed; re-run `sudo tailscale cert <host>` in the same directory as `WHISPER_CERT` points to. |
+| `make dev-https` / `make run-https` errors with "WHISPER_CERT path does not exist" | Cert file was deleted/renamed, OR `.env` wraps the path in quotes (Make's `include` keeps quotes literal — strip them) — re-run `sudo tailscale cert <host>` and / or remove `"…"` around the path in `.env`. |
 | Phone can't reach the Mac mini's tailnet IP | Check `tailscale status` — the phone (Tailscale app) needs to be on and connected. |
 | Cert expired (after 90 days) and renewal didn't run | Run `tailscale cert <host>` manually, then check `launchctl list \| grep whisper-wrap` to confirm the agent is loaded. |
 

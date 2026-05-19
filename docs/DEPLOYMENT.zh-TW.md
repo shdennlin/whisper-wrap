@@ -127,7 +127,7 @@ make uninstall-launchd
 | 症狀 | 可能原因 | 修正方式 |
 | - | - | - |
 | 安裝後 `make launchd-status` 沒有輸出 | plist 被拒（XML 錯誤 / 路徑錯誤） | `plutil ~/Library/LaunchAgents/com.whisper-wrap.plist` 驗證 |
-| 程序不斷快速重啟 | `make run` 啟動時當機（模型缺失、`.env` 錯誤） | `tail -F ~/Library/Logs/whisper-wrap/stderr.log` |
+| 程序不斷快速重啟 | `make run` / `make run-https` 啟動時當機（模型缺失、cert 路徑錯誤或被引號包住、`.env` 錯誤） | `tail -F ~/Library/Logs/whisper-wrap/stderr.log` |
 | 更新的 `.env` 未生效 | launchd 在載入時就快照了環境變數 | `make uninstall-launchd && make install-launchd` |
 | 程式碼變更後想重啟 | 重新載入以套用新的內容 | `make uninstall-launchd && make install-launchd` |
 
@@ -144,12 +144,13 @@ make uninstall-launchd
 
 ```bash
 sudo tailscale cert <hostname>.<tailnet>.ts.net   # one-time per Mac
-export WHISPER_CERT="$PWD/<hostname>.<tailnet>.ts.net.crt"
-export WHISPER_KEY="$PWD/<hostname>.<tailnet>.ts.net.key"
-make dev-https
+# 加到 .env（不要引號、不要 export — Make 的 include 會把引號當值的一部分）：
+#   WHISPER_CERT=/abs/path/to/<hostname>.<tailnet>.ts.net.crt
+#   WHISPER_KEY=/abs/path/to/<hostname>.<tailnet>.ts.net.key
+make run-https     # 生產用（開發時用 `make dev-https` 帶 --reload）
 ```
 
-若要透過 launchd 開機自動啟動 HTTPS 版本,請將 plist 中的 `ProgramArguments` 改為 `make dev-https`,並在 `EnvironmentVariables` 字典中加上 `WHISPER_CERT` / `WHISPER_KEY`。
+預設的 plist template（`scripts/com.whisper-wrap.plist.template`）已經呼叫 `make run-https`,因此只要 `.env` 設好 `WHISPER_CERT` / `WHISPER_KEY`,`make install-launchd` 就會自動以 HTTPS 啟動。若想留在純 HTTP,在安裝前把 template 最後的 `<string>` 改為 `exec make run`。
 
 ## 7. iPhone Shortcut 整合
 

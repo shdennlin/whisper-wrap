@@ -6,6 +6,12 @@ ifneq (,$(wildcard .env))
     export
 endif
 
+# Strip surrounding double quotes from values picked up by `include .env`.
+# Make's include parses .env as Makefile syntax, so shell-style `VAR="value"`
+# leaves the quotes embedded in the value. We trim them so `test -f` works.
+WHISPER_CERT := $(patsubst "%",%,$(WHISPER_CERT))
+WHISPER_KEY := $(patsubst "%",%,$(WHISPER_KEY))
+
 # Configuration (overridable via env)
 API_PORT ?= 8000
 API_HOST ?= 0.0.0.0
@@ -14,7 +20,8 @@ SCRIPT := ./scripts/model-manager.sh
 
 .PHONY: help setup check-system-deps install-system-deps install \
         download-default-model models download-model set-model delete-model \
-        test lint format clean run dev docker deps samples transcribe-sample \
+        test lint format clean run dev dev-https run-https docker deps \
+        samples transcribe-sample \
         install-launchd uninstall-launchd launchd-status launchd-logs
 
 help:
@@ -36,9 +43,10 @@ help:
 	@echo "  download-default-model - Download the registry entry marked default: true"
 	@echo ""
 	@echo "Development:"
-	@echo "  run                - Start FastAPI server"
-	@echo "  dev                - Start FastAPI server with --reload"
-	@echo "  dev-https          - Start FastAPI server over HTTPS (requires WHISPER_CERT + WHISPER_KEY)"
+	@echo "  run                - Start FastAPI server (HTTP, production)"
+	@echo "  run-https          - Start FastAPI server (HTTPS, production; requires WHISPER_CERT + WHISPER_KEY)"
+	@echo "  dev                - Start FastAPI server (HTTP, --reload for code changes)"
+	@echo "  dev-https          - Start FastAPI server (HTTPS, --reload; requires WHISPER_CERT + WHISPER_KEY)"
 	@echo "  test               - Run pytest suite"
 	@echo "  lint               - Run ruff check"
 	@echo "  format             - Run ruff format"
@@ -65,12 +73,24 @@ build-frontend:
 	@cd frontend && bun install --silent && bun run build
 	@echo "PWA bundle ready at app/static/app/. Visit http://localhost:8000/app/ after 'make dev'."
 
+# Shared cert-presence guard for HTTPS targets. Defined as a Make function so
+# both dev-https (with --reload) and run-https (production) can call it
+# without duplicating the four `test` lines.
+define require_tls_env
+@test -n "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT env var is unset; run 'tailscale cert <host>.<tailnet>.ts.net' first" && exit 1)
+@test -n "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY env var is unset" && exit 1)
+@test -f "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT path does not exist: $$WHISPER_CERT" && exit 1)
+@test -f "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY path does not exist: $$WHISPER_KEY" && exit 1)
+endef
+
 dev-https:
-	@test -n "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT env var is unset; run 'tailscale cert <host>.<tailnet>.ts.net' first" && exit 1)
-	@test -n "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY env var is unset" && exit 1)
-	@test -f "$$WHISPER_CERT" || (echo "ERROR: WHISPER_CERT path does not exist: $$WHISPER_CERT" && exit 1)
-	@test -f "$$WHISPER_KEY" || (echo "ERROR: WHISPER_KEY path does not exist: $$WHISPER_KEY" && exit 1)
-	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+	$(call require_tls_env)
+	uv run uvicorn app.main:app --reload --host $(API_HOST) --port $(API_PORT) \
+		--ssl-certfile $$WHISPER_CERT --ssl-keyfile $$WHISPER_KEY
+
+run-https:
+	$(call require_tls_env)
+	uv run uvicorn app.main:app --host $(API_HOST) --port $(API_PORT) \
 		--ssl-certfile $$WHISPER_CERT --ssl-keyfile $$WHISPER_KEY
 
 check-system-deps:

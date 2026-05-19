@@ -16,11 +16,17 @@
     <string>__HOME__</string>
   </dict>
 
+  <!--
+    Production HTTPS launcher. Reads .env from WorkingDirectory; WHISPER_CERT
+    + WHISPER_KEY MUST be set there (unquoted, no `export` prefix — Make's
+    `include` treats those literally and breaks the cert-path existence check).
+    Switch the last <string> to `exec make run` if you don't have a cert yet.
+  -->
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>exec make run</string>
+    <string>exec make run-https</string>
   </array>
 
   <key>RunAtLoad</key>
