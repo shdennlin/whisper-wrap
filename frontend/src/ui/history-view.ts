@@ -237,9 +237,10 @@ export class HistoryView {
       await this.opts.store.deleteSession(s.id);
     } finally {
       // Stay on history view; if the current detail was the deleted session,
-      // navigate to the bare history route.
+      // REPLACE the URL with the bare history route (don't push) so a
+      // subsequent Back gesture won't return to the deleted session's URL.
       if (this.currentSessionId === s.id) {
-        navigateToHistory();
+        navigateToHistory(undefined, { replace: true });
       } else {
         this.renderRail();
       }

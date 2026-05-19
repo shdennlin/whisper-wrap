@@ -117,4 +117,15 @@ describe("navigateToHistory", () => {
     navigateToHistory("xyz-1");
     expect(window.location.hash).toBe("#/history/xyz-1");
   });
+
+  it("replace mode uses replaceState + dispatches hashchange manually", () => {
+    const replaceSpy = vi.spyOn(history, "replaceState");
+    const onHashChange = vi.fn();
+    window.addEventListener("hashchange", onHashChange);
+    navigateToHistory(undefined, { replace: true });
+    window.removeEventListener("hashchange", onHashChange);
+    expect(replaceSpy).toHaveBeenCalledWith(null, "", "#/history");
+    expect(onHashChange).toHaveBeenCalledTimes(1);
+    replaceSpy.mockRestore();
+  });
 });

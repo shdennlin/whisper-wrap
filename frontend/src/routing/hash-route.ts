@@ -41,6 +41,19 @@ export function onRouteChange(
   return () => window.removeEventListener("hashchange", listener);
 }
 
-export function navigateToHistory(sessionId?: string): void {
-  window.location.hash = sessionId ? `#/history/${sessionId}` : "#/history";
+export function navigateToHistory(
+  sessionId?: string,
+  opts?: { replace?: boolean },
+): void {
+  const target = sessionId ? `#/history/${sessionId}` : "#/history";
+  if (opts?.replace) {
+    // Replaces the current history entry instead of pushing a new one — used
+    // after destructive ops (e.g. deleting the session you're viewing) so a
+    // subsequent Back button doesn't return to the now-stale URL. Manual
+    // hashchange dispatch is required because replaceState doesn't fire one.
+    history.replaceState(null, "", target);
+    window.dispatchEvent(new Event("hashchange"));
+  } else {
+    window.location.hash = target;
+  }
 }
