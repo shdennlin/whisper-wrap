@@ -35,7 +35,6 @@ import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder
 import { DualRecorder } from "./capture/dual-recorder";
 import { LiveTimeoutManager, type LiveTimeoutReason } from "./capture/live-timeout";
 import { getAudio as fetchAudioFromApi } from "./storage/history-api-client";
-import { hasLegacyData, importLegacyData } from "./ui/import-legacy";
 import {
   loadCaptureMode,
   saveCaptureMode,
@@ -308,20 +307,6 @@ const settingsPanel = new SettingsPanel({
   onChange: (s) => store.setRetention(s.retention),
   clearAllAudio: () => store.bulkClearAudio(),
   onToast: (text) => toast(text),
-  // Migration: one-shot import of pre-2.3 localStorage history into the
-  // backend. Re-primes the history cache on success so the imported
-  // sessions appear in the panel without a page reload.
-  importLegacy: async () => {
-    const result = await importLegacyData({
-      backendUrl: () => loadSettings().backendUrl || window.location.origin,
-    });
-    if (result.sessionsImported > 0) {
-      await store.prime();
-      refreshHistory();
-    }
-    return result;
-  },
-  hasLegacyData: () => hasLegacyData(),
 });
 
 // HistoryPanel and ActionsBar reference each other: ActionsBar's onAnswer

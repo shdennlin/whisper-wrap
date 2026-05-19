@@ -151,22 +151,6 @@ export interface SettingsPanelOptions {
   clearAllAudio?: () => Promise<number>;
   /** Optional toast sink for ephemeral messages (clear-all completion). */
   onToast?: (text: string) => void;
-  /**
-   * Optional dependency invoked when the user clicks "Import legacy data" in
-   * the Migration section. Resolves to the import result so the panel can
-   * surface counts + errors. When absent, the section is hidden.
-   */
-  importLegacy?: () => Promise<{
-    sessionsImported: number;
-    finalsImported: number;
-    runsImported: number;
-    errors: { sessionId: string; reason: string }[];
-  }>;
-  /**
-   * Optional probe used to disable the button when no legacy data is in the
-   * browser. Defaults to `() => false` (button stays enabled) when absent.
-   */
-  hasLegacyData?: () => boolean;
 }
 
 export class SettingsPanel {
@@ -281,8 +265,6 @@ export class SettingsPanel {
 
     this.buildClearAllAudioButton();
 
-    this.buildMigrationSection();
-
     this.populateDevices();
 
     const onAnyChange = (): void => {
@@ -335,74 +317,6 @@ export class SettingsPanel {
         this.audioBudgetInput.value = String(loadAudioBudgetMb());
       }
     });
-  }
-
-  /**
-   * Migration section: a single "Import legacy data" button + status text.
-   * Visible only when an `importLegacy` callback was supplied. The button
-   * disables itself when `hasLegacyData()` returns false (or is absent),
-   * with a localised hint explaining why.
-   */
-  private buildMigrationSection(): void {
-    if (!this.opts.importLegacy) return;
-    this.makeSectionTitle(tSafe("settings.migrationSection"));
-
-    const wrap = document.createElement("div");
-    wrap.className = "settings-field settings-migration-row";
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "settings-import-legacy";
-    btn.textContent = tSafe("settings.importLegacyButton");
-
-    const status = document.createElement("span");
-    status.className = "settings-hint settings-import-legacy-status";
-
-    const hasData = this.opts.hasLegacyData?.() ?? false;
-    if (!hasData) {
-      btn.disabled = true;
-      status.textContent = tSafe("settings.importLegacyDisabledHint");
-    }
-
-    btn.addEventListener("click", () => {
-      void this.handleImportLegacy(btn, status);
-    });
-
-    wrap.append(btn, status);
-    this.opts.root.appendChild(wrap);
-  }
-
-  private async handleImportLegacy(
-    btn: HTMLButtonElement,
-    status: HTMLSpanElement,
-  ): Promise<void> {
-    const dep = this.opts.importLegacy;
-    if (!dep) return;
-    btn.disabled = true;
-    status.textContent = "…";
-    try {
-      const r = await dep();
-      const resultMsg = tSafe("settings.importLegacyResult", {
-        sessionsImported: r.sessionsImported,
-        finalsImported: r.finalsImported,
-        runsImported: r.runsImported,
-      });
-      if (r.errors.length > 0) {
-        const errMsg = tSafe("settings.importLegacyErrors", {
-          count: r.errors.length,
-        });
-        status.textContent = `${resultMsg} ${errMsg}`;
-        btn.disabled = false; // allow retry
-      } else {
-        status.textContent = resultMsg;
-        // Re-probe local data — if it's gone now, disabled state sticks.
-        const stillHas = this.opts.hasLegacyData?.() ?? false;
-        btn.disabled = !stillHas;
-      }
-    } catch (e) {
-      status.textContent = e instanceof Error ? e.message : String(e);
-      btn.disabled = false;
-    }
   }
 
   private buildClearAllAudioButton(): void {

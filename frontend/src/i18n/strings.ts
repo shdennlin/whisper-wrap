@@ -91,15 +91,6 @@ export const STRINGS = {
     "actions.sectionHeading": "AI Enhance",
     "actions.showDescriptionsLabel": "Show descriptions",
 
-    "settings.migrationSection": "Migration",
-    "settings.importLegacyButton": "Import legacy data",
-    "settings.importLegacyDisabledHint":
-      "No browser-stored history detected — nothing to import.",
-    "settings.importLegacyResult":
-      "Imported {sessionsImported} session(s), {finalsImported} final(s), {runsImported} run(s).",
-    "settings.importLegacyErrors":
-      "{count} session(s) failed to import; local storage preserved for retry.",
-
     "answer.title": "AI response",
     "answer.processing": "Processing…",
     "answer.copyTitle": "Copy AI response",
@@ -259,15 +250,6 @@ export const STRINGS = {
     "actions.miscCategoryLabel": "其他",
     "actions.sectionHeading": "AI 增強",
     "actions.showDescriptionsLabel": "顯示說明",
-
-    "settings.migrationSection": "資料遷移",
-    "settings.importLegacyButton": "匯入舊版資料",
-    "settings.importLegacyDisabledHint":
-      "瀏覽器沒有舊版歷史紀錄 — 無資料可匯入。",
-    "settings.importLegacyResult":
-      "已匯入 {sessionsImported} 個對話、{finalsImported} 段逐字稿、{runsImported} 個 AI 回應。",
-    "settings.importLegacyErrors":
-      "{count} 個對話匯入失敗；本機資料已保留可重試。",
 
     "answer.title": "AI 回應",
     "answer.processing": "處理中…",
