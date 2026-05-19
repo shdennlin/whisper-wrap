@@ -842,8 +842,11 @@ body { min-height: 100vh; }
 .history-row { padding: 0.5rem; cursor: pointer; border-radius: 4px; }
 .history-row:hover { background: var(--border-soft, rgba(127, 127, 127, 0.1)); }
 .history-row.is-selected { background: var(--border-soft, rgba(127, 127, 127, 0.18)); font-weight: 600; }
+.history-row-head {
+  display: flex; align-items: baseline; gap: 0.5rem; justify-content: space-between;
+}
 .history-row-date { font-size: 0.85rem; }
-.history-row-meta { font-size: 0.75rem; opacity: 0.7; }
+.history-row-dur { font-size: 0.75rem; opacity: 0.65; flex-shrink: 0; }
 .history-rail-empty { padding: 1rem; font-size: 0.85rem; opacity: 0.7; }
 
 .history-detail {
@@ -931,15 +934,19 @@ body { min-height: 100vh; }
   overflow: hidden;
 }
 .history-row-preview.is-empty { opacity: 0.45; font-style: italic; }
-.history-row-actions {
-  display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.4rem;
+
+/* Detail-side action row (Copy / Copy AI / Export×3 / Delete). Previously
+ * inlined per rail row — moved here so each rail card is two lines instead
+ * of five. Flex-wraps onto multiple lines when the viewport is narrow. */
+.history-detail-actions {
+  display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.75rem;
 }
-.history-row-actions button {
-  padding: 0.15rem 0.4rem; font-size: 0.7rem;
-  border: 1px solid var(--border); border-radius: 3px;
+.history-detail-actions button {
+  padding: 0.25rem 0.55rem; font-size: 0.78rem;
+  border: 1px solid var(--border); border-radius: 4px;
   background: transparent; color: inherit; cursor: pointer;
 }
-.history-row-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.history-detail-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
 .history-run-copy {
   padding: 0.15rem 0.4rem; font-size: 0.7rem;
   border: 1px solid var(--border); border-radius: 3px;

@@ -197,20 +197,23 @@ export class HistoryView {
       row.dataset.id = s.id;
       if (s.id === this.currentSessionId) row.classList.add("is-selected");
 
-      const date = document.createElement("div");
+      // Top line: date + small duration suffix. Duration is meaningful enough
+      // to keep at-a-glance ("0.0s" instantly flags a batch transcript, "5m"
+      // a live session) and cheap visually. Char count + 6 export buttons
+      // both moved to the detail panel — they were the main density culprits.
+      const head = document.createElement("div");
+      head.className = "history-row-head";
+      const date = document.createElement("span");
       date.className = "history-row-date";
       date.textContent = formatSessionDate(s.started_at);
-
-      const meta = document.createElement("div");
-      meta.className = "history-row-meta";
-      // Show duration even when ended_at is missing — sessionDurationMs has a
-      // finals-based fallback so a stored session with content never reads
-      // "Recording" by mistake.
       const liveOrEnded = s.ended_at !== null || s.finals.length > 0;
       const dur = liveOrEnded
         ? formatSessionDuration(sessionDurationMs(s))
         : t("history.recording");
-      meta.textContent = `${dur} · ${countWords(s)}${t("history.charsSuffix")}`;
+      const durEl = document.createElement("span");
+      durEl.className = "history-row-dur";
+      durEl.textContent = dur;
+      head.append(date, durEl);
 
       const preview = document.createElement("div");
       preview.className = "history-row-preview";
@@ -218,9 +221,7 @@ export class HistoryView {
       preview.textContent = previewText || t("history.emptyPreview");
       if (!previewText) preview.classList.add("is-empty");
 
-      const actions = this.renderRowQuickActions(s);
-
-      row.append(date, meta, preview, actions);
+      row.append(head, preview);
       row.addEventListener("click", () => {
         // The hash route is the source of truth — let the route handler
         // call `show(id)` rather than mutating the view directly here.
@@ -228,47 +229,6 @@ export class HistoryView {
       });
       list.appendChild(row);
     }
-  }
-
-  /** Inline quick actions shown on the rail row so users don't have to enter
-   *  the detail panel to copy / export / delete. Matches the slim sidebar's
-   *  button set for cross-UI consistency. */
-  private renderRowQuickActions(s: SessionRecord): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.className = "history-row-actions";
-    const mk = (
-      label: string,
-      handler: () => void | Promise<void>,
-      disabled = false,
-    ): HTMLButtonElement => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = label;
-      b.disabled = disabled;
-      b.addEventListener("click", (ev) => {
-        // Don't bubble to the row's navigation handler — quick actions are
-        // explicit operations, not "enter detail" gestures.
-        ev.stopPropagation();
-        void handler();
-      });
-      return b;
-    };
-    wrap.append(
-      mk(t("common.copy"), () => writeClipboard(joinFinals(s))),
-      mk(
-        t("history.copyAi"),
-        () => {
-          const text = latestActionAnswer(s);
-          if (text !== null) return writeClipboard(text);
-        },
-        s.action_runs.length === 0,
-      ),
-      mk(t("history.exportSrt"), () => downloadAs(s, "srt", exportSrt)),
-      mk(t("history.exportVtt"), () => downloadAs(s, "vtt", exportVtt)),
-      mk(t("history.exportTxt"), () => downloadAs(s, "txt", exportTxt)),
-      mk(t("common.delete"), () => this.deleteRowSession(s)),
-    );
-    return wrap;
   }
 
   private async deleteRowSession(s: SessionRecord): Promise<void> {
@@ -331,6 +291,7 @@ export class HistoryView {
     }
 
     this.detail.appendChild(this.renderDetailHeader(session));
+    this.detail.appendChild(this.renderDetailActions(session));
     this.detail.appendChild(this.renderTranscript(session));
 
     const runsHost = document.createElement("div");
@@ -352,6 +313,9 @@ export class HistoryView {
   }
 
   private renderDetailHeader(session: SessionRecord): HTMLElement {
+    // Date moved to the rail row to avoid printing the same timestamp twice
+    // on stacked-pane mobile layouts. Header now carries the per-session
+    // stats that don't fit in the rail (duration + char count).
     const header = document.createElement("header");
     header.className = "history-detail-header";
     const meta = document.createElement("p");
@@ -360,9 +324,58 @@ export class HistoryView {
     const dur = liveOrEnded
       ? formatSessionDuration(sessionDurationMs(session))
       : t("history.recording");
-    meta.textContent = `${formatSessionDate(session.started_at)} · ${dur} · ${countWords(session)}${t("history.charsSuffix")}`;
+    meta.textContent = `${dur} · ${countWords(session)}${t("history.charsSuffix")}`;
     header.appendChild(meta);
     return header;
+  }
+
+  /** Copy / Copy-AI / Export-{SRT,VTT,TXT} / Delete row. Lives in the detail
+   *  panel only — the rail row used to carry the same buttons inline, which
+   *  bloated the rail to ~5 lines per session on mobile. */
+  private renderDetailActions(session: SessionRecord): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "history-detail-actions";
+    const mk = (
+      label: string,
+      className: string,
+      handler: () => void | Promise<void>,
+      disabled = false,
+    ): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = className;
+      b.textContent = label;
+      b.disabled = disabled;
+      b.addEventListener("click", () => void handler());
+      return b;
+    };
+    wrap.append(
+      mk(t("common.copy"), "history-action-copy", () =>
+        writeClipboard(joinFinals(session)),
+      ),
+      mk(
+        t("history.copyAi"),
+        "history-action-copy-ai",
+        () => {
+          const text = latestActionAnswer(session);
+          if (text !== null) return writeClipboard(text);
+        },
+        session.action_runs.length === 0,
+      ),
+      mk(t("history.exportSrt"), "history-action-export-srt", () =>
+        downloadAs(session, "srt", exportSrt),
+      ),
+      mk(t("history.exportVtt"), "history-action-export-vtt", () =>
+        downloadAs(session, "vtt", exportVtt),
+      ),
+      mk(t("history.exportTxt"), "history-action-export-txt", () =>
+        downloadAs(session, "txt", exportTxt),
+      ),
+      mk(t("common.delete"), "history-action-delete", () =>
+        this.deleteRowSession(session),
+      ),
+    );
+    return wrap;
   }
 
   private renderTranscript(session: SessionRecord): HTMLElement {

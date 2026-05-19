@@ -481,6 +481,53 @@ describe("HistoryView — lifecycle", () => {
   });
 });
 
+describe("HistoryView — mobile-density layout", () => {
+  // After the rail-row simplification: each rail row should be just a date
+  // + duration head and a preview line. The 6-button cluster (Copy / Copy AI
+  // / Export×3 / Delete) lives in the detail panel only. Re-introducing
+  // those buttons on the rail would balloon each row to ~5 lines again.
+
+  it("rail rows have NO inline action buttons", () => {
+    const records = [seedRecord("a"), seedRecord("b")];
+    const { root } = mountView();
+    const view = new HistoryView({ root, store: makeStore(records) });
+    view.show(null);
+
+    const rows = root.querySelectorAll(".history-row");
+    expect(rows.length).toBe(2);
+    for (const r of rows) {
+      expect(r.querySelectorAll("button").length).toBe(0);
+      expect(r.querySelector(".history-row-actions")).toBeNull();
+    }
+  });
+
+  it("detail panel renders the action row (Copy / Copy AI / Export×3 / Delete)", () => {
+    const { root } = mountView();
+    const view = new HistoryView({
+      root,
+      store: makeStore([seedRecord("a")]),
+    });
+    view.show("a");
+
+    const actions = root.querySelector(".history-detail-actions");
+    expect(actions).not.toBeNull();
+    expect(actions!.querySelectorAll("button").length).toBe(6);
+  });
+
+  it("detail header omits the date (now shown in the rail row only)", () => {
+    const record = seedRecord("a", {
+      started_at: new Date("2026-05-19T11:25:55").getTime(),
+    });
+    const { root } = mountView();
+    const view = new HistoryView({ root, store: makeStore([record]) });
+    view.show("a");
+
+    const meta = root.querySelector(".history-detail-meta")?.textContent ?? "";
+    expect(meta).not.toContain("2026-05-19");
+    expect(meta).not.toContain("11:25:55");
+  });
+});
+
 describe("HistoryView — Re-transcribe button (regression guard)", () => {
   // Regression check for the 04aaf11 → 10ac686 timeline: the audio-replay /
   // re-ASR feature shipped a Re-transcribe button in the old HistoryPanel.
