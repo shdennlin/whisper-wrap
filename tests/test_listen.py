@@ -44,7 +44,7 @@ def captured_session():
     async def send_event(e):
         events.append(e)
 
-    async def transcribe_fn(samples):
+    async def transcribe_fn(samples, **_):
         transcribe_calls.append(len(samples))
         return f"len={len(samples)}"
 
@@ -305,7 +305,7 @@ async def test_empty_text_final_is_dropped(filter_enabled, caplog):
     async def send_event(e):
         events.append(e)
 
-    async def transcribe_fn(_samples):
+    async def transcribe_fn(_samples, **_):
         return "。"  # CJK full stop — pure hallucination shape
 
     session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
@@ -329,7 +329,7 @@ async def test_sub_min_duration_final_is_dropped(filter_enabled, caplog):
     async def send_event(e):
         events.append(e)
 
-    async def transcribe_fn(_samples):
+    async def transcribe_fn(_samples, **_):
         return "hi"  # valid text, but sub-duration drop should fire first
 
     session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
@@ -353,7 +353,7 @@ async def test_valid_final_still_emitted(filter_enabled, caplog):
     async def send_event(e):
         events.append(e)
 
-    async def transcribe_fn(_samples):
+    async def transcribe_fn(_samples, **_):
         return "今天天氣很好"
 
     session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
@@ -373,7 +373,7 @@ async def test_disabled_filter_emits_empty_final(filter_disabled, caplog):
     async def send_event(e):
         events.append(e)
 
-    async def transcribe_fn(_samples):
+    async def transcribe_fn(_samples, **_):
         return "。"  # would be dropped if filter were on
 
     session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
@@ -395,6 +395,82 @@ def test_valid_silence_frame_accepted(ws_client):
         #  in TestClient, but if the server had errored it would have closed and the
         #  next operation would raise.)
         ws.close()
+
+
+# ---------- partial decoding optimisations: greedy + adaptive cadence ----------
+
+
+async def test_partial_calls_use_beam_size_1_final_uses_default():
+    """Streaming partial path SHALL request beam_size=1 (greedy) for latency;
+    the final inference SHALL omit beam_size so the backend uses its
+    accuracy-tuned default. Regression for the partial-greedy optimisation."""
+    events: list[dict] = []
+    seen_kwargs: list[dict] = []
+
+    async def send_event(e):
+        events.append(e)
+
+    async def transcribe_fn(samples, **kwargs):
+        seen_kwargs.append(kwargs)
+        return "stub"
+
+    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    # 1 s voice → at least one partial fires, then 1 s silence → final.
+    for _ in range(4):
+        await session.feed_frame(voice_frame(250))
+    for _ in range(4):
+        await session.feed_frame(silence_frame(250))
+    await session.drain()
+
+    # First call(s) are partials with beam_size=1, last call is the final
+    # with NO beam_size (backend default).
+    assert any(kw.get("beam_size") == 1 for kw in seen_kwargs[:-1]), (
+        f"Expected at least one partial with beam_size=1, got {seen_kwargs}"
+    )
+    assert "beam_size" not in seen_kwargs[-1], (
+        f"Final inference SHALL omit beam_size; got {seen_kwargs[-1]}"
+    )
+
+
+async def test_adaptive_cadence_skips_partial_when_no_new_speech():
+    """When the cadence timer fires but VAD reports no new speech since the
+    last partial inference, the cadence tick SHALL be skipped — re-running
+    inference on the same audio tail wastes CPU/ANE for the same result.
+
+    Tight time math: cadence=500ms, final=700ms, frame=250ms.
+      - 3 voice frames → audio_ms=750, first partial fires at frame 3 (last
+        partial set to 250 on utterance start; cadence due at 750).
+      - 3 silence frames → audio_ms=1500.
+        - frame 4 (1000): cadence not due (250 since last partial).
+        - frame 5 (1250): cadence DUE (500 since last partial). With adaptive
+          skip: _last_voice_ms (750) == _last_partial_voice_ms (750) → SKIP.
+          Without it: would fire a redundant partial on the same audio.
+        - frame 6 (1500): final due (750ms silence ≥ 700ms threshold) → FINAL.
+      - Expected calls = 2 (1 partial + 1 final). Without adaptive skip it
+        would be 3 (1 partial + 1 redundant + 1 final).
+    """
+    call_count = 0
+
+    async def send_event(_e):
+        pass
+
+    async def transcribe_fn(_samples, **_):
+        nonlocal call_count
+        call_count += 1
+        return "stub"
+
+    session = StreamSession(transcribe_fn=transcribe_fn, send_event=send_event)
+    for _ in range(3):
+        await session.feed_frame(voice_frame(250))
+    for _ in range(3):
+        await session.feed_frame(silence_frame(250))
+    await session.drain()
+
+    assert call_count == 2, (
+        f"Expected exactly 2 inference calls (partial + final) — adaptive "
+        f"cadence should have skipped the redundant silence-cycle partial; "
+        f"got {call_count}"
+    )
 
 
 # ---------- v2.2 silero-vad regression tests ----------

@@ -44,8 +44,8 @@ async def listen(ws: WebSocket) -> None:
 
     whisper = ws.app.state.whisper
 
-    async def transcribe_fn(samples) -> str:
-        result = await whisper.transcribe_pcm(samples)
+    async def transcribe_fn(samples, *, beam_size: int | None = None) -> str:
+        result = await whisper.transcribe_pcm(samples, beam_size=beam_size)
         return result.text
 
     async def send_event(event: dict[str, Any]) -> None:

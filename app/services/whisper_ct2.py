@@ -59,11 +59,22 @@ def _run_inference(
     language: str | None,
     initial_prompt: str | None,
     task: str = "transcribe",
+    beam_size: int | None = None,
 ) -> tuple[list, Any]:
     """Run the synchronous model inference and materialise segments inside a thread."""
-    segments, info = model.transcribe(
-        media, language=language, initial_prompt=initial_prompt, task=task
-    )
+    kwargs: dict[str, Any] = {
+        "language": language,
+        "initial_prompt": initial_prompt,
+        "task": task,
+    }
+    # When caller explicitly asks for a fast greedy decode (partials), drop
+    # both knobs together — faster-whisper requires best_of <= beam_size and
+    # leaving best_of at the default 5 while beam_size=1 makes it silently
+    # promote beam_size back to 5.
+    if beam_size is not None:
+        kwargs["beam_size"] = beam_size
+        kwargs["best_of"] = beam_size
+    segments, info = model.transcribe(media, **kwargs)
     return list(segments), info
 
 
@@ -140,6 +151,7 @@ class CTranslate2Backend:
         samples: np.ndarray,
         *,
         language: str = "auto",
+        beam_size: int | None = None,
     ) -> TranscriptionResult:
         """Transcribe a float32 16 kHz mono PCM array. Returns a `TranscriptionResult`."""
         model_language = None if language == "auto" else language
@@ -151,6 +163,7 @@ class CTranslate2Backend:
                 samples,
                 language=model_language,
                 initial_prompt=None,
+                beam_size=beam_size,
             )
         except Exception as e:
             raise WhisperTranscriptionError(f"{e}") from e

@@ -190,9 +190,18 @@ class PyWhisperCppBackend:
         samples: np.ndarray,
         *,
         language: str = "auto",
+        beam_size: int | None = None,
     ) -> TranscriptionResult:
-        """Transcribe a float32 16 kHz mono PCM array. Returns a `TranscriptionResult`."""
+        """Transcribe a float32 16 kHz mono PCM array. Returns a `TranscriptionResult`.
+
+        `beam_size`: whisper.cpp defaults to greedy decoding already, so this
+        is mostly a no-op here. When supplied we pin the greedy strategy with
+        the requested best_of count, which matches the ct2 backend's intent
+        even if the speedup on ggml is marginal.
+        """
         params = self._build_params(language=language, initial_prompt=None)
+        if beam_size is not None:
+            params["greedy"] = {"best_of": beam_size}
         try:
             segments = await asyncio.to_thread(
                 self._model.transcribe, samples, **params

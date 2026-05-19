@@ -109,7 +109,7 @@ def test_stream_emits_partial_with_consensus_filter_active(monkeypatch):
         ]
     )
 
-    async def fake_transcribe(samples):
+    async def fake_transcribe(samples, **_):
         return next(texts)
 
     events: list = []
@@ -177,7 +177,7 @@ def _scripted_transcribe_fn(scripted):
     it = iter(scripted)
     last = ["", scripted[-1] if scripted else ""]
 
-    async def _fn(samples):
+    async def _fn(samples, **_):
         try:
             last[0] = next(it)
         except StopIteration:

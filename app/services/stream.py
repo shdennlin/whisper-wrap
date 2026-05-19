@@ -47,7 +47,11 @@ MAX_BUFFER_BYTES = MAX_BUFFER_SECONDS * SAMPLE_RATE * BYTES_PER_SAMPLE
 PARTIAL_WINDOW_BYTES = (PARTIAL_WINDOW_MS * SAMPLE_RATE * BYTES_PER_SAMPLE) // 1000
 
 
-TranscribeFn = Callable[[np.ndarray], Awaitable[str]]
+# Partial path passes beam_size=1 to ask the backend for fast greedy decoding;
+# final path omits the kwarg and uses the backend's accuracy-tuned defaults.
+# Keep the kwarg optional (default None) so test fixtures and any caller that
+# doesn't care can stay on the old 1-arg shape.
+TranscribeFn = Callable[..., Awaitable[str]]
 SendEventFn = Callable[[dict[str, Any]], Awaitable[None]]
 
 
@@ -251,6 +255,13 @@ class StreamSession:
         self._utterance_start_ms = 0
         self._last_partial_ms = 0
         self._last_voice_ms = 0
+        # Adaptive cadence: snapshot of _last_voice_ms at the time the most
+        # recent partial inference fired. Used to skip the next partial when
+        # VAD reports no new speech since that point — there's literally
+        # nothing new for whisper to transcribe, so the inference would just
+        # burn CPU + ANE for the same answer. -1 means "first partial of
+        # the utterance, fire unconditionally".
+        self._last_partial_voice_ms: int = -1
         # Tracks the START of the first voice frame in the current utterance so the
         # post-process filter can measure speech duration accurately. Distinct from
         # `_utterance_start_ms` which is the END of that frame (kept for backward
@@ -329,11 +340,28 @@ class StreamSession:
         # would otherwise fire on the same frame (the final carries the full
         # transcript anyway, and a partial-then-final pair is visual noise).
         if partial_due and not final_due:
+            # Adaptive cadence: if VAD hasn't seen new speech since the last
+            # partial fired, skip — the model would produce the same answer
+            # on the same audio tail. Burns no CPU/ANE during pauses or
+            # while the user is silent inside the SILENCE_DURATION_MS window.
+            no_new_speech = (
+                self._last_partial_voice_ms != -1
+                and self._last_voice_ms <= self._last_partial_voice_ms
+            )
+            if no_new_speech:
+                # Slide _last_partial_ms forward so we don't burn the cadence
+                # check on the same frame next tick — wait a fresh interval.
+                self._last_partial_ms = now_ms
+                logger.debug(
+                    "Partial cadence skipped at audio_ms=%d (no new speech since last partial)",
+                    now_ms,
+                )
             # Drop the cadence fire if a previous partial inference is still
             # running. Better to skip a frame than queue inference and let
             # latency accumulate while the user keeps speaking.
-            if self._partial_in_flight is None or self._partial_in_flight.done():
+            elif self._partial_in_flight is None or self._partial_in_flight.done():
                 self._last_partial_ms = now_ms
+                self._last_partial_voice_ms = self._last_voice_ms
                 self._partial_in_flight = asyncio.create_task(
                     self._run_partial_inference(now_ms)
                 )
@@ -358,6 +386,9 @@ class StreamSession:
             self._utterance_buffer = bytearray()
             self.consensus_filter.reset()
             self._partial_in_flight = None
+            # Reset adaptive cadence so the first partial of the next
+            # utterance fires unconditionally.
+            self._last_partial_voice_ms = -1
 
     async def _run_partial_inference(self, end_ms: int) -> None:
         """Run a partial-window inference and emit (fire-and-forget from feed_frame).
@@ -379,7 +410,10 @@ class StreamSession:
 
         samples = pcm_to_float32(tail)
         try:
-            text = await self.transcribe_fn(samples)
+            # Partial path → greedy decode (beam_size=1). ~1.5-2x faster on
+            # ct2 (default beam=5); on ggml it's a no-op because the backend
+            # is already greedy by default.
+            text = await self.transcribe_fn(samples, beam_size=1)
         except Exception as e:
             logger.exception("Partial transcription failed: %s", e)
             return

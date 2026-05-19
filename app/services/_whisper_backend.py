@@ -84,6 +84,7 @@ class WhisperBackend(Protocol):
         samples: np.ndarray,
         *,
         language: str,
+        beam_size: int | None = None,
     ) -> TranscriptionResult:
         """Transcribe a float32 mono 16 kHz PCM array.
 
@@ -91,5 +92,11 @@ class WhisperBackend(Protocol):
         a shortcut for partial transcripts (e.g. skip post-processing) but the
         returned `TranscriptionResult` SHALL still carry text, segments,
         language, and duration_seconds.
+
+        `beam_size`: when ``None`` (default) the backend uses its own decode
+        defaults — for `ct2` that's beam=5/best_of=5, for `ggml` that's the
+        whisper.cpp greedy default. Pass ``1`` from the streaming partial path
+        to force fast greedy decoding (significant speedup on ct2, no-op on
+        ggml because it's already greedy by default).
         """
         ...
