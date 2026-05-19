@@ -75,8 +75,14 @@ async def _read_text_body(request: Request) -> str:
     return text
 
 
-async def _extract_audio_body(request: Request, content_type: str) -> tuple[bytes, str]:
-    """Cheap validation phase for audio paths — runs before any SSE framing begins."""
+async def _extract_audio_body(
+    request: Request, content_type: str
+) -> tuple[bytes, str, str]:
+    """Cheap validation phase for audio paths — runs before any SSE framing begins.
+
+    Returns (body, suffix, mime). The mime hint is used by the auto-session
+    logger to pick the right extension when persisting the blob for history.
+    """
     if content_type == "multipart/form-data":
         form = await request.form()
         upload = form.get("file")
@@ -84,12 +90,14 @@ async def _extract_audio_body(request: Request, content_type: str) -> tuple[byte
             raise HTTPException(status_code=400, detail="Missing form field 'file'")
         body = await upload.read()
         suffix = Path(upload.filename or "audio.unknown").suffix or ".audio"
+        mime = upload.content_type or "application/octet-stream"
     else:
         body = await request.body()
         suffix = _RAW_BODY_EXTENSION_MAP.get(content_type, ".audio")
+        mime = content_type or "application/octet-stream"
     if not body:
         raise HTTPException(status_code=400, detail="Empty audio body")
-    return body, suffix
+    return body, suffix, mime
 
 
 async def _run_audio_pipeline(
@@ -162,8 +170,11 @@ async def ask(
         user_text = await _read_text_body(request)
         audio_body: bytes | None = None
         audio_suffix: str | None = None
+        audio_mime: str | None = None
     else:
-        audio_body, audio_suffix = await _extract_audio_body(request, content_type)
+        audio_body, audio_suffix, audio_mime = await _extract_audio_body(
+            request, content_type
+        )
         user_text = None
 
     llm_client = request.app.state.llm_client
@@ -220,7 +231,10 @@ async def ask(
                 else (user_text or "")
             )
             sid = auto_session_logger.log_ask_session(
-                transcript=final_text, answer=answer
+                transcript=final_text,
+                answer=answer,
+                audio_blob=audio_body,
+                audio_mime_type=audio_mime,
             )
             if sid is not None:
                 response["session_id"] = sid
@@ -299,7 +313,10 @@ async def ask(
             # Audio path → final.text = transcript; JSON text path → user_text.
             final_text = llm_input  # already equals transcript or user_text
             sid = auto_session_logger.log_ask_session(
-                transcript=final_text, answer=full_answer
+                transcript=final_text,
+                answer=full_answer,
+                audio_blob=audio_body,
+                audio_mime_type=audio_mime,
             )
             if sid is not None:
                 yield _sse_event("session", {"session_id": sid})

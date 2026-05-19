@@ -186,7 +186,9 @@ async def transcribe(
         }
         if log:
             sid = auto_session_logger.log_transcribe_session(
-                transcript=decision.text
+                transcript=decision.text,
+                audio_blob=body,
+                audio_mime_type=detected_mime,
             )
             if sid is not None:
                 response["session_id"] = sid

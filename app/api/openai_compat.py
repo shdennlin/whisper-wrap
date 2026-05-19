@@ -299,8 +299,14 @@ async def _transcribe_or_translate(
         # Auto-log: OpenAI compat endpoints SHALL NOT alter their response
         # schema (third-party SDKs hard-code field names), so the session id
         # is logged as a side effect only — never returned to the caller.
-        # Failures are swallowed by the logger.
-        auto_session_logger.log_transcribe_session(transcript=result_text)
+        # Failures are swallowed by the logger. Persist the raw audio so
+        # third-party tooling (Shortcut, openai-py, etc.) gets the same
+        # waveform + Re-transcribe affordance the PWA enjoys.
+        auto_session_logger.log_transcribe_session(
+            transcript=result_text,
+            audio_blob=body,
+            audio_mime_type=upload.content_type or "application/octet-stream",
+        )
 
         if response_format == "json":
             return JSONResponse(content={"text": result_text})

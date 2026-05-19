@@ -17,10 +17,51 @@ import logging
 import secrets
 import string
 import time
+from pathlib import Path
 
+from app.config import config
 from app.services.persistence import SessionLocal, sessions_repo
 
 logger = logging.getLogger(__name__)
+
+
+# Mirror the mime → extension mapping that the PWA-driven upload endpoint
+# uses (app/api/sessions.py::_ext_for_mime). Keeping a small local copy
+# avoids reaching into the API layer from a service module, and the set is
+# stable: these are the codecs whisper-wrap accepts on /transcribe.
+_AUDIO_EXTENSIONS: dict[str, str] = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/flac": ".flac",
+    "audio/aac": ".aac",
+}
+
+
+def _persist_audio(sid: str, audio_blob: bytes, mime: str) -> tuple[str, str, int] | None:
+    """Write the raw audio bytes to disk and return (path, mime, size).
+
+    Returns ``None`` if the write fails. Caller is responsible for invoking
+    ``sessions_repo.update_session`` with the returned tuple — we keep that
+    out of here so the same DB transaction owns both the session create and
+    the audio metadata update.
+    """
+    if not audio_blob:
+        return None
+    ext = _AUDIO_EXTENSIONS.get(mime, ".bin")
+    try:
+        config.ensure_data_dirs()
+        target = Path(config.audio_dir) / f"{sid}{ext}"
+        target.write_bytes(audio_blob)
+        return (str(target), mime, len(audio_blob))
+    except OSError:
+        # Disk full / permission denied — don't take down the response path.
+        logger.exception("auto-session: failed to write audio blob for %s", sid)
+        return None
 
 _BASE36 = string.digits + string.ascii_lowercase
 
@@ -51,10 +92,18 @@ def log_transcribe_session(
     *,
     transcript: str,
     duration_ms: int | None = None,
+    audio_blob: bytes | None = None,
+    audio_mime_type: str | None = None,
 ) -> str | None:
     """Persist a `/transcribe` call as a one-shot batch session.
 
-    Returns the new session id, or `None` if the transcript was blank
+    When ``audio_blob`` is supplied, the raw bytes are also written to the
+    audio store so the PWA history detail can show a waveform + Re-transcribe
+    button for Shortcut / curl / OpenAI-compat clients that previously had
+    transcript-only records. Audio persistence failures are non-fatal — the
+    session still gets created with just the transcript.
+
+    Returns the new session id, or ``None`` if the transcript was blank
     (filtered noise — don't pollute history) or a DB write failed.
     """
     if not transcript.strip():
@@ -62,6 +111,10 @@ def log_transcribe_session(
 
     sid = _generate_session_id()
     started_at = int(time.time() * 1000)
+
+    audio_meta: tuple[str, str, int] | None = None
+    if audio_blob and audio_mime_type:
+        audio_meta = _persist_audio(sid, audio_blob, audio_mime_type)
 
     db = SessionLocal()
     try:
@@ -76,12 +129,15 @@ def log_transcribe_session(
             end_ms=duration_ms if duration_ms is not None else 0,
             kind=None,
         )
-        sessions_repo.update_session(
-            db,
-            sid,
-            ended_at=started_at,
-            duration_ms=duration_ms,
-        )
+        update_kwargs: dict[str, object] = {
+            "ended_at": started_at,
+            "duration_ms": duration_ms,
+        }
+        if audio_meta is not None:
+            update_kwargs["audio_path"] = audio_meta[0]
+            update_kwargs["audio_mime_type"] = audio_meta[1]
+            update_kwargs["audio_size_bytes"] = audio_meta[2]
+        sessions_repo.update_session(db, sid, **update_kwargs)
         db.commit()
         return sid
     except Exception:
@@ -97,6 +153,8 @@ def log_ask_session(
     transcript: str,
     answer: str,
     duration_ms: int | None = None,
+    audio_blob: bytes | None = None,
+    audio_mime_type: str | None = None,
 ) -> str | None:
     """Persist an `/ask` call: a final (the transcript or user_text) plus a
     `passthrough` action_run carrying the answer.
@@ -110,6 +168,10 @@ def log_ask_session(
 
     sid = _generate_session_id()
     started_at = int(time.time() * 1000)
+
+    audio_meta: tuple[str, str, int] | None = None
+    if audio_blob and audio_mime_type:
+        audio_meta = _persist_audio(sid, audio_blob, audio_mime_type)
 
     db = SessionLocal()
     try:
@@ -135,12 +197,15 @@ def log_ask_session(
             model_used=None,
             succeeded=True,
         )
-        sessions_repo.update_session(
-            db,
-            sid,
-            ended_at=started_at,
-            duration_ms=duration_ms,
-        )
+        update_kwargs: dict[str, object] = {
+            "ended_at": started_at,
+            "duration_ms": duration_ms,
+        }
+        if audio_meta is not None:
+            update_kwargs["audio_path"] = audio_meta[0]
+            update_kwargs["audio_mime_type"] = audio_meta[1]
+            update_kwargs["audio_size_bytes"] = audio_meta[2]
+        sessions_repo.update_session(db, sid, **update_kwargs)
         db.commit()
         return sid
     except Exception:
