@@ -480,3 +480,107 @@ describe("HistoryView — lifecycle", () => {
     ).toBe(false);
   });
 });
+
+describe("HistoryView — Re-transcribe button (regression guard)", () => {
+  // Regression check for the 04aaf11 → 10ac686 timeline: the audio-replay /
+  // re-ASR feature shipped a Re-transcribe button in the old HistoryPanel.
+  // The master-detail rewrite that replaced HistoryPanel with HistoryView
+  // accidentally dropped the wiring. These tests assert that the button is
+  // rendered exactly when the session has stored audio AND the host wired
+  // in reAsrDeps + reAsrDefaults.
+
+  const audioRecord = {
+    session_id: "a",
+    mime_type: "audio/webm",
+    blob: new Blob(["x"], { type: "audio/webm" }),
+    duration_ms: 1000,
+    byte_size: 1,
+    stored_at: 0,
+  };
+
+  const reAsrDeps = {
+    transcribe: async () => "redo",
+    appendActionRun: () => {},
+  };
+
+  const reAsrDefaults = () => ({
+    prompt: "",
+    language: "",
+    languages: [{ value: "", label: "auto" }],
+  });
+
+  it("renders the toggle when reAsrDeps + audio record are both present", async () => {
+    const { root } = mountView();
+    const view = new HistoryView({
+      root,
+      store: makeStore([seedRecord("a")]),
+      getAudio: async () => audioRecord,
+      reAsrDeps,
+      reAsrDefaults,
+    });
+    view.show("a");
+
+    await vi.waitFor(() => {
+      expect(
+        root.querySelector("[data-testid='re-asr-toggle']"),
+      ).not.toBeNull();
+    });
+  });
+
+  it("hides the toggle when no audio record is available", async () => {
+    const { root } = mountView();
+    const view = new HistoryView({
+      root,
+      store: makeStore([seedRecord("a")]),
+      getAudio: async () => null,
+      reAsrDeps,
+      reAsrDefaults,
+    });
+    view.show("a");
+
+    // Wait long enough for getAudio to resolve and attachPlayer to finish.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(
+      root.querySelector("[data-testid='re-asr-toggle']"),
+    ).toBeNull();
+  });
+
+  it("hides the toggle when reAsrDeps is not wired", async () => {
+    const { root } = mountView();
+    const view = new HistoryView({
+      root,
+      store: makeStore([seedRecord("a")]),
+      getAudio: async () => audioRecord,
+      // No reAsrDeps / reAsrDefaults — simulates a host that opted out.
+    });
+    view.show("a");
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(
+      root.querySelector("[data-testid='re-asr-toggle']"),
+    ).toBeNull();
+  });
+
+  it("hides the toggle after click and mounts the inline form", async () => {
+    const { root } = mountView();
+    const view = new HistoryView({
+      root,
+      store: makeStore([seedRecord("a")]),
+      getAudio: async () => audioRecord,
+      reAsrDeps,
+      reAsrDefaults,
+    });
+    view.show("a");
+
+    const toggle = await vi.waitFor(() => {
+      const b = root.querySelector<HTMLButtonElement>(
+        "[data-testid='re-asr-toggle']",
+      );
+      if (!b) throw new Error("toggle not yet rendered");
+      return b;
+    });
+    toggle.click();
+    expect(toggle.hidden).toBe(true);
+    expect(root.querySelector(".re-asr-form")).not.toBeNull();
+  });
+});

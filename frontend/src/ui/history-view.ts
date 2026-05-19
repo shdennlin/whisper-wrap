@@ -29,6 +29,11 @@ import {
 import type { StoredAudio } from "../storage/history-api-client";
 import { exportSrt, exportTxt, exportVtt } from "../export/subtitle-export";
 import { WaveformPlayer, type PlayerInput } from "./waveform-player";
+import {
+  ReAsrForm,
+  type ReAsrFormDefaults,
+  type ReAsrFormDeps,
+} from "./re-asr-form";
 
 const SEARCH_DEBOUNCE_MS = 120;
 
@@ -61,6 +66,13 @@ export interface HistoryViewOptions {
     actionId: string,
     prompt: string,
   ) => Promise<string>;
+  /** Dependencies for the inline "Re-transcribe" form mounted next to the
+   *  waveform player. When absent, the button is not rendered (graceful
+   *  degradation for tests + environments without /transcribe wiring). */
+  reAsrDeps?: ReAsrFormDeps;
+  /** Defaults snapshot resolved each time the form opens so locale /
+   *  settings changes take effect immediately. */
+  reAsrDefaults?: () => ReAsrFormDefaults;
 }
 
 export class HistoryView {
@@ -595,6 +607,54 @@ export class HistoryView {
     const player = new WaveformPlayer({ root: playerHost, input });
     this.players.push(player);
     if (input.kind === "audio") void player.load();
+
+    // Re-transcribe button (regression repair from 10ac686): only when the
+    // session has stored audio AND the host wired in /transcribe + history
+    // deps. Form mounts inline on click; cancel/complete re-show the button.
+    if (
+      input.kind === "audio" &&
+      record &&
+      this.opts.reAsrDeps &&
+      this.opts.reAsrDefaults
+    ) {
+      const blob = record.blob;
+      const deps = this.opts.reAsrDeps;
+      const defaultsFn = this.opts.reAsrDefaults;
+      const reAsrHost = document.createElement("div");
+      reAsrHost.className = "history-reasr";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "history-reasr-toggle";
+      button.dataset.testid = "re-asr-toggle";
+      button.textContent = t("audio.reTranscribe");
+      const formHost = document.createElement("div");
+      formHost.className = "history-reasr-form-host";
+      button.addEventListener("click", () => {
+        button.hidden = true;
+        const form = new ReAsrForm({
+          ...deps,
+          onComplete: () => {
+            deps.onComplete?.();
+            // Full detail re-render picks up the new ActionRun and brings
+            // the button back. Cheaper alternatives risk staleness if the
+            // store grew runs from another path in the meantime.
+            this.renderDetail(this.currentSessionId);
+          },
+        });
+        const teardown = form.mount(formHost, session.id, blob, defaultsFn());
+        const onCancel = (ev: Event): void => {
+          const tgt = ev.target as HTMLElement;
+          if (tgt.classList.contains("re-asr-cancel")) {
+            formHost.removeEventListener("click", onCancel);
+            teardown();
+            button.hidden = false;
+          }
+        };
+        formHost.addEventListener("click", onCancel);
+      });
+      reAsrHost.append(button, formHost);
+      playerHost.appendChild(reAsrHost);
+    }
   }
 
   private destroyPlayers(): void {

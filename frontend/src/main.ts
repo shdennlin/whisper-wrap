@@ -445,7 +445,50 @@ const historyView = new HistoryView({
     const body = (await r.json()) as { answer: string };
     return body.answer ?? "";
   },
+  // Re-ASR: POST the stored blob back to /transcribe with an optional
+  // user-tuned prompt + language hint, then persist the result as an
+  // ActionRun with action_id="re_asr" so it lands in the runs stack.
+  reAsrDeps: {
+    transcribe: async (blob, opts) => {
+      const form = new FormData();
+      form.append("file", blob, `re-asr.${mimeToExt(blob.type)}`);
+      if (opts.prompt) form.append("prompt", opts.prompt);
+      if (opts.language) form.append("language", opts.language);
+      // log=false: the answer becomes an ActionRun on the existing PWA
+      // session, not a brand-new auto-logged sibling.
+      const r = await fetch(backendUrl("/transcribe?log=false"), {
+        method: "POST",
+        body: form,
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = (await r.json()) as { text: string };
+      return body.text ?? "";
+    },
+    appendActionRun: (sessionId, run) => store.appendActionRun(sessionId, run),
+  },
+  reAsrDefaults: () => ({
+    prompt: "",
+    language: "",
+    languages: RE_ASR_LANGUAGE_OPTIONS,
+  }),
 });
+
+/**
+ * Language options for the re-ASR form. Whisper accepts ISO codes like
+ * "en", "zh", "ja"; we list the most-used ones plus "" for auto-detect.
+ * Kept short on purpose — the form is for tweaking, not for picking an
+ * unfamiliar language.
+ */
+const RE_ASR_LANGUAGE_OPTIONS = [
+  { value: "", label: t("settings.micAuto") },
+  { value: "en", label: "English" },
+  { value: "zh", label: "中文" },
+  { value: "ja", label: "日本語" },
+  { value: "ko", label: "한국어" },
+  { value: "es", label: "Español" },
+  { value: "fr", label: "Français" },
+  { value: "de", label: "Deutsch" },
+];
 
 function actionsBarChoices(): ActionChoice[] {
   // ActionsBar owns the localised label resolution + the loaded template
