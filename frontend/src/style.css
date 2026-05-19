@@ -811,6 +811,13 @@ body { min-height: 100vh; }
 .history-body { white-space: pre-wrap; font-size: 0.85rem; margin: 0.25rem 0; }
 
 .toast { position: fixed; bottom: 1rem; right: 1rem; background: var(--fg); color: var(--bg); padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.85rem; }
+.toast-with-action { display: inline-flex; align-items: center; gap: 0.6rem; }
+.toast-action {
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--bg); border-radius: 3px;
+  padding: 0.2rem 0.6rem; font-size: 0.8rem; cursor: pointer;
+}
+.toast-action:hover { opacity: 0.85; }
 
 /* ===== History master-detail view (history-ux-overhaul) =====
  *

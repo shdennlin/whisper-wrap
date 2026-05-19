@@ -67,9 +67,17 @@ export default defineConfig({
             handler: "NetworkOnly",
           },
           {
+            // NetworkFirst for the shell so a hard reload picks up new builds
+            // immediately when online (the old StaleWhileRevalidate kept users
+            // on the cached shell for one extra open after each deploy, which
+            // on iOS standalone PWAs effectively meant "force-close to refresh").
+            // The 3-second timeout falls back to cache on slow/offline networks.
             urlPattern: ({ url }) => url.pathname.startsWith("/app/"),
-            handler: "StaleWhileRevalidate",
-            options: { cacheName: "pwa-shell" },
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "pwa-shell",
+              networkTimeoutSeconds: 3,
+            },
           },
         ],
       },

@@ -146,7 +146,8 @@ export const STRINGS = {
       "Not HTTPS or localhost — the microphone API will not work. See docs/HTTPS-TAILSCALE.md for Tailscale cert setup.",
     "app.micPermissionDenied":
       "Microphone access denied: {detail}. Allow microphone in browser settings and retry.",
-    "app.newVersionReady": "New version ready. Refresh the page to apply.",
+    "app.newVersionReady": "New version available",
+    "app.newVersionUpdate": "Update",
     "app.errorPrefix": "Error: {message}",
 
     "toast.backendOffline": "Backend offline, cannot start recording",
@@ -304,7 +305,8 @@ export const STRINGS = {
       "目前不是 HTTPS 或 localhost — 麥克風 API 無法使用。請參考 docs/HTTPS-TAILSCALE.md 設定 Tailscale cert。",
     "app.micPermissionDenied":
       "麥克風存取失敗：{detail}。請在瀏覽器設定允許麥克風後重試。",
-    "app.newVersionReady": "新版本已就緒，重新整理頁面以套用。",
+    "app.newVersionReady": "新版本可用",
+    "app.newVersionUpdate": "更新",
     "app.errorPrefix": "錯誤：{message}",
 
     "toast.backendOffline": "後端離線，無法開始錄音",

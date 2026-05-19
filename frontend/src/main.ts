@@ -1135,9 +1135,18 @@ function handleListenEvent(e: ListenEvent): void {
 }
 
 // ---- Service worker --------------------------------------------------------
-registerSW({
+// registerType: "prompt" means the new SW stays in "waiting" until we call
+// updateSW(true) — that posts SKIP_WAITING + reloads. On iOS standalone PWAs
+// there's no native refresh affordance, so the toast MUST give the user an
+// explicit "Update" button; a bare informational toast traps them into
+// force-closing the app, which is what triggered this fix.
+const updateSW = registerSW({
   onNeedRefresh() {
-    toast(t("app.newVersionReady"));
+    toastWithAction(
+      t("app.newVersionReady"),
+      t("app.newVersionUpdate"),
+      () => void updateSW(true),
+    );
   },
   onOfflineReady() {
     // No banner — the offline shell case is documented in INSTALLATION.md.
@@ -1182,6 +1191,31 @@ function toast(message: string): void {
   tNode.textContent = message;
   document.body.appendChild(tNode);
   setTimeout(() => tNode.remove(), 4000);
+}
+
+/** Toast with an inline action button. Used for SW update prompts where the
+ * user MUST get an interaction surface — iOS standalone PWAs have no native
+ * "refresh" otherwise. Click dismisses the toast and calls onAction. */
+function toastWithAction(
+  message: string,
+  actionLabel: string,
+  onAction: () => void,
+): void {
+  const tNode = el("div", "toast toast-with-action");
+  const text = document.createElement("span");
+  text.textContent = message;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "toast-action";
+  btn.textContent = actionLabel;
+  btn.addEventListener("click", () => {
+    tNode.remove();
+    onAction();
+  });
+  tNode.append(text, btn);
+  document.body.appendChild(tNode);
+  // Longer dwell time than plain toast — user needs reading + clicking time.
+  setTimeout(() => tNode.remove(), 10000);
 }
 
 function micPermissionModal(detail: string): void {
