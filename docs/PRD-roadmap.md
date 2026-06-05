@@ -550,8 +550,8 @@ done
   - `Vibrate Device` (送出前)
   - `Show Notification "已送出"` (POST 後)
   - `Speak` (收到答案後朗讀)
-- [ ] **重拍 Shortcut 截圖**：新流程跟舊版差很多（合併 endpoint、加 Ask、加觸覺回饋），更新 `docs/ios-shortcuts-workflow.jpeg`
-- [ ] 更新 docs：放新 Shortcut 連結
+- [x] **重拍 Shortcut 截圖**：v2.4 新增 `docs/images/shortcut-asr-ask.jpg`（取代已刪除的 `docs/ios-shortcuts-workflow.jpeg`），README 同步換到 ASR / ASR-Ask 雙連結 + safe `localhost` default
+- [x] 更新 docs：放新 Shortcut 連結（README + docs/API 中英版皆已換成 ASR `cc6e3b42...` / ASR-Ask `02d03d53...`）
 
 **驗收**：Shortcut 流程中有清楚的觸覺/視覺回饋；截圖反映 v2.0 endpoint 流程
 

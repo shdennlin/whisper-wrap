@@ -286,7 +286,11 @@ done
 
 ### iOS Shortcuts Integration
 
-**Ready-to-Use Shortcut**: 📱 **[Download ASR Shortcut](https://www.icloud.com/shortcuts/698627e2c3934b3e996426b64a943742)**
+**Ready-to-Use Shortcuts**:
+- 📱 [ASR](https://www.icloud.com/shortcuts/cc6e3b42e9c743ec9d15db4c30d0c205) — record → `/transcribe` → clipboard
+- 📱 [ASR-Ask](https://www.icloud.com/shortcuts/02d03d53364e49bab0542a2a6daa3cb6) — record → `/ask` → spoken Gemini answer
+
+On import each shortcut prompts for your server URL (default `localhost`); your endpoint is not embedded in the shared file.
 
 **Manual Setup**:
 1. Record Audio (or Get File from input)

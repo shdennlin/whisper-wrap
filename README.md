@@ -14,6 +14,13 @@ Both backends conform to the same `WhisperBackend` Protocol; the `/transcribe`, 
 
 > **Tested surface**: macOS (Apple Silicon) with the ggml + Core ML path is the primary developer setup and is exercised regularly. The Linux CUDA path and the Docker image are **untested** — they exist in code but have not been verified end-to-end. If you run either, please file an issue with what worked and what didn't.
 
+## 📸 Screenshots
+
+| Live captioning | History + AI actions | Apple Shortcuts |
+| - | - | - |
+| <img src="docs/images/live-caption.jpg" alt="Live caption view: timestamped transcript streaming in real time" width="280"> | <img src="docs/images/history-view.jpg" alt="History master-detail with search, audio player, and Re-transcribe" width="280"> | <img src="docs/images/shortcut-asr-ask.jpg" alt="ASR-Ask Shortcut wired to the API endpoint via import question" width="280"> |
+| Real-time partial → final captions via `WS /listen` (PWA, installable). | Browse past sessions, search, replay audio, re-run AI actions, export SRT/VTT/TXT. | iOS/macOS Shortcut that records, posts to `/ask`, and reads the answer aloud. |
+
 ## 🚀 Quick Start
 
 ### Prerequisites (one-time on a fresh machine)
@@ -73,18 +80,16 @@ Open `http://localhost:8000/app/` for the PWA, `http://localhost:8000/status` fo
 
 ## 📱 iOS Shortcuts Integration
 
-**Ready-to-Use Shortcut**: 📱 **[Download ASR Shortcut](https://www.icloud.com/shortcuts/698627e2c3934b3e996426b64a943742)**
+Two ready-to-use shortcuts. On import, each one prompts for your server URL (default `localhost`) — your endpoint never gets baked into the shared file.
 
-<img src="docs/ios-shortcuts-workflow.jpeg" alt="iOS Shortcuts Workflow" width="400">
+| Shortcut | What it does | Install |
+| - | - | - |
+| **ASR** | Record → `/transcribe` → copy text to clipboard. | 📱 [Add to Shortcuts](https://www.icloud.com/shortcuts/cc6e3b42e9c743ec9d15db4c30d0c205) |
+| **ASR-Ask** | Record → `/ask` → speak the Gemini answer back. | 📱 [Add to Shortcuts](https://www.icloud.com/shortcuts/02d03d53364e49bab0542a2a6daa3cb6) |
 
-This shortcut provides a complete voice transcription workflow:
-- 🎙️ **Record Audio**: Tap to record voice memos
-- 🌐 **Auto-Transcribe**: Sends audio to your whisper-wrap server
-- 📝 **Show Results**: Displays transcribed text immediately
-- 📋 **Copy to Clipboard**: Automatically copies text for easy pasting anywhere
-- ⚙️ **Configurable**: Easy server URL setup in shortcut settings
+<img src="docs/images/shortcut-asr-ask.jpg" alt="ASR-Ask shortcut workflow on iOS" width="320">
 
-**Setup**: Install shortcut → Configure server URL → Test with voice recording
+**Setup**: tap the link → "Add Shortcut" → on first run, paste your endpoint (e.g., `http://192.168.1.10:8000` or your Tailscale `https://...ts.net:PORT`).
 
 ## 🔧 API Endpoints
 

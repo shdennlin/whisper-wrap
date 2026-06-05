@@ -280,7 +280,11 @@ done
 
 ### iOS Shortcuts Integration
 
-**現成可用的捷徑**：📱 **[下載 ASR Shortcut](https://www.icloud.com/shortcuts/698627e2c3934b3e996426b64a943742)**
+**現成可用的捷徑**：
+- 📱 [ASR](https://www.icloud.com/shortcuts/cc6e3b42e9c743ec9d15db4c30d0c205) — 錄音 → `/transcribe` → 複製到剪貼簿
+- 📱 [ASR-Ask](https://www.icloud.com/shortcuts/02d03d53364e49bab0542a2a6daa3cb6) — 錄音 → `/ask` → 唸出 Gemini 回答
+
+匯入時會問你 server URL（預設 `localhost`），share 出去的檔案不會嵌入你的真實 endpoint。
 
 **手動設定**：
 1. 錄製音訊（或從輸入取得檔案）

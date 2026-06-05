@@ -14,6 +14,13 @@ v2.1 在同一個 codebase 中內建兩種 Whisper backend，並依據主機 OS 
 
 > **測試覆蓋範圍**：macOS（Apple Silicon）走 ggml + Core ML 是主要開發環境，會持續驗證。Linux CUDA 路徑與 Docker image **目前都尚未測試過** — code 存在但沒有 end-to-end 驗證過。如果你有實際跑過，歡迎開 issue 回報哪些 work、哪些 broken。
 
+## 📸 截圖
+
+| 即時字幕 | 歷史紀錄 + AI Actions | Apple Shortcuts |
+| - | - | - |
+| <img src="docs/images/live-caption.jpg" alt="即時字幕畫面：附時間戳的逐字稿即時串流" width="280"> | <img src="docs/images/history-view.jpg" alt="歷史紀錄 master-detail 介面：搜尋、音檔重播、Re-transcribe" width="280"> | <img src="docs/images/shortcut-asr-ask.jpg" alt="ASR-Ask Shortcut，透過 import question 接 API endpoint" width="280"> |
+| 透過 `WS /listen` 即時 partial → final 字幕（PWA、可安裝到主畫面）。 | 瀏覽過去 session、搜尋、重播音檔、重跑 AI action、匯出 SRT/VTT/TXT。 | iOS/macOS Shortcut：錄音、丟給 `/ask`、把答案唸出來。 |
+
 ## 🚀 Quick Start
 
 ### 前置需求（新機器上一次性安裝）
@@ -73,18 +80,16 @@ curl -X POST http://localhost:8000/transcribe \
 
 ## 📱 iOS Shortcuts 整合
 
-**現成可用的捷徑**：📱 **[下載 ASR Shortcut](https://www.icloud.com/shortcuts/698627e2c3934b3e996426b64a943742)**
+兩個現成可用的捷徑。匯入時會問你 server URL（預設 `localhost`）— 你的真實 endpoint 不會被打包進 share 出去的檔案。
 
-<img src="docs/ios-shortcuts-workflow.jpeg" alt="iOS Shortcuts Workflow" width="400">
+| 捷徑 | 功能 | 安裝 |
+| - | - | - |
+| **ASR** | 錄音 → `/transcribe` → 文字複製到剪貼簿。 | 📱 [加入捷徑](https://www.icloud.com/shortcuts/cc6e3b42e9c743ec9d15db4c30d0c205) |
+| **ASR-Ask** | 錄音 → `/ask` → 把 Gemini 答案唸出來。 | 📱 [加入捷徑](https://www.icloud.com/shortcuts/02d03d53364e49bab0542a2a6daa3cb6) |
 
-此捷徑提供完整的語音轉寫流程：
-- 🎙️ **錄音**：點一下即可錄製語音備忘
-- 🌐 **自動轉寫**：將音訊送到你的 whisper-wrap 伺服器
-- 📝 **顯示結果**：立即顯示轉寫文字
-- 📋 **複製到剪貼簿**：自動複製，方便貼到任何地方
-- ⚙️ **可設定**：在捷徑設定中輕鬆指定伺服器 URL
+<img src="docs/images/shortcut-asr-ask.jpg" alt="ASR-Ask 捷徑流程" width="320">
 
-**設定步驟**：安裝捷徑 → 設定伺服器 URL → 用語音錄音測試
+**設定**：點連結 → 「加入捷徑」 → 第一次執行時填你的 endpoint（例如 `http://192.168.1.10:8000`，或 Tailscale 的 `https://...ts.net:PORT`）。
 
 ## 🔧 API Endpoints
 
