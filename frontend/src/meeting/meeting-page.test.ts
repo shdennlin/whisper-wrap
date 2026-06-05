@@ -181,7 +181,8 @@ describe("createMeetingPage — upload flow", () => {
       },
     ];
     const fetchFn = vi.fn(
-      async () => responses.shift() as unknown as Response,
+      async (..._args: unknown[]) =>
+        responses.shift() as unknown as Response,
     );
     // submitMeeting / pollUntilDone use the global fetch directly; for an
     // end-to-end page test we stub it here. The page's `fetchFn` opt is only

@@ -331,9 +331,7 @@ def test_meeting_env_overrides(clean_env):
     clean_env.setenv("MEETING_MODEL_NAME", "large-v3-turbo")
     clean_env.setenv("MEETING_JOB_TTL_SECONDS", "7200")
     clean_env.setenv("MEETING_MAX_JOBS", "5")
-    clean_env.setenv(
-        "MEETING_DIARIZATION_PIPELINE", "pyannote/speaker-diarization-3.0"
-    )
+    clean_env.setenv("MEETING_DIARIZATION_PIPELINE", "pyannote/speaker-diarization-3.0")
     clean_env.setenv("MEETING_ALIGN_MODEL", "WAV2VEC2_ASR_BASE_960H")
     c = Config()
     assert c.HF_TOKEN == "hf_test_token"

@@ -133,6 +133,8 @@ Full schemas in README.md and `docs/API.md`. Highlights only:
 | Endpoint | Notes |
 | - | - |
 | `POST /transcribe` | Content-Type dispatch: multipart, raw `audio/*`, `application/octet-stream`. Query: `language`, `prompt`. |
+| `POST /transcribe/meeting` | Long-form meeting analysis (speaker diarization + word timestamps). Async: returns 202 + `job_id`; client polls. Opt-in `[meeting]` extras + `HF_TOKEN` required (503 otherwise). |
+| `GET /transcribe/meeting/{job_id}` | Poll a meeting job. Status `pending` → `running` → `done`/`error`; eviction after `MEETING_JOB_TTL_SECONDS` (default 3600). |
 | `POST /ask` | Audio/text in, Gemini answer out. `?stream=true` → SSE `transcript` → `token*` → `done`/`error`. JSON body `{"text": "..."}` skips STT. |
 | `WS /listen` | 16 kHz mono `pcm_s16le` binary frames in; JSON `partial`/`final` events out. Disconnect mid-utterance discards in-flight buffer. |
 | `POST /v1/audio/transcriptions` | OpenAI-Whisper-compat. `model` is advisory (reserved aliases + active model silent; others log WARN). `response_format`: json/text/srt/verbose_json/vtt. `Authorization` header accepted but ignored. |
@@ -141,6 +143,45 @@ Full schemas in README.md and `docs/API.md`. Highlights only:
 | `GET /actions` | Prompt-action templates from `registry/actions.yaml`. PWA substitutes `{transcript}` client-side. |
 | `GET /app/` | Static PWA bundle (404 if `make build-frontend` hasn't run). |
 | `GET /status`, `GET /` | Health/discovery. Lifespan blocks startup until model is loaded, so `model.loaded=true` is always true. |
+
+## Meeting Mode (architecture)
+
+The meeting endpoint is **architecturally isolated** from the rest of the
+server — every existing endpoint (`/transcribe`, `/listen`, `/ask`, `/v1/*`)
+continues unchanged. Key facts a future Claude session needs:
+
+- **Separate endpoint, separate code path.** `app/api/meeting.py` mounts
+  `POST /transcribe/meeting` + `GET /transcribe/meeting/{id}`. It reuses
+  `app.api.transcribe`'s libmagic+ffmpeg upload helpers but never goes
+  through the `WhisperBackend` Protocol.
+- **`MeetingAnalyzer` is NOT a `WhisperBackend`.** Defined in
+  `app/services/meeting.py`. Owns three sub-models: faster-whisper CT2
+  ASR, wav2vec2 alignment, pyannote diarization. Constructed lazily
+  (`from_config()`) the first time the endpoint passes its 503 gate.
+- **Lazy load, never at lifespan startup.** `app.state.meeting_analyzer`
+  starts as `None`. Server boot does not import `whisperx`,
+  `pyannote.audio`, or `torch`. Pinned by `tests/test_meeting_lifecycle.py`.
+- **macOS dual-variant requirement.** WhisperX requires `format: ct2`
+  regardless of platform — so on macOS the user must download **both** the
+  ggml (Core ML) variant (for `/transcribe`) and the ct2 variant (for
+  `/transcribe/meeting`). The 503 with reason `model <name> ct2 variant
+  is not downloaded` surfaces this.
+- **HF token gated at endpoint level.** `HF_TOKEN` missing or empty →
+  503 on meeting endpoints only. Server starts normally. Same for the
+  `[meeting]` optional dependency group (`uv sync --extra meeting`).
+- **In-memory job store** (`app/services/meeting_jobs.py`). ULID-style
+  sortable IDs, TTL+capacity eviction on every poll/accept, NOT persisted.
+  Jobs gone after restart — client must re-upload.
+- **Single-job concurrency.** `asyncio.Lock` inside the analyzer. Second
+  job submitted while first is running stays `pending`.
+- **FastAPI `BackgroundTasks`** runs the pipeline so the HTTP response
+  returns in <1s. Polling-based status updates.
+- **PWA Meeting Mode** at `/app/#/meeting` (`frontend/src/meeting/`).
+  Speaker-coloured transcript with click-to-seek, speaker-aware
+  SRT/VTT/TXT export (`frontend/src/export/speaker-{srt,vtt,txt}.ts`).
+- **Pre-stage models** with `DIARIZE=1 make download-model MODEL=<name>` —
+  fetches both the model variants AND the pyannote diarization +
+  segmentation snapshots into the HF cache.
 
 ## Configuration
 

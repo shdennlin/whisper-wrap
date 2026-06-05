@@ -31,7 +31,9 @@ def test_constructor_does_not_import_whisperx_or_pyannote(monkeypatch):
     _fresh_analyzer()
 
     assert "whisperx" not in sys.modules, "constructor must not import whisperx"
-    assert "pyannote.audio" not in sys.modules, "constructor must not import pyannote.audio"
+    assert "pyannote.audio" not in sys.modules, (
+        "constructor must not import pyannote.audio"
+    )
 
 
 @pytest.mark.asyncio

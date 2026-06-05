@@ -552,7 +552,41 @@ function applyLayoutForRoute(): void {
   }
 }
 
+// Meeting Mode lives at #/meeting. The page module is loaded on the first
+// navigation so users who never visit don't pay the parse cost.
+let meetingHost: HTMLElement | null = null;
+let meetingPageMounted = false;
+function ensureMeetingHost(): HTMLElement {
+  if (meetingHost) return meetingHost;
+  meetingHost = document.createElement("div");
+  meetingHost.id = "meeting-view-host";
+  meetingHost.hidden = true;
+  document.body.appendChild(meetingHost);
+  return meetingHost;
+}
+
+async function activateMeetingRoute(): Promise<void> {
+  const host = ensureMeetingHost();
+  if (!meetingPageMounted) {
+    const { createMeetingPage } = await import("./meeting/meeting-page");
+    host.appendChild(createMeetingPage().element);
+    meetingPageMounted = true;
+  }
+  host.hidden = false;
+  recordingShell.hidden = true;
+}
+
+function deactivateMeetingRoute(): void {
+  if (meetingHost) meetingHost.hidden = true;
+}
+
 onRouteChange((route) => {
+  if (route.name === "meeting") {
+    currentRoute = { name: "shell" };
+    void activateMeetingRoute();
+    return;
+  }
+  deactivateMeetingRoute();
   currentRoute =
     route.name === "history"
       ? { name: "history", sessionId: route.sessionId }

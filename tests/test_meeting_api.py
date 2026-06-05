@@ -103,6 +103,7 @@ def _post_meeting_audio(client, **query):
 
 def test_post_meeting_returns_job_handle(stubbed_app, meeting_available):
     """A valid upload SHALL return HTTP 202 with job_id and status_url."""
+
     async def fake_analyze(audio_path, **kwargs):
         return _fake_meeting_result()
 
@@ -142,6 +143,7 @@ def test_post_meeting_invalid_speaker_range_returns_400(stubbed_app, meeting_ava
 
 def test_get_meeting_status_phases(stubbed_app, meeting_available):
     """Polling SHALL surface pending → done → 404 transitions."""
+
     async def fake_analyze(audio_path, **kwargs):
         return _fake_meeting_result()
 
@@ -170,6 +172,7 @@ def test_get_meeting_status_reports_error_for_failed_pipeline(
     stubbed_app, meeting_available
 ):
     """Pipeline failures SHALL surface as status: 'error' with a typed code."""
+
     async def failing_analyze(audio_path, **kwargs):
         raise RuntimeError("pyannote model crashed")
 
@@ -186,7 +189,9 @@ def test_get_meeting_status_reports_error_for_failed_pipeline(
     assert body["result"] is None
 
 
-def test_post_meeting_returns_within_one_second(stubbed_app, meeting_available, monkeypatch):
+def test_post_meeting_returns_within_one_second(
+    stubbed_app, meeting_available, monkeypatch
+):
     """The HTTP response SHALL come back in well under 1 second even when the
     analysis pipeline is slow (proves Async background processing decision).
 
@@ -194,6 +199,7 @@ def test_post_meeting_returns_within_one_second(stubbed_app, meeting_available, 
     synchronous body-build latency by stubbing `add_task` to a no-op for the
     duration of this test only (monkeypatch restores it after).
     """
+
     async def slow_analyze(audio_path, **kwargs):
         await asyncio.sleep(2.0)
         return _fake_meeting_result()
@@ -216,6 +222,7 @@ def test_meeting_result_shape(stubbed_app, meeting_available):
     """The MeetingResult JSON shape SHALL include language, duration_seconds,
     speakers, segments with speaker/start/end/text, and word lists when
     enable_word_timestamps is true (default)."""
+
     async def fake_analyze(audio_path, **kwargs):
         return _fake_meeting_result()
 
@@ -225,7 +232,12 @@ def test_meeting_result_shape(stubbed_app, meeting_available):
         body = client.get(f"/transcribe/meeting/{resp.json()['job_id']}").json()
 
     result = body["result"]
-    assert set(result.keys()) >= {"language", "duration_seconds", "speakers", "segments"}
+    assert set(result.keys()) >= {
+        "language",
+        "duration_seconds",
+        "speakers",
+        "segments",
+    }
     assert result["language"] == "en"
     assert result["duration_seconds"] == 11.2
     seg = result["segments"][0]
@@ -238,6 +250,7 @@ def test_meeting_result_omits_words_when_word_timestamps_disabled(
     stubbed_app, meeting_available
 ):
     """When `enable_word_timestamps=false`, every Segment SHALL omit `words`."""
+
     async def fake_analyze(audio_path, *, enable_word_timestamps=True, **kwargs):
         result = _fake_meeting_result()
         if not enable_word_timestamps:
@@ -260,13 +273,18 @@ def test_meeting_result_omits_words_when_word_timestamps_disabled(
 def test_503_when_extras_not_installed(stubbed_app, monkeypatch):
     monkeypatch.setattr(
         "importlib.util.find_spec",
-        lambda name: None if name in {"whisperx", "pyannote", "pyannote.audio"} else MagicMock(),
+        lambda name: (
+            None if name in {"whisperx", "pyannote", "pyannote.audio"} else MagicMock()
+        ),
     )
     with TestClient(stubbed_app) as client:
         resp = _post_meeting_audio(client)
     assert resp.status_code == 503
     detail = resp.json()["detail"]
-    assert detail == {"error": "meeting_unavailable", "reason": "meeting extras not installed"}
+    assert detail == {
+        "error": "meeting_unavailable",
+        "reason": "meeting extras not installed",
+    }
 
 
 def test_503_when_hf_token_missing(stubbed_app, monkeypatch):

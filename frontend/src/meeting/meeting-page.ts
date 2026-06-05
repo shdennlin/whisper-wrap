@@ -86,10 +86,11 @@ export function createMeetingPage(
   const exportsEl = root.querySelector<HTMLElement>(".meeting-exports")!;
 
   const fetchFn = opts.fetchFn ?? fetch;
-  const createObjectURL =
-    opts.createObjectURL ??
-    (typeof URL !== "undefined" && URL.createObjectURL?.bind(URL)) ??
-    (() => "");
+  const defaultCreateObjectURL: (file: File | Blob) => string =
+    typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+      ? URL.createObjectURL.bind(URL)
+      : () => "";
+  const createObjectURL = opts.createObjectURL ?? defaultCreateObjectURL;
   const fetchStatus =
     opts.fetchStatus ??
     (async () => {
@@ -107,7 +108,6 @@ export function createMeetingPage(
     });
 
   let lastResult: MeetingResult | null = null;
-  let lastObjectUrl: string | null = null;
 
   function showError(message: string) {
     errorEl.textContent = message;
@@ -121,7 +121,6 @@ export function createMeetingPage(
 
   function renderResult(result: MeetingResult, objectUrl: string) {
     lastResult = result;
-    lastObjectUrl = objectUrl;
     audioEl.src = objectUrl;
     const colors = speakerColorMap(result.speakers);
 

@@ -251,6 +251,36 @@ if any of them is missing:
    `503 {"error": "meeting_unavailable", "reason": "HF_TOKEN is not configured"}`
    and `/status.meeting.hf_token_configured` is `false`.
 
+Pre-stage the pyannote model weights for air-gapped or first-run-latency
+reasons:
+
+```bash
+DIARIZE=1 make download-model MODEL=breeze-asr-25
+```
+
+### Usage
+
+```bash
+# Upload a meeting → returns a job handle
+curl -s -X POST http://localhost:8000/transcribe/meeting \
+  -H "Content-Type: audio/wav" \
+  --data-binary @meeting.wav
+# → {"job_id":"01JFA…","status_url":"/transcribe/meeting/01JFA…"}
+
+# Poll until status == "done"
+curl -s http://localhost:8000/transcribe/meeting/01JFA…
+# → {"status":"done","progress":1.0,"stage":"complete",
+#    "result":{"language":"zh","duration_seconds":1823.4,
+#              "speakers":["SPEAKER_00","SPEAKER_01"],
+#              "segments":[{"speaker":"SPEAKER_00",
+#                           "start":0.52,"end":4.18,
+#                           "text":"今天會議的主題是…","words":[…]},…]}}
+```
+
+The PWA Meeting Mode page at `/app/#/meeting` wraps the same workflow with
+upload, speaker-coloured transcript, click-to-seek audio playback, and
+speaker-aware SRT/VTT/TXT export.
+
 ### Performance
 
 Meeting analysis runs the WhisperX pipeline, which requires a CT2 ASR

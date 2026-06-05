@@ -318,5 +318,3 @@ async def get_meeting_status(job_id: str, request: Request) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail={"error": "job_not_found"})
     return _job_to_json(job)
-
-

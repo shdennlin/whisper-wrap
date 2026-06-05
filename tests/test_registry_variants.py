@@ -532,7 +532,9 @@ def test_reject_no_top_level_models(tmp_path):
         load_registry(p)
 
 
-def test_resolve_ct2_variant_returns_directory_for_model_with_ct2(tmp_path, monkeypatch):
+def test_resolve_ct2_variant_returns_directory_for_model_with_ct2(
+    tmp_path, monkeypatch
+):
     """A model that declares a ct2 variant SHALL resolve to its models/<local_dir>."""
     from app.services import registry
 
@@ -575,5 +577,7 @@ def test_resolve_ct2_variant_raises_when_model_not_in_registry(tmp_path, monkeyp
     p = _write(tmp_path, _two_variant_entry())
     monkeypatch.setattr(registry, "DEFAULT_REGISTRY_PATH", p)
 
-    with pytest.raises(registry.MeetingModelMissingError, match="not declared in the registry"):
+    with pytest.raises(
+        registry.MeetingModelMissingError, match="not declared in the registry"
+    ):
         registry.resolve_ct2_variant("nonexistent-model")

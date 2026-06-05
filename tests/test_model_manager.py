@@ -317,11 +317,14 @@ def test_download_ggml_passes_filename_and_encoder_includes(tmp_path):
     env["WHISPER_WRAP_REGISTRY"] = str(registry)
     env["LOGFILE"] = str(log)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    env["BACKEND_FORMAT"] = "ggml"   # pin so the test is platform-independent
+    env["BACKEND_FORMAT"] = "ggml"  # pin so the test is platform-independent
 
     result = subprocess.run(
         ["bash", str(SCRIPT), "download", "breeze"],
-        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=PROJECT_ROOT,
     )
     assert result.returncode == 0, result.stderr
     assert log.exists(), "fake hf was not invoked"
@@ -349,7 +352,10 @@ def test_download_ct2_passes_subfolder_include(tmp_path):
 
     result = subprocess.run(
         ["bash", str(SCRIPT), "download", "breeze"],
-        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=PROJECT_ROOT,
     )
     assert result.returncode == 0, result.stderr
     args = log.read_text()
@@ -632,7 +638,10 @@ def test_download_with_diarization_flag_prefetches_pyannote(tmp_path):
 
     result = subprocess.run(
         ["bash", str(SCRIPT), "download", "breeze", "--with-diarization"],
-        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=PROJECT_ROOT,
     )
     assert result.returncode == 0, result.stderr
     assert hf_log.exists(), "fake huggingface_hub was not invoked"
@@ -660,7 +669,10 @@ def test_download_with_diarization_requires_hf_token(tmp_path):
 
     result = subprocess.run(
         ["bash", str(SCRIPT), "download", "breeze", "--with-diarization"],
-        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=PROJECT_ROOT,
     )
     assert result.returncode != 0
     combined = result.stderr + result.stdout
@@ -690,7 +702,10 @@ def test_download_without_diarization_flag_skips_pyannote(tmp_path):
 
     result = subprocess.run(
         ["bash", str(SCRIPT), "download", "breeze"],
-        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=PROJECT_ROOT,
     )
     assert result.returncode == 0, result.stderr
     assert not hf_log.exists() or hf_log.read_text() == "", (

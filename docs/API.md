@@ -125,6 +125,95 @@ Timestamps are relative to the WebSocket connection start (monotonically
 non-decreasing). A single connection may carry multiple utterances; closing
 the socket mid-utterance discards the in-flight buffer (no `final` event).
 
+### POST /transcribe/meeting
+
+Long-form meeting analysis with speaker diarization (WhisperX + pyannote).
+Asynchronous: the endpoint returns HTTP **202** with a job handle; clients
+poll `GET /transcribe/meeting/{job_id}` until `status == "done"`.
+
+The endpoint is opt-in: see the README "Meeting Mode" section for
+installation (`uv sync --extra meeting`, HF user agreements, `HF_TOKEN`).
+Until prerequisites are met it returns HTTP **503** with a typed reason.
+
+**Request**:
+
+- `Content-Type`: same dispatch as `/transcribe` —
+  `multipart/form-data` (`file` field), raw `audio/*`, or
+  `application/octet-stream`.
+- Query parameters (all optional):
+  - `language` — ISO 639-1 code; omit for auto-detection.
+  - `num_speakers` — exact speaker count when known.
+  - `min_speakers` / `max_speakers` — speaker-count bounds.
+  - `enable_word_timestamps` — boolean (default `true`); set `false` to
+    skip the alignment stage and omit per-word timestamps.
+
+**202 Accepted** response:
+
+```json
+{
+  "job_id": "01JFA9YS3Q4VRD3M2K6V0YZ8AB",
+  "status_url": "/transcribe/meeting/01JFA9YS3Q4VRD3M2K6V0YZ8AB"
+}
+```
+
+**Error responses**:
+
+| HTTP | Body | When |
+| ---- | ---- | ---- |
+| 400 | `{"error":"invalid_audio","reason":"..."}` | libmagic rejects the upload as non-audio. |
+| 400 | `{"error":"invalid_speaker_range","reason":"max_speakers must be >= min_speakers"}` | Speaker bounds are inconsistent or non-positive. |
+| 413 | `File too large. Maximum size: 100MB` | Body exceeds `MAX_FILE_SIZE_MB`. |
+| 415 | `Unsupported Content-Type: ...` | Body Content-Type not in the dispatch list. |
+| 503 | `{"error":"meeting_unavailable","reason":"meeting extras not installed"}` | `whisperx`/`pyannote.audio` not importable. |
+| 503 | `{"error":"meeting_unavailable","reason":"HF_TOKEN is not configured"}` | `HF_TOKEN` env unset/empty. |
+| 503 | `{"error":"meeting_unavailable","reason":"model <name> has no ct2 variant"}` | Registry lacks a `format: ct2` variant for the active model. |
+| 503 | `{"error":"meeting_unavailable","reason":"model <name> ct2 variant is not downloaded; run make download-model MODEL=<name>"}` | CT2 directory missing on disk. |
+
+### GET /transcribe/meeting/{job_id}
+
+Poll a previously created meeting job. Returns the current state plus the
+final `MeetingResult` once `status == "done"`.
+
+**Response shapes** (by `status`):
+
+```json
+// Pending or running
+{"status":"running","progress":0.4,"stage":"align","result":null}
+
+// Done
+{"status":"done","progress":1.0,"stage":"complete",
+ "result":{
+   "language":"zh",
+   "duration_seconds":1823.4,
+   "speakers":["SPEAKER_00","SPEAKER_01"],
+   "segments":[
+     {"speaker":"SPEAKER_00","start":0.52,"end":4.18,
+      "text":"今天會議的主題是…",
+      "words":[{"word":"今天","start":0.52,"end":0.91}, ...]}
+   ]
+ }}
+
+// Error
+{"status":"error","stage":"diarize","progress":0.7,
+ "error":{"code":"diarize_failed","message":"<reason>"},
+ "result":null}
+```
+
+`stage` is one of `pending` / `asr` / `align` / `diarize` / `complete`.
+`error.code` is one of `asr_failed` / `align_failed` / `diarize_failed` /
+`pipeline_failed`.
+
+**404** is returned when the `job_id` is unknown — either it was never
+issued or it has been evicted (default TTL 1 h; default capacity 20 jobs).
+
+**Notes**:
+
+- Word lists are omitted entirely when the request used
+  `enable_word_timestamps=false`.
+- `segments[i].start <= segments[i+1].start` (non-decreasing).
+- Only one job runs at a time per process; concurrent submissions queue
+  and report `status: "pending"` until the lock is free.
+
 ### GET /status
 
 Service health, loaded model details, and LLM configuration. Returns
