@@ -16,36 +16,40 @@ import unicodedata
 # to avoid inflating CJK ratio with punctuation characters)
 _CJK_PATTERN = re.compile(
     r"[\u4e00-\u9fff"  # CJK Unified Ideographs
-    r"\u3400-\u4dbf"   # CJK Unified Ideographs Extension A
-    r"\uf900-\ufaff"   # CJK Compatibility Ideographs
-    r"\u2e80-\u2eff"   # CJK Radicals Supplement
+    r"\u3400-\u4dbf"  # CJK Unified Ideographs Extension A
+    r"\uf900-\ufaff"  # CJK Compatibility Ideographs
+    r"\u2e80-\u2eff"  # CJK Radicals Supplement
     r"]"
 )
 
 # Punctuation mapping: Chinese → English
-_ZH_TO_EN = str.maketrans({
-    "\uff0c": ",",   # ，
-    "\u3002": ".",   # 。
-    "\uff1f": "?",   # ？
-    "\uff01": "!",   # ！
-    "\uff1a": ":",   # ：
-    "\uff1b": ";",   # ；
-    "\u300c": '"',   # 「
-    "\u300d": '"',   # 」
-    "\u300e": '"',   # 『
-    "\u300f": '"',   # 』
-    "\uff08": "(",   # （
-    "\uff09": ")",   # ）
-})
+_ZH_TO_EN = str.maketrans(
+    {
+        "\uff0c": ",",  # ，
+        "\u3002": ".",  # 。
+        "\uff1f": "?",  # ？
+        "\uff01": "!",  # ！
+        "\uff1a": ":",  # ：
+        "\uff1b": ";",  # ；
+        "\u300c": '"',  # 「
+        "\u300d": '"',  # 」
+        "\u300e": '"',  # 『
+        "\u300f": '"',  # 』
+        "\uff08": "(",  # （
+        "\uff09": ")",  # ）
+    }
+)
 
 # Punctuation mapping: English → Chinese (only fullwidth punctuation,
 # excludes . and , to avoid corrupting numbers like 3.14 or 1,000)
-_EN_TO_ZH = str.maketrans({
-    "?": "\uff1f",   # ？
-    "!": "\uff01",   # ！
-    ":": "\uff1a",   # ：
-    ";": "\uff1b",   # ；
-})
+_EN_TO_ZH = str.maketrans(
+    {
+        "?": "\uff1f",  # ？
+        "!": "\uff01",  # ！
+        ":": "\uff1a",  # ：
+        ";": "\uff1b",  # ；
+    }
+)
 
 
 def detect_text_language(text: str) -> str:
@@ -62,7 +66,7 @@ def detect_text_language(text: str) -> str:
     for ch in text:
         if _CJK_PATTERN.match(ch):
             cjk_count += 1
-        elif unicodedata.category(ch).startswith("L") and ord(ch) < 0x2e80:
+        elif unicodedata.category(ch).startswith("L") and ord(ch) < 0x2E80:
             latin_count += 1
 
     if cjk_count == 0 and latin_count == 0:

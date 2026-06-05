@@ -1,85 +1,169 @@
+"""Application configuration for the v2 in-process faster-whisper backend.
+
+Dotenv loading is intentionally NOT triggered at import time. Entry points (main.py
+and the test conftest) call `load_env_file()` explicitly so tests don't inherit
+stale values from the developer's local `.env` file.
+
+Env vars are read in `Config.__init__` (not as class attributes) so:
+  - tests can construct fresh Config() instances after patching the environment
+  - the module never needs to be reloaded
+  - the module-level `config` singleton remains the single object every importer
+    holds a reference to — monkey-patching its attributes is visible everywhere
+"""
+
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Load environment variables from `.env`. Must be called by the entry point."""
+    load_dotenv(path)
+
+
+def _parse_bool(raw: str | None, *, default: bool, var_name: str = "") -> bool:
+    """Parse a `"true"`/`"false"` env string with default fallback.
+
+    None or empty string → silent default. Any other non-matching value logs a
+    WARN naming `var_name` and falls back to default. Comparison is
+    case-insensitive.
+    """
+    if raw is None or raw == "":
+        return default
+    lowered = raw.strip().lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    logger.warning(
+        "Invalid value for %s=%r; using default %r",
+        var_name or "(unknown)",
+        raw,
+        default,
+    )
+    return default
+
+
+def _parse_int(raw: str | None, *, default: int, var_name: str = "") -> int:
+    """Parse a non-negative integer env string with default fallback.
+
+    None or empty string → silent default. Non-integer or negative value logs a
+    WARN naming `var_name` and falls back to default.
+    """
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid value for %s=%r; using default %r",
+            var_name or "(unknown)",
+            raw,
+            default,
+        )
+        return default
+    if value < 0:
+        logger.warning(
+            "Invalid value for %s=%r (must be non-negative); using default %r",
+            var_name or "(unknown)",
+            raw,
+            default,
+        )
+        return default
+    return value
 
 
 class Config:
-    """Application configuration loaded from environment variables."""
+    """Application configuration loaded from environment variables at construction time."""
 
-    # Server port configuration
-    API_PORT: int = int(os.getenv("API_PORT", "8000"))
-    API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
+    def __init__(self) -> None:
+        # Server
+        self.API_PORT: int = int(os.getenv("API_PORT", "8000"))
+        self.API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
 
-    # Whisper server configuration
-    WHISPER_SERVER_URL: str = os.getenv("WHISPER_SERVER_URL", "http://localhost:9000")
-    WHISPER_SERVER_PORT: int = int(os.getenv("WHISPER_SERVER_PORT", "9000"))
-    WHISPER_SERVER_HOST: str = os.getenv("WHISPER_SERVER_HOST", "localhost")
+        # Model resolution. MODEL_DIR (if set) overrides MODEL_NAME registry lookup.
+        self.MODEL_NAME: str = os.getenv("MODEL_NAME", "breeze-asr-25")
+        self.MODEL_DIR: str | None = os.environ.get("MODEL_DIR") or None
 
-    # Model configuration
-    MODEL_NAME: str = os.getenv("MODEL_NAME", "large-v3-turbo-q8")
-    MODEL_PATH: Path = Path(os.getenv("MODEL_PATH", "./models/ggml-large-v3-turbo-q8_0.bin"))
+        # CTranslate2 runtime hints. COMPUTE_TYPE="default" lets CT2 pick the runtime
+        # path; required on Apple Silicon CPU because int8_float16 storage does not
+        # map 1:1 to a CPU compute path.
+        self.COMPUTE_TYPE: str = os.getenv("COMPUTE_TYPE", "default")
+        self.DEVICE: str = os.getenv("DEVICE", "auto")
 
-    # File handling configuration
-    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
-    TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "/tmp/whisper-wrap"))
-    UPLOAD_TIMEOUT_SECONDS: int = int(os.getenv("UPLOAD_TIMEOUT_SECONDS", "30"))
+        # v2.1 backend override. When set ("ct2" | "ggml"), the lifespan SHALL pick
+        # the matching variant of the active model. When unset, platform-based
+        # `default_on` resolves the variant.
+        self.BACKEND_FORMAT: str | None = os.environ.get("BACKEND_FORMAT") or None
 
-    # Whisper-server process management
-    WHISPER_BINARY_PATH: Path = Path(
-        os.getenv("WHISPER_BINARY_PATH", "./whisper.cpp/build/bin/whisper-server")
-    )
-    WHISPER_AUTO_RESTART: bool = os.getenv("WHISPER_AUTO_RESTART", "true").lower() in (
-        "true", "1", "yes",
-    )
-    WHISPER_MAX_RETRIES: int = int(os.getenv("WHISPER_MAX_RETRIES", "2"))
+        # v2.2 VAD selector. When set ("silero" | "rms"), the lifespan opts in
+        # explicitly. When unset, lifespan tries silero-vad first and falls
+        # back to rms with one INFO log line if import fails.
+        self.VAD_BACKEND: str | None = os.environ.get("VAD_BACKEND") or None
 
-    # Logging configuration
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG")
+        # LLM (Gemini for /ask). Preserve unset (None) vs empty ("") so llm.py can
+        # implement the spec's "unset = silent default, empty = warn + default" policy.
+        self.GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
+        self.GEMINI_MODEL: str | None = os.environ.get("GEMINI_MODEL")
+        self.GEMINI_SYSTEM_PROMPT: str | None = os.environ.get("GEMINI_SYSTEM_PROMPT")
+
+        # File handling
+        self.MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
+        self.TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "/tmp/whisper-wrap"))
+        self.UPLOAD_TIMEOUT_SECONDS: int = int(
+            os.getenv("UPLOAD_TIMEOUT_SECONDS", "30")
+        )
+
+        # Logging
+        self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+        # v2.3 persistence. data_dir holds the SQLite db + audio blobs; both
+        # paths are created by lifespan before alembic upgrade runs. The
+        # database_url default is derived from data_dir at read time but env
+        # `DATABASE_URL` wins outright so tests can point at `:memory:`.
+        self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "data"))
+        self.DATABASE_URL: str = os.getenv(
+            "DATABASE_URL", f"sqlite:///{self.DATA_DIR}/history.db"
+        )
+
+        # Transcription empty-filter (single source of truth for noise rejection
+        # across /listen, /transcribe, /ask, /v1/audio/transcriptions).
+        # Defaults-on; invalid env values log WARN + fall back to defaults.
+        self.FILTER_EMPTY_ENABLED: bool = _parse_bool(
+            os.getenv("FILTER_EMPTY_ENABLED"),
+            default=True,
+            var_name="FILTER_EMPTY_ENABLED",
+        )
+        self.FILTER_MIN_DURATION_MS: int = _parse_int(
+            os.getenv("FILTER_MIN_DURATION_MS"),
+            default=500,
+            var_name="FILTER_MIN_DURATION_MS",
+        )
+
+    @property
+    def audio_dir(self) -> Path:
+        return self.DATA_DIR / "audio"
 
     @property
     def max_file_size_bytes(self) -> int:
-        """Convert MB to bytes for file size validation."""
         return self.MAX_FILE_SIZE_MB * 1024 * 1024
 
-    @property
-    def whisper_server_url(self) -> str:
-        """Get dynamically constructed whisper server URL if individual components are provided."""
-        # If WHISPER_SERVER_URL is explicitly set, use it
-        if os.getenv("WHISPER_SERVER_URL"):
-            return self.WHISPER_SERVER_URL
-        # Otherwise, construct from host and port
-        return f"http://{self.WHISPER_SERVER_HOST}:{self.WHISPER_SERVER_PORT}"
-
     def ensure_temp_dir(self) -> None:
-        """Ensure temporary directory exists."""
         self.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-    def validate_ports(self) -> None:
-        """Validate port configuration."""
-        def is_valid_port(port: int) -> bool:
-            return 1 <= port <= 65535
+    def ensure_data_dirs(self) -> None:
+        self.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.audio_dir.mkdir(parents=True, exist_ok=True)
 
-        if not is_valid_port(self.API_PORT):
-            raise ValueError(f"Invalid API_PORT: {self.API_PORT}. Must be between 1-65535.")
-
-        if not is_valid_port(self.WHISPER_SERVER_PORT):
-            raise ValueError(f"Invalid WHISPER_SERVER_PORT: {self.WHISPER_SERVER_PORT}. Must be between 1-65535.")
-
-        if self.API_PORT == self.WHISPER_SERVER_PORT and self.API_HOST == self.WHISPER_SERVER_HOST:
-            raise ValueError("API_PORT and WHISPER_SERVER_PORT cannot be the same when running on the same host.")
-
-    def validate_model(self) -> None:
-        """Validate that the configured model file exists."""
-        if not self.MODEL_PATH.exists():
-            raise FileNotFoundError(
-                f"Model not found: {self.MODEL_PATH}. "
-                f"Run 'make download-model MODEL={self.MODEL_NAME}' to download it."
+    def validate_port(self) -> None:
+        if not (1 <= self.API_PORT <= 65535):
+            raise ValueError(
+                f"Invalid API_PORT: {self.API_PORT}. Must be between 1-65535."
             )
 
 
-# Global configuration instance
 config = Config()

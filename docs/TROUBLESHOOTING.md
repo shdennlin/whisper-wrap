@@ -1,5 +1,7 @@
 # Troubleshooting Guide
 
+**English** | [繁體中文](TROUBLESHOOTING.zh-TW.md)
+
 Common issues and solutions for whisper-wrap deployment and operation.
 
 ## Quick Diagnostics
@@ -10,32 +12,33 @@ Start with these basic checks:
 # Check system dependencies
 make check-system-deps
 
-# Test API health
-curl http://localhost:8000/health
+# Test API health (status returns the loaded model and uptime)
+curl http://localhost:8000/status
 
-# Check services are running
-make dev  # Should start both services
+# Start the server (single FastAPI process; lifespan loads the model)
+make dev
 ```
 
 ## Common Issues
 
-### whisper-server Connection Failed
+### Model Failed to Load at Startup
 
-**Symptoms**: API returns 500 errors, health check shows `whisper_server: false`
+**Symptoms**: Server exits during startup; logs include
+`Failed to load WhisperModel from <path>: ...`.
 
-**Solutions**:
-- Verify whisper-server is running on configured port
-- Check `WHISPER_SERVER_URL` in configuration
-- Ensure whisper-server is built: `make build-whisper`
-- Try restarting whisper-server: `make run-whisper`
+**Causes & fixes**:
+- The CT2 directory is missing or incomplete (`model.bin` + `tokenizer.json` /
+  `vocabulary.json`). Re-run `make download-model MODEL=<name>`.
+- `MODEL_DIR` was set to a path that does not exist. Either clear the env var
+  to fall back to `MODEL_NAME`, or fix the path.
+- On Apple Silicon CPU you set `COMPUTE_TYPE=int8_float16` and got a
+  `ValueError` from CTranslate2. Use `COMPUTE_TYPE=default` instead — the
+  storage format `int8_float16` does NOT map 1:1 to a Mac CPU compute path.
 
-**Check whisper-server status**:
+**Check what's installed**:
 ```bash
-# Check if whisper-server is running
-curl http://localhost:9000/health
-
-# Check whisper-server logs
-make run-whisper  # Run in separate terminal
+make models                    # Registry entries + install status
+ls models/<entry.local_dir>/   # Should contain model.bin + tokenizer.json
 ```
 
 ### System Dependencies Missing
@@ -91,7 +94,7 @@ free -h  # Linux
 vm_stat | grep "Pages free"  # macOS
 
 # Check CPU usage during transcription
-top -p $(pgrep whisper-server)
+top -p $(pgrep -f "uvicorn app.main:app")
 
 # Check disk space
 df -h
@@ -203,10 +206,10 @@ make -n run  # Shows what ports would be used
 
 ### Service-Specific Errors
 
-**whisper-server errors**:
-- Connection refused → whisper-server not running
-- Timeout → whisper-server overloaded or crashed
-- Model not found → Run `make download-model`
+**In-process model errors**:
+- Startup `WhisperLoadError` → CT2 directory missing or incomplete; run `make download-model MODEL=<name>`
+- 500 `WhisperTranscriptionError` → inference crashed; check the server log for the underlying CT2 / ffmpeg error
+- 502 LLM error → `/ask` failed because `GEMINI_API_KEY` is unset or Gemini upstream is unreachable
 
 **ffmpeg errors**:
 - Command not found → Install ffmpeg
@@ -229,10 +232,7 @@ make dev
 
 ```bash
 # Watch API logs
-make run  # Shows FastAPI logs
-
-# Watch whisper-server logs
-make run-whisper  # Shows whisper-server logs
+make run  # Shows FastAPI logs (model load + per-request lines)
 ```
 
 ### Test with Simple Files

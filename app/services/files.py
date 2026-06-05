@@ -45,6 +45,7 @@ class FileManager:
             "audio/x-ms-wma",  # wma
             "audio/mp4a-latm",  # m4a alternative
             "audio/x-m4a",  # m4a alternative
+            "audio/webm",  # MediaRecorder default on Chromium/Firefox (Opus)
         }
 
         supported_video = {
@@ -53,6 +54,10 @@ class FileManager:
             "video/quicktime",  # mov
             "video/x-msvideo",  # avi
             "video/x-matroska",  # mkv
+            # libmagic frequently labels audio-only WebM as video/webm because
+            # WebM (Matroska/EBML) is a video container; ffmpeg still decodes
+            # the Opus audio stream correctly so we accept it here.
+            "video/webm",
         }
 
         is_supported = mime_type in supported_audio or mime_type in supported_video

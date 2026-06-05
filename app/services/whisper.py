@@ -1,169 +1,29 @@
-import logging
-from pathlib import Path
-from typing import Any, Dict, Optional
+"""Public re-export of the WhisperBackend Protocol surface.
 
-import httpx
+Callers SHALL import `WhisperBackend`, `TranscriptionResult`, `Segment`,
+`WhisperLoadError`, `WhisperTranscriptionError`, and `WhisperBackendError`
+from this module. The concrete backend instance is selected by the FastAPI
+lifespan and stored on `app.state.whisper`.
 
-from app.config import config
-from app.services.punctuation import (
-    detect_text_language,
-    join_newline_segments,
-    normalize_punctuation,
+Concrete backends:
+  - `app.services.whisper_ct2.CTranslate2Backend` — faster-whisper / CT2 path
+  - `app.services.whisper_cpp.PyWhisperCppBackend` — pywhispercpp + Core ML
+"""
+
+from app.services._whisper_backend import (
+    Segment,
+    TranscriptionResult,
+    WhisperBackend,
+    WhisperBackendError,
+    WhisperLoadError,
+    WhisperTranscriptionError,
 )
 
-logger = logging.getLogger(__name__)
-
-# Default prompt to guide Whisper into producing proper punctuation.
-# Whisper imitates the *style* of the prompt (not instructions within it),
-# so we provide bilingual punctuated examples. The prompt window is 224 tokens max.
-_DEFAULT_PUNCTUATION_PROMPT = (
-    "以下是語音轉錄的內容，包含正確的標點符號。"
-    "Hello, this is a transcription. We use commas, periods, and question marks. "
-    "這段文字有逗號、句號、問號？都是正確的標點。"
-)
-
-
-class WhisperServerError(RuntimeError):
-    """Whisper-server returned a non-200 status code."""
-
-
-class WhisperConnectError(RuntimeError):
-    """Cannot connect to whisper-server."""
-
-
-class WhisperTimeoutError(RuntimeError):
-    """Whisper-server request timed out."""
-
-
-# Union of all retryable whisper errors
-WhisperRetryableError = (WhisperServerError, WhisperConnectError, WhisperTimeoutError)
-
-
-class WhisperClient:
-    """HTTP client for communicating with whisper-server."""
-
-    def __init__(self):
-        self.timeout = config.UPLOAD_TIMEOUT_SECONDS
-
-    @property
-    def base_url(self) -> str:
-        """Get the current whisper server URL."""
-        return config.whisper_server_url
-
-    async def transcribe(
-        self,
-        wav_file_path: Path,
-        *,
-        language: str = "auto",
-        prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Send WAV file to whisper-server for transcription.
-
-        Forwards language and prompt to whisper-server's /inference endpoint.
-        The text output is stripped of trailing whitespace/newlines.
-
-        When WHISPER_AUTO_RESTART is enabled, automatically restarts the
-        whisper-server on failure and retries the request.
-        """
-        max_attempts = config.WHISPER_MAX_RETRIES + 1 if config.WHISPER_AUTO_RESTART else 1
-        last_error: Optional[Exception] = None
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                return await self._do_transcribe(
-                    wav_file_path, language=language, prompt=prompt
-                )
-            except WhisperRetryableError as e:
-                last_error = e
-
-                if not config.WHISPER_AUTO_RESTART or attempt >= max_attempts:
-                    raise
-
-                logger.warning(
-                    "Transcription attempt %d/%d failed: %s — restarting whisper-server...",
-                    attempt, max_attempts, e,
-                )
-                from app.services.whisper_manager import whisper_manager
-                await whisper_manager.restart()
-
-        raise last_error  # type: ignore[misc]
-
-    async def _do_transcribe(
-        self,
-        wav_file_path: Path,
-        *,
-        language: str = "auto",
-        prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Execute a single transcription request."""
-        if not wav_file_path.exists():
-            raise FileNotFoundError(f"WAV file not found: {wav_file_path}")
-
-        effective_prompt = prompt or _DEFAULT_PUNCTUATION_PROMPT
-
-        data = {
-            "temperature": "0.0",
-            "temperature_inc": "0.2",
-            "response_format": "json",
-            "language": language,
-            "prompt": effective_prompt,
-        }
-
-        try:
-            with open(wav_file_path, "rb") as f:
-                files = {"file": ("audio.wav", f, "audio/wav")}
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        f"{self.base_url}/inference", files=files, data=data
-                    )
-
-                    if response.status_code != 200:
-                        raise WhisperServerError(
-                            f"Whisper server error {response.status_code}: {response.text}"
-                        )
-
-                    result = response.json()
-
-                    if "text" in result:
-                        raw_text = result["text"]
-                        text = raw_text.strip()
-                        detected_lang = detect_text_language(text)
-                        joined_text = join_newline_segments(text)
-                        normalized_text = normalize_punctuation(joined_text, detected_lang)
-
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "Transcription result:\n"
-                                "  prompt:     %r\n"
-                                "  raw:        %r\n"
-                                "  detected:   %s\n"
-                                "  joined:     %r\n"
-                                "  normalized: %r",
-                                effective_prompt, raw_text, detected_lang,
-                                joined_text, normalized_text,
-                            )
-
-                        result = {**result, "text": normalized_text}
-
-                    return result
-
-        except httpx.TimeoutException:
-            raise WhisperTimeoutError(
-                f"Whisper server timeout after {self.timeout} seconds"
-            )
-        except httpx.ConnectError:
-            raise WhisperConnectError(
-                f"Cannot connect to whisper server at {self.base_url}"
-            )
-
-    async def health_check(self) -> bool:
-        """Check if whisper-server is responding."""
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(f"{self.base_url}/health")
-                return response.status_code == 200
-        except (httpx.TimeoutException, httpx.ConnectError):
-            return False
-
-
-whisper_client = WhisperClient()
+__all__ = [
+    "Segment",
+    "TranscriptionResult",
+    "WhisperBackend",
+    "WhisperBackendError",
+    "WhisperLoadError",
+    "WhisperTranscriptionError",
+]
