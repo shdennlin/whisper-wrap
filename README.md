@@ -219,6 +219,67 @@ make set-model MODEL=breeze-asr-25
 make delete-model MODEL=large-v3-turbo
 ```
 
+## 🎙️ Meeting Mode
+
+`POST /transcribe/meeting` is an opt-in long-form endpoint that combines
+Whisper ASR, forced phoneme alignment for word-level timestamps, and
+[pyannote.audio](https://github.com/pyannote/pyannote-audio) speaker
+diarization (via [WhisperX](https://github.com/m-bain/whisperX)). It is
+loaded lazily on first request and leaves every other endpoint
+(`/transcribe`, `/listen`, `/ask`, `/v1/*`) unchanged.
+
+### Installation
+
+Three prerequisites — the endpoint returns HTTP 503 with a clear `reason`
+if any of them is missing:
+
+1. **Install the optional extras** (~1.5 GB: whisperx + pyannote.audio +
+   torch):
+
+   ```bash
+   uv sync --extra meeting
+   ```
+
+2. **Accept the pyannote user agreements** on Hugging Face for both gated
+   models — diarization will silently 401 otherwise:
+
+   - https://huggingface.co/pyannote/speaker-diarization-3.1
+   - https://huggingface.co/pyannote/segmentation-3.0
+
+3. **Set `HF_TOKEN`** in your `.env` with a token that has read access to
+   the accepted models. Without it, `/transcribe/meeting` returns
+   `503 {"error": "meeting_unavailable", "reason": "HF_TOKEN is not configured"}`
+   and `/status.meeting.hf_token_configured` is `false`.
+
+### Performance
+
+Meeting analysis runs the WhisperX pipeline, which requires a CT2 ASR
+variant; pyannote and wav2vec2 have no Core ML/ANE port. **The meeting
+path is CPU/CUDA-only on every platform.** The existing `/transcribe`
+endpoint continues to use Apple Neural Engine acceleration on macOS — only
+the meeting endpoint pays the CPU cost.
+
+| Platform | 1-hour meeting wall-clock |
+| - | - |
+| macOS (Mac mini, CPU) | ~8-15 min |
+| Linux + NVIDIA GPU | ~1-3 min |
+
+The first request after server start incurs an additional ~20-40 s while
+the WhisperX and pyannote models load into memory; subsequent jobs reuse
+the in-memory pipeline.
+
+### Accuracy notes
+
+- Diarization quality **degrades on overlapping speech** — heavily
+  cross-talked sections may collapse into a single speaker or split a
+  single speaker across labels.
+- Pyannote needs roughly **~20 seconds of speech per speaker** to produce
+  stable separation; very short turns (single sentences) often get merged
+  into a neighbouring speaker.
+- When the number of participants is known up-front, pass `num_speakers`
+  on the request as a quality lever — it constrains the clustering stage
+  and usually improves separation noticeably for 2-4 speaker meetings.
+
 ## ⚙️ Configuration
 
 Create a `.env` file for custom configuration (see `.env.example` for the full

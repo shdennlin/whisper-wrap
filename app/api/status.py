@@ -51,6 +51,25 @@ async def status(request: Request) -> dict[str, Any]:
             "coreml_encoder_compiled", False
         )
 
+    from app.api.meeting import (
+        _extras_installed,
+        _resolve_ct2_dir_for_status,
+        check_meeting_availability,
+    )
+
+    available, _ = check_meeting_availability(config)
+    analyzer = getattr(state, "meeting_analyzer", None)
+    job_store = getattr(state, "meeting_jobs", None)
+    meeting_block: dict[str, Any] = {
+        "available": available,
+        "loaded": bool(analyzer and analyzer.loaded),
+        "hf_token_configured": bool((config.HF_TOKEN or "").strip()),
+        "extras_installed": _extras_installed(),
+        "asr_model_dir": _resolve_ct2_dir_for_status(config),
+        "active_jobs": job_store.count_by_status("running") if job_store else 0,
+        "queued_jobs": job_store.count_by_status("pending") if job_store else 0,
+    }
+
     return {
         "status": "ok",
         "version": __version__,
@@ -64,6 +83,7 @@ async def status(request: Request) -> dict[str, Any]:
             "load_time_ms": getattr(state, "load_time_ms", 0),
         },
         "backend": backend_block,
+        "meeting": meeting_block,
         "vad": {"backend": getattr(state, "vad_backend_name", "rms")},
         "gemini": {
             "configured": state.llm_client.configured,
@@ -80,6 +100,16 @@ async def root() -> dict[str, Any]:
                 "method": "POST",
                 "path": "/transcribe",
                 "description": "Transcribe audio (multipart form, audio/*, or application/octet-stream)",
+            },
+            {
+                "method": "POST",
+                "path": "/transcribe/meeting",
+                "description": "Meeting analysis (speaker diarization + word timestamps); returns 202 + job_id",
+            },
+            {
+                "method": "GET",
+                "path": "/transcribe/meeting/{job_id}",
+                "description": "Poll a meeting analysis job for status, progress, and final result",
             },
             {
                 "method": "WS",

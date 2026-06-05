@@ -30,6 +30,11 @@ dev = [
     "ruff>=0.0.280",
     "httpx>=0.24.0",
 ]
+meeting = [
+    "whisperx>=3.1.0",
+    "pyannote.audio>=3.1.0",
+    "torch>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]

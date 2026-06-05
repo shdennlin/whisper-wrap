@@ -42,6 +42,12 @@ def clean_env(monkeypatch):
         "DATABASE_URL",
         "FILTER_EMPTY_ENABLED",
         "FILTER_MIN_DURATION_MS",
+        "HF_TOKEN",
+        "MEETING_MODEL_NAME",
+        "MEETING_JOB_TTL_SECONDS",
+        "MEETING_MAX_JOBS",
+        "MEETING_DIARIZATION_PIPELINE",
+        "MEETING_ALIGN_MODEL",
     ):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -306,3 +312,53 @@ def test_parse_int_helper_isolated():
     assert _parse_int("", default=500) == 500
     assert _parse_int("750", default=500) == 750
     assert _parse_int("0", default=500) == 0
+
+
+def test_meeting_defaults(clean_env):
+    """Per design 'Configuration surface': meeting vars have documented defaults
+    and HF_TOKEN missing does NOT block construction (gated at endpoint level)."""
+    c = Config()
+    assert c.HF_TOKEN is None
+    assert c.MEETING_MODEL_NAME == c.MODEL_NAME
+    assert c.MEETING_JOB_TTL_SECONDS == 3600
+    assert c.MEETING_MAX_JOBS == 20
+    assert c.MEETING_DIARIZATION_PIPELINE == "pyannote/speaker-diarization-3.1"
+    assert c.MEETING_ALIGN_MODEL is None
+
+
+def test_meeting_env_overrides(clean_env):
+    clean_env.setenv("HF_TOKEN", "hf_test_token")
+    clean_env.setenv("MEETING_MODEL_NAME", "large-v3-turbo")
+    clean_env.setenv("MEETING_JOB_TTL_SECONDS", "7200")
+    clean_env.setenv("MEETING_MAX_JOBS", "5")
+    clean_env.setenv(
+        "MEETING_DIARIZATION_PIPELINE", "pyannote/speaker-diarization-3.0"
+    )
+    clean_env.setenv("MEETING_ALIGN_MODEL", "WAV2VEC2_ASR_BASE_960H")
+    c = Config()
+    assert c.HF_TOKEN == "hf_test_token"
+    assert c.MEETING_MODEL_NAME == "large-v3-turbo"
+    assert c.MEETING_JOB_TTL_SECONDS == 7200
+    assert c.MEETING_MAX_JOBS == 5
+    assert c.MEETING_DIARIZATION_PIPELINE == "pyannote/speaker-diarization-3.0"
+    assert c.MEETING_ALIGN_MODEL == "WAV2VEC2_ASR_BASE_960H"
+
+
+def test_meeting_model_name_falls_back_to_model_name(clean_env):
+    """Empty MEETING_MODEL_NAME falls back to MODEL_NAME, matching the unset case."""
+    clean_env.setenv("MODEL_NAME", "large-v3-turbo")
+    clean_env.setenv("MEETING_MODEL_NAME", "")
+    c = Config()
+    assert c.MODEL_NAME == "large-v3-turbo"
+    assert c.MEETING_MODEL_NAME == "large-v3-turbo"
+
+
+def test_hf_token_unset_vs_empty(clean_env):
+    """Empty string MUST be preserved (not coerced to None) so the meeting endpoint
+    can distinguish 'never set' from 'explicitly cleared' if it ever needs to."""
+    c_unset = Config()
+    assert c_unset.HF_TOKEN is None
+
+    clean_env.setenv("HF_TOKEN", "")
+    c_empty = Config()
+    assert c_empty.HF_TOKEN == ""

@@ -111,6 +111,33 @@ class Config:
         self.GEMINI_MODEL: str | None = os.environ.get("GEMINI_MODEL")
         self.GEMINI_SYSTEM_PROMPT: str | None = os.environ.get("GEMINI_SYSTEM_PROMPT")
 
+        # Meeting analysis (POST /transcribe/meeting). Gated at endpoint level —
+        # missing HF_TOKEN does NOT block lifespan. HF_TOKEN preserves unset (None)
+        # vs empty ("") so the endpoint can translate either to a 503 without
+        # losing the distinction. MEETING_MODEL_NAME falls back to MODEL_NAME when
+        # unset or empty.
+        self.HF_TOKEN: str | None = os.environ.get("HF_TOKEN")
+        self.MEETING_MODEL_NAME: str = (
+            os.environ.get("MEETING_MODEL_NAME") or self.MODEL_NAME
+        )
+        self.MEETING_JOB_TTL_SECONDS: int = _parse_int(
+            os.getenv("MEETING_JOB_TTL_SECONDS"),
+            default=3600,
+            var_name="MEETING_JOB_TTL_SECONDS",
+        )
+        self.MEETING_MAX_JOBS: int = _parse_int(
+            os.getenv("MEETING_MAX_JOBS"),
+            default=20,
+            var_name="MEETING_MAX_JOBS",
+        )
+        self.MEETING_DIARIZATION_PIPELINE: str = os.getenv(
+            "MEETING_DIARIZATION_PIPELINE", "pyannote/speaker-diarization-3.1"
+        )
+        # None lets WhisperX pick a per-language default at load time.
+        self.MEETING_ALIGN_MODEL: str | None = (
+            os.environ.get("MEETING_ALIGN_MODEL") or None
+        )
+
         # File handling
         self.MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
         self.TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", "/tmp/whisper-wrap"))

@@ -22,6 +22,7 @@ from app import __version__
 from app.api.actions import router as actions_router
 from app.api.ask import router as ask_router
 from app.api.listen import router as listen_router
+from app.api.meeting import router as meeting_router
 from app.api.openai_compat import router as openai_compat_router
 from app.api.sessions import router as sessions_router
 from app.api.status import router as status_router
@@ -242,6 +243,18 @@ async def lifespan(app: FastAPI):
         load_time_ms,
     )
 
+    # Meeting analysis: lightweight job store always available; the analyzer
+    # itself is constructed lazily on the first request that passes the 503
+    # preconditions, so missing HF_TOKEN / missing CT2 variant never breaks
+    # server startup.
+    from app.services.meeting_jobs import JobStore
+
+    app.state.meeting_jobs = JobStore(
+        ttl_seconds=config.MEETING_JOB_TTL_SECONDS,
+        max_jobs=config.MEETING_MAX_JOBS,
+    )
+    app.state.meeting_analyzer = None
+
     yield
 
     logger.info("Shutting down whisper-wrap API server")
@@ -261,6 +274,7 @@ app.include_router(listen_router)
 app.include_router(openai_compat_router)
 app.include_router(actions_router)
 app.include_router(sessions_router)
+app.include_router(meeting_router)
 
 # v2.4: PWA static bundle mounted at /app/. The bundle is produced by
 # `make build-frontend`; if it's missing (developer hasn't run the frontend
