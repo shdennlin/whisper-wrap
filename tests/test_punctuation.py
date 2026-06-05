@@ -48,7 +48,9 @@ def test_normalize_en_to_zh_preserves_numbers():
 def test_normalize_auto_detect_english():
     text = "And so，my fellow Americans，ask not what your country can do for you。"
     result = normalize_punctuation(text)
-    assert result == "And so,my fellow Americans,ask not what your country can do for you."
+    assert (
+        result == "And so,my fellow Americans,ask not what your country can do for you."
+    )
 
 
 def test_normalize_auto_detect_chinese():

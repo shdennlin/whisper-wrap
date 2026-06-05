@@ -57,3 +57,19 @@ def test_cleanup_nonexistent_file(file_manager):
     nonexistent = Path("/nonexistent/file.txt")
     # Should not raise an exception
     file_manager.cleanup_file(nonexistent)
+
+
+@pytest.mark.parametrize(
+    "mime",
+    [
+        "audio/webm",  # libmagic on newer systems
+        "video/webm",  # libmagic on older systems (EBML container == video)
+    ],
+)
+def test_is_audio_file_accepts_webm(file_manager, mime, monkeypatch):
+    """MediaRecorder on Chromium/Firefox produces WebM (Opus); both audio/webm
+    and video/webm should pass the whitelist so PWA Batch mode uploads work."""
+    monkeypatch.setattr(file_manager, "detect_mime_type", lambda *_: mime)
+    dummy = file_manager.create_temp_file(suffix=".webm")
+    dummy.write_bytes(b"not really webm but detect_mime_type is mocked")
+    assert file_manager.is_audio_file(dummy)

@@ -1,0 +1,968 @@
+:root {
+  color-scheme: light dark;
+  /* Light palette tuned for surface contrast. The page is a noticeably grey
+     `--bg` so that pure-white `--surface` cards (transcript, answer, mode
+     segments) clearly pop. Borders are bumped from the old gray-200 to
+     gray-300 so outlined widgets (chips, badges) read as deliberate edges,
+     not faint suggestions. Values inspired by Linear / GitHub light. */
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --fg: #1a1a1f;
+  --muted: #6b7280;
+  --partial: #9ca3af;
+  --border: #cbd2da;
+  --accent: #2563eb;
+  --green: #16a34a;
+  --yellow: #d97706;
+  --red: #dc2626;
+  --grey: #9ca3af;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+
+/* Dark palette: applies when the user has explicitly chosen dark via the
+   header toggle (data-theme="dark") OR when no preference is stored yet and
+   the OS reports `prefers-color-scheme: dark`. The :not([data-theme]) guard
+   prevents the OS query from overriding an explicit "light" pick.
+   Page is the deeper "ink" (GitHub-dark-style #0d1117); surface is visibly
+   raised (#20252e) so cards look elevated rather than flush. Border bumped
+   to #3a4150 so outlined widgets are readable in dim ambient light. */
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --surface: #20252e;
+  --fg: #f3f4f6;
+  --muted: #9ca3af;
+  --partial: #6b7280;
+  --border: #3a4150;
+  --accent: #60a5fa;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #0d1117;
+    --surface: #20252e;
+    --fg: #f3f4f6;
+    --muted: #9ca3af;
+    --partial: #6b7280;
+    --border: #3a4150;
+    --accent: #60a5fa;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+/* Belt-and-suspenders: any element that accidentally overflows the viewport
+   (long URL, fixed-width image, browser quirk) won't introduce a horizontal
+   scroll axis on mobile. */
+html, body { overflow-x: hidden; }
+body { min-height: 100vh; }
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Recording shell — main + aside laid out as a 2-column grid on desktop.
+ * Replaces the former #app grid (which assigned areas to main/aside as
+ * direct children) now that those siblings live inside a wrapper so the
+ * route handler can toggle the whole shell with one flag. */
+.recording-shell {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  grid-template-rows: 1fr auto;
+  grid-template-areas:
+    "main aside"
+    "history history";
+  flex: 1;
+  min-height: 0;
+}
+.recording-shell > main { grid-area: main; min-width: 0; }
+.recording-shell > aside { grid-area: aside; }
+.recording-shell > .history-view-host { grid-area: history; min-height: 0; }
+
+@media (max-width: 800px) {
+  .recording-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "main"
+      "aside"
+      "history";
+  }
+}
+
+/* Mobile/tablet at #/history: hide main+aside, keep history-view-host
+ * visible. We toggle via class on the shell (NOT the shell's `hidden`
+ * attribute) because the history-view-host is now embedded inside the
+ * shell — hiding the whole shell would hide the history too. */
+.recording-shell.is-history-route > main,
+.recording-shell.is-history-route > aside {
+  display: none;
+}
+.recording-shell.is-history-route {
+  grid-template-rows: 1fr;
+  grid-template-areas: "history";
+}
+
+/* Resizer is hidden by default (only desktop one-page uses it). */
+.recording-shell > .history-resizer { display: none; }
+
+/* Desktop one-page: ≥1200px viewport shows recording (left) + HistoryView
+ * (right) simultaneously. Slim sidebar (`aside`) is hidden — HistoryView
+ * takes that role with full session list, search and inline detail. Column
+ * width is driven by the --history-width CSS variable so the resize handle
+ * can persist user preference without touching markup. */
+@media (min-width: 1200px) {
+  .recording-shell,
+  .recording-shell.is-history-route {
+    grid-template-columns: 1fr 6px var(--history-width, 520px);
+    grid-template-rows: 1fr;
+    grid-template-areas: "main resizer history";
+  }
+  .recording-shell > aside,
+  .recording-shell.is-history-route > aside { display: none; }
+  /* Desktop ignores the mobile-only `is-history-route` main-hider. */
+  .recording-shell.is-history-route > main { display: block; }
+  .recording-shell > .history-resizer {
+    display: block;
+    grid-area: resizer;
+    cursor: col-resize;
+    background: var(--border);
+    transition: background 0.15s;
+    user-select: none;
+    touch-action: none;
+  }
+  .recording-shell > .history-resizer:hover,
+  body.is-resizing-history .recording-shell > .history-resizer {
+    background: var(--accent, #7aa2f7);
+  }
+  /* While dragging, suppress text selection across the whole page so the
+   * cursor doesn't accidentally select adjacent transcript content. */
+  body.is-resizing-history { user-select: none; cursor: col-resize; }
+  /* The in-app Back button is meaningless when both panes are always-on. */
+  .history-back-btn { display: none; }
+}
+
+.recording-shell[hidden],
+.history-view-host[hidden] { display: none; }
+
+.app-header {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 1rem;
+}
+.app-header h1 { font-size: 1.05rem; margin: 0; flex: 1; }
+
+/* Unified header button: theme toggle + settings share one visual contract so
+   they line up on the baseline regardless of which glyph each one carries.
+   Previously the icons were emoji (🌙) vs text-style symbol (⚙︎), which
+   diverged in size + baseline (especially in dark mode where the colour-emoji
+   moon clashed with the muted palette). SVG icons sized via .header-icon are
+   identical across OS and theme. */
+.app-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.app-header button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+.header-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- Narrow-viewport header cleanup ----
+   At ≤720px the header gets cramped (h1 + "● Connected" + "AI: <model>" pill
+   + "⚙︎ Settings" button = ~420px before gaps). Demote each secondary widget
+   to its minimal form: dot only, hide LLM pill (still in DOM for desktop),
+   icon-only settings button. The h1 also drops a hair so it doesn't wrap. */
+@media (max-width: 720px) {
+  .app-header { gap: 0.5rem; padding: 0.6rem 0.85rem; }
+  .app-header h1 { font-size: 0.95rem; }
+  .backend-indicator .label { display: none; }
+  .header-button-label { display: none; }
+  /* Narrow viewport: tighten padding so the icon-only buttons stay compact. */
+  .app-header button { padding: 0.4rem 0.55rem; gap: 0; }
+}
+
+.banner {
+  background: var(--yellow); color: white;
+  padding: 0.5rem 1rem; font-size: 0.9rem;
+}
+.banner a { color: white; text-decoration: underline; }
+
+.main-pane { grid-area: main; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+.aside { grid-area: aside; padding: 1rem; border-left: 1px solid var(--border); overflow-y: auto; }
+
+/* ---- Backend health indicator (header) ---- */
+.backend-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.backend-indicator .dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--grey);
+}
+.backend-indicator[data-state="ok"] .dot { background: var(--green); }
+.backend-indicator[data-state="down"] .dot { background: var(--red); }
+.backend-indicator[data-state="checking"] .dot {
+  background: var(--yellow);
+  animation: bi-pulse 1s ease-in-out infinite;
+}
+@keyframes bi-pulse { 50% { opacity: 0.4; } }
+
+/* ---- AI model badge (next to .actions-section-heading) ----
+   Replaces the old header-level .llm-indicator. Same visual language (pill,
+   muted text, red border for "not configured") but lives where the relevant
+   action chips are, not in the header. */
+.actions-model-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  cursor: help;
+  white-space: nowrap;
+  font-weight: 400;
+}
+.actions-model-badge[data-state="down"] {
+  color: var(--red, #f87171);
+  border-color: var(--red, #f87171);
+}
+.actions-model-badge[hidden] { display: none; }
+
+/* ---- One-click mode cards ---- */
+.capture-host { display: flex; flex-direction: column; gap: 0.75rem; }
+.mode-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 600px) {
+  .mode-cards { grid-template-columns: 1fr; }
+}
+.mode-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  /* Filled with --surface so Batch/Live read as first-class segment cards
+     against the page bg. Previously transparent, which made them blend into
+     the canvas — the user couldn't tell at a glance "this is a tappable
+     panel" vs "this is just text on the page". */
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.05s ease;
+}
+.mode-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.08);
+}
+.mode-card:active:not(:disabled) { transform: scale(0.99); }
+.mode-card:disabled { opacity: 0.45; cursor: not-allowed; }
+.mode-card .icon {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: white;
+  font-size: 1.05rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+/* Distinguish Batch (solid dot) from Live (ring) by icon shape, not colour. */
+.mode-card[data-mode="live"] .icon {
+  background: transparent;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+}
+.mode-card .info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+.mode-card .label { font-weight: 600; font-size: 1rem; }
+.mode-card .desc { font-size: 0.8rem; color: var(--muted); }
+/* Timer is hidden in idle state; the description is shown instead. */
+.mode-card .timer {
+  display: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.mode-card .controls {
+  display: none;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.mode-card .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.6rem;
+  height: 2.6rem;
+  padding: 0 0.7rem;
+  border-radius: 1.3rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.mode-card .icon-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Discard button: red on hover so the danger is visually obvious. */
+.mode-card .discard-btn:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+/* Confirming state (after first click): solid red with "確定?" label. */
+.mode-card .discard-btn.is-confirming,
+.mode-card .discard-btn.is-confirming:hover {
+  border-color: var(--red);
+  background: var(--red);
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* Recording / paused / processing morph */
+.mode-card[data-state="recording"],
+.mode-card[data-state="paused"],
+.mode-card[data-state="processing"] {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.08);
+}
+.mode-card[data-state="recording"] .desc,
+.mode-card[data-state="paused"] .desc,
+.mode-card[data-state="processing"] .desc { display: none; }
+.mode-card[data-state="recording"] .timer,
+.mode-card[data-state="paused"] .timer,
+.mode-card[data-state="processing"] .timer { display: inline; }
+.mode-card[data-state="recording"] .controls,
+.mode-card[data-state="paused"] .controls { display: inline-flex; }
+.mode-card[data-state="recording"] .icon {
+  animation: record-pulse 1.2s ease-in-out infinite;
+}
+.mode-card[data-state="paused"] .icon {
+  background: var(--muted);
+  border-color: var(--muted);
+  color: white;
+}
+.mode-card[data-state="processing"] { cursor: progress; }
+.mode-card[data-state="processing"] .icon {
+  background: var(--accent);
+  animation: record-spin 0.9s linear infinite;
+}
+
+/* ---- WebSocket state indicator (shown only during Live recording) ---- */
+.ws-indicator-host[hidden] { display: none; }
+
+@keyframes record-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(0.88); opacity: 0.75; }
+}
+@keyframes record-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ---- Batch upload-failed retry prompt ---- */
+.upload-retry[hidden] { display: none; }
+.upload-retry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(96, 165, 250, 0.08);
+  font-size: 0.9rem;
+}
+.upload-retry .msg { flex: 1; min-width: 12rem; color: var(--fg); }
+.upload-retry button {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.upload-retry button:hover { border-color: var(--accent); }
+
+.conn-indicator { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+.conn-indicator .conn-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--grey); }
+.conn-indicator[data-state="open"] .conn-dot { background: var(--green); }
+.conn-indicator[data-state="reconnecting"] .conn-dot { background: var(--yellow); }
+.conn-indicator[data-state="failed"] .conn-dot { background: var(--red); }
+.conn-retry { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
+
+/* Shared "panel card" visual contract used by both .transcript-view and
+   .answer-pane. They previously diverged (transcript: outlined transparent /
+   answer: filled grey, no header divider), which made them feel like two
+   unrelated widgets. Same surface bg, same border, same header divider, same
+   title typography, same copy-button shape — only min-height differs because
+   they hold different content volumes. */
+.transcript-view,
+.answer-pane {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.transcript-view { min-height: 200px; }
+.transcript-header,
+.answer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--border);
+}
+.transcript-title,
+.answer-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.transcript-copy,
+.answer-copy {
+  padding: 0.25rem 0.7rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+.transcript-copy:hover,
+.answer-copy:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.answer-copy:disabled { cursor: not-allowed; opacity: 0.4; }
+.transcript-final { display: flex; gap: 0.5rem; }
+.transcript-ts { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 3.5em; }
+/* Batch finals collapse to a single row with start_ms=0; skip the timestamp
+   column entirely so the text doesn't have a misleading "00:00" prefix. */
+.transcript-final[data-kind="batch"] .transcript-ts { display: none; }
+.transcript-text { flex: 1; }
+.transcript-partial { color: var(--partial); font-style: italic; min-height: 1.2em; }
+.transcript-partial.is-active { color: var(--partial); }
+/* Empty-state hint: mirrors the AI answer pane's placeholder so users know
+   "this box is where the transcript appears" before any text has streamed in.
+   Hidden whenever there's at least one final cue OR an active partial. */
+.transcript-placeholder {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.9rem;
+  padding: 0.25rem 0;
+}
+.transcript-placeholder[hidden] { display: none; }
+
+.actions-bar { display: flex; flex-direction: column; gap: 0.6rem; }
+/* Section header: [heading + model badge] on the left, (touch-only) toggle on
+   the right, divider line on the wrapper so it spans the full width. */
+.actions-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+/* Title wrapper keeps heading + model badge as one logical unit so flex's
+   space-between pushes them away from the toggle. min-width: 0 allows the
+   badge to ellipsis-clip if the model id ever gets absurdly long. */
+.actions-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.actions-section-heading {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+/* Toggle is touch-only — on hover devices the description surfaces via
+   tooltip, so a "show descriptions" switch would be meaningless. */
+.actions-description-toggle { display: none; }
+/* Inline layout: heading + chips on the same row, wrapping as needed. */
+.actions-category-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.5rem; }
+.actions-category-heading { font-size: 0.8rem; font-weight: 600; color: var(--muted, #9ca3af); flex: 0 0 auto; }
+.actions-category-heading::after { content: "："; }
+.actions-category-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.actions-chip { padding: 0.35rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: inherit; cursor: pointer; font-size: 0.85rem; transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease; }
+.actions-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.actions-chip:disabled { cursor: not-allowed; opacity: 0.45; }
+.actions-chip[data-loading="true"] { opacity: 1; border-color: var(--accent); color: var(--accent); animation: actions-chip-pulse 1.1s ease-in-out infinite; }
+.actions-chip-label { display: inline; }
+/* On hover-capable devices the description is surfaced via the JS tooltip
+   only; the inline span is in the DOM (for screen readers via aria-label,
+   and so the touch media query below can flip it on without re-rendering)
+   but visually hidden. */
+.actions-chip-description { display: none; }
+@keyframes actions-chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+/* Fallback path (no category headings): chips lay out inline on one row. */
+.actions-bar > .actions-chip { display: inline-block; }
+
+/* ---- Touch-device card layout for actions ----
+   Pure-touch devices (phones, tablets without keyboard) can't hover and
+   tap-to-flash a tooltip is poor UX, so we flip chips into full-width cards
+   with the description as a visible subtitle. Same DOM as desktop; CSS
+   handles the entire visual switch. Matches the AI-assistant convention
+   (ChatGPT / Claude / Perplexity mobile use card-style prompt lists). */
+@media (hover: none) and (pointer: coarse) {
+  .actions-bar { gap: 0.85rem; }
+  .actions-section-header {
+    padding-bottom: 0.45rem;
+  }
+  .actions-section-heading {
+    font-size: 1.05rem;
+  }
+  .actions-description-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .actions-description-toggle input { margin: 0; }
+  .actions-category-group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+  }
+  .actions-category-heading {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .actions-category-chips {
+    flex-direction: column;
+    gap: 0.45rem;
+    width: 100%;
+  }
+  .actions-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 10px;
+    width: 100%;
+    text-align: left;
+    font-size: 0.95rem;
+  }
+  .actions-chip-label { font-weight: 500; }
+  .actions-chip-description {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--muted, #9ca3af);
+    line-height: 1.4;
+    font-weight: 400;
+  }
+  /* Fallback path: still a card even when there's only one chip. */
+  .actions-bar > .actions-chip { display: flex; width: 100%; }
+
+  /* Re-order main-pane sections so AI output sits right under the transcript
+     and the chip bar drops to the bottom (matches ChatGPT / Claude mobile
+     pattern: picker stays where the thumb naturally rests, output is the
+     primary scrollable content). Capture-host and transcript-host keep their
+     default order (0); we only bump answer-pane (2) and actions-host (3). */
+  .main-pane > .answer-pane { order: 2; }
+  .main-pane > .actions-host { order: 3; }
+
+  /* "Show descriptions" OFF on touch: revert each card rule back to the
+     desktop pill layout (inline pills, no subtitle, heading + chips on one
+     row wrapping as needed). This is the user-controllable shortcut for
+     "I know what each chip does, just compact this list please." */
+  .actions-bar.descriptions-off .actions-chip-description { display: none; }
+  .actions-bar.descriptions-off .actions-chip {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    width: auto;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    text-align: center;
+    font-size: 0.85rem;
+    gap: 0;
+  }
+  .actions-bar.descriptions-off .actions-chip-label {
+    font-weight: normal;
+    font-size: inherit;
+  }
+  .actions-bar.descriptions-off .actions-category-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.5rem;
+  }
+  .actions-bar.descriptions-off .actions-category-chips {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    width: auto;
+  }
+  .actions-bar.descriptions-off .actions-category-heading {
+    font-size: 0.8rem;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .actions-bar.descriptions-off > .actions-chip {
+    display: inline-block;
+    width: auto;
+  }
+}
+
+/* Shared tooltip element managed by ActionsBar. Positioned in viewport coords
+   so chips near the left/right edge don't get their tooltip clipped. On touch
+   devices the tooltip is never shown — the description is rendered inline as
+   a subtitle inside the chip (which becomes a card). */
+.actions-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: min(280px, calc(100vw - 1rem));
+  width: max-content;
+  padding: 0.45rem 0.65rem;
+  /* Inverted from the page palette so the tooltip clearly floats above
+     content in both light and dark themes (dark page → light tooltip; light
+     page → dark tooltip). Same pattern as iOS/macOS native tooltips, Material,
+     Tailwind. Removes the previous "blends into bg" problem caused by
+     `background: var(--bg)`. */
+  background: var(--fg);
+  color: var(--bg);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  text-align: left;
+  pointer-events: none;
+  /* Stronger shadow than the old 0.25 because inverted tooltips need to read
+     as "floating" rather than "stuck on" — the elevation cue compensates for
+     the lack of border. */
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.actions-tooltip.is-visible { opacity: 1; }
+
+/* Answer pane: card visual contract is shared with .transcript-view (see
+   block near .transcript-final). Only the answer-specific bits remain here:
+   the [hidden] override, the body min-height, and the loading-state animation. */
+.answer-pane[hidden] { display: none; }
+.answer-pane { min-height: 80px; }
+.answer-body { white-space: pre-wrap; min-height: 1.5em; }
+.answer-pane.is-loading .answer-body { color: var(--muted, #9ca3af); font-style: italic; }
+.answer-pane.is-loading .answer-body::after {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  margin-left: 0.25em;
+  animation: answer-loading-dots 1.1s steps(4, end) infinite;
+}
+@keyframes answer-loading-dots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
+
+.settings-panel { display: flex; flex-direction: column; gap: 0.75rem; padding: 0; }
+.settings-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
+.settings-field input, .settings-field select { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; font-size: 0.95rem; }
+.settings-checkbox { flex-direction: row; align-items: center; gap: 0.4rem; }
+.settings-section {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--fg);
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+.settings-hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.4;
+  margin-top: 0.1rem;
+}
+
+/* ---- Modal (Settings) ---- */
+.modal-backdrop[hidden] { display: none; }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 100;
+  animation: modal-fade 0.15s ease-out;
+}
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.modal-dialog {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  max-width: 28rem;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h2 { margin: 0; font-size: 1.1rem; }
+.modal-close {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.modal-close:hover { border-color: var(--accent); color: var(--accent); }
+
+.history-panel h2 { font-size: 0.9rem; margin: 0 0 0.5rem; color: var(--muted); }
+.history-card { border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; }
+.history-meta { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem; }
+.history-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.5rem; }
+.history-actions button { padding: 0.2rem 0.5rem; font-size: 0.75rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.history-body { white-space: pre-wrap; font-size: 0.85rem; margin: 0.25rem 0; }
+
+.toast { position: fixed; bottom: 1rem; right: 1rem; background: var(--fg); color: var(--bg); padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.85rem; }
+.toast-with-action { display: inline-flex; align-items: center; gap: 0.6rem; }
+.toast-action {
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--bg); border-radius: 3px;
+  padding: 0.2rem 0.6rem; font-size: 0.8rem; cursor: pointer;
+}
+.toast-action:hover { opacity: 0.85; }
+
+/* ===== History master-detail view (history-ux-overhaul) =====
+ *
+ * Full-width pseudo-route mounted at `#/history` / `#/history/<id>`. Replaces
+ * the cramped sidebar reading experience with a left rail (session list +
+ * search) and a right detail panel (transcript + AI runs + waveform).
+ */
+.history-view-host { padding: 1rem; }
+.history-view { display: flex; gap: 1rem; height: calc(100vh - 8rem); min-height: 0; }
+/* When embedded in the recording shell (desktop one-page), let the view
+ * size to its column rather than the viewport — otherwise the fixed 100vh
+ * pushes the rail+detail below the visible area on shorter screens. */
+@media (min-width: 1200px) {
+  .recording-shell > .history-view-host { padding: 0.5rem; overflow: hidden; }
+  .recording-shell > .history-view-host > .history-view {
+    height: 100%; gap: 0.5rem;
+  }
+  .recording-shell > .history-view-host .history-rail { flex: 0 0 220px; }
+}
+.history-rail {
+  flex: 0 0 280px; display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev, var(--bg));
+}
+.history-search {
+  padding: 0.5rem; font-size: 0.85rem; border: none; border-bottom: 1px solid var(--border);
+  background: transparent; color: inherit; outline: none;
+}
+.history-list { list-style: none; margin: 0; padding: 0.25rem; overflow-y: auto; min-height: 0; flex: 1; }
+.history-row { padding: 0.5rem; cursor: pointer; border-radius: 4px; }
+.history-row:hover { background: var(--border-soft, rgba(127, 127, 127, 0.1)); }
+.history-row.is-selected { background: var(--border-soft, rgba(127, 127, 127, 0.18)); font-weight: 600; }
+.history-row-head {
+  display: flex; align-items: baseline; gap: 0.5rem; justify-content: space-between;
+}
+.history-row-date { font-size: 0.85rem; }
+.history-row-dur { font-size: 0.75rem; opacity: 0.65; flex-shrink: 0; }
+.history-rail-empty { padding: 1rem; font-size: 0.85rem; opacity: 0.7; }
+
+.history-detail {
+  flex: 1; min-width: 0; min-height: 0; overflow-y: auto;
+  padding: 1rem; border: 1px solid var(--border); border-radius: 6px;
+}
+.history-detail-empty { padding: 2rem; text-align: center; opacity: 0.7; }
+.history-detail-header { margin-bottom: 0.75rem; }
+.history-detail-meta { font-size: 0.85rem; opacity: 0.7; margin: 0; }
+.history-transcript {
+  white-space: pre-wrap; font-size: 0.9rem; line-height: 1.5; margin: 0 0 1rem;
+  max-height: 40vh; overflow-y: auto;
+}
+
+.history-runs { margin-top: 1rem; }
+.history-runs h3 { font-size: 0.95rem; margin: 0 0 0.5rem; }
+.history-run {
+  border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem;
+  margin-bottom: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem;
+}
+.history-run-header { display: flex; align-items: baseline; gap: 0.5rem; }
+.history-run-label { font-size: 0.85rem; }
+.history-run-time { font-size: 0.75rem; opacity: 0.7; margin-left: auto; }
+.history-run-delete {
+  padding: 0.15rem 0.4rem; font-size: 0.7rem; border: 1px solid var(--border);
+  border-radius: 3px; background: transparent; color: inherit; cursor: pointer;
+}
+.history-run-answer { white-space: pre-wrap; font-size: 0.85rem; margin: 0; }
+
+.history-add-action { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.history-add-action-btn {
+  align-self: flex-start; padding: 0.3rem 0.75rem; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.history-add-action-btn:disabled { opacity: 0.5; cursor: progress; }
+.history-action-picker { display: flex; gap: 0.5rem; align-items: center; }
+.history-action-select { padding: 0.25rem; font-size: 0.85rem; }
+.history-action-apply {
+  padding: 0.25rem 0.6rem; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+
+.history-player-host { margin-top: 1rem; }
+
+/* Header history toggle: simple icon button, same shape as theme/settings. */
+.history-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer; font-size: 1.1rem;
+}
+
+/* Mobile: collapse to single-pane. Rail-only when no session selected,
+ * detail-only once a row is tapped (the route handler hides the rail by
+ * adding `data-has-selection` on the wrapper would be ideal — for now we
+ * rely on the user using the browser back button to return to the rail). */
+@media (max-width: 768px) {
+  .history-view { flex-direction: column; height: auto; }
+  .history-rail { flex: 0 0 auto; max-height: 40vh; }
+  .history-detail { padding: 0.5rem; }
+}
+
+/* Slim sidebar header (after history-ux-overhaul: panel is recent-N only) */
+.history-panel-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.history-view-all {
+  font-size: 0.8rem; padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.history-meta { padding: 0.25rem 0; }
+.history-preview {
+  font-size: 0.85rem; line-height: 1.35; color: var(--fg);
+  margin: 0.25rem 0 0.4rem;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.history-preview.is-empty { opacity: 0.5; font-style: italic; }
+.history-row-preview {
+  font-size: 0.8rem; line-height: 1.3; opacity: 0.85; margin-top: 0.2rem;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.history-row-preview.is-empty { opacity: 0.45; font-style: italic; }
+
+/* Detail-side action row (Copy / Copy AI / Export×3 / Delete). Previously
+ * inlined per rail row — moved here so each rail card is two lines instead
+ * of five. Flex-wraps onto multiple lines when the viewport is narrow. */
+.history-detail-actions {
+  display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.75rem;
+}
+.history-detail-actions button {
+  padding: 0.25rem 0.55rem; font-size: 0.78rem;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+.history-detail-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+.history-run-copy {
+  padding: 0.15rem 0.4rem; font-size: 0.7rem;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: transparent; color: inherit; cursor: pointer;
+}
+
+/* In-app Back button at the top of the rail. */
+.history-back-btn {
+  align-self: flex-start; margin: 0.5rem; padding: 0.25rem 0.6rem;
+  font-size: 0.85rem; border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: inherit; cursor: pointer;
+}

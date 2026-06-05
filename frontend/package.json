@@ -1,0 +1,23 @@
+{
+  "name": "whisper-wrap-pwa",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run --environment happy-dom",
+    "test:watch": "vitest --environment happy-dom"
+  },
+  "devDependencies": {
+    "@vitest/web-worker": "^2.1.5",
+    "fake-indexeddb": "^6.2.5",
+    "happy-dom": "^15.11.6",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vite-plugin-pwa": "^0.21.1",
+    "vitest": "^2.1.5",
+    "workbox-window": "^7.3.0"
+  }
+}

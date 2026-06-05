@@ -1,6 +1,5 @@
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from app.config import config
 from app.services.files import file_manager
@@ -10,7 +9,7 @@ class AudioConverter:
     """Handles audio format conversion using ffmpeg."""
 
     @staticmethod
-    def convert_to_wav(input_path: Path, output_path: Optional[Path] = None) -> Path:
+    def convert_to_wav(input_path: Path, output_path: Path | None = None) -> Path:
         """Convert audio file to WAV format using ffmpeg."""
         if output_path is None:
             output_path = file_manager.create_temp_file(suffix=".wav")
@@ -30,7 +29,7 @@ class AudioConverter:
         ]
 
         try:
-            result = subprocess.run(
+            subprocess.run(
                 cmd,
                 check=True,
                 capture_output=True,
@@ -43,14 +42,14 @@ class AudioConverter:
 
             return output_path
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             raise RuntimeError(
                 f"Audio conversion timed out after {config.UPLOAD_TIMEOUT_SECONDS} seconds"
-            )
+            ) from e
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"ffmpeg conversion failed: {e.stderr}")
-        except FileNotFoundError:
-            raise RuntimeError("ffmpeg not found - please install ffmpeg")
+            raise RuntimeError(f"ffmpeg conversion failed: {e.stderr}") from e
+        except FileNotFoundError as e:
+            raise RuntimeError("ffmpeg not found - please install ffmpeg") from e
 
 
 audio_converter = AudioConverter()

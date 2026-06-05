@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        MODEL_NAME: ${MODEL_NAME:-large-v3-turbo-q8}
+        MODEL_NAME: ${MODEL_NAME:-breeze-asr-25}
     image: whisper-wrap:latest
     container_name: whisper-wrap
     ports:
@@ -11,17 +11,22 @@ services:
     environment:
       - API_PORT=${API_PORT:-8000}
       - API_HOST=${API_HOST:-0.0.0.0}
-      - WHISPER_SERVER_PORT=${WHISPER_SERVER_PORT:-9000}
-      - WHISPER_SERVER_HOST=${WHISPER_SERVER_HOST:-localhost}
-      - MODEL_NAME=${MODEL_NAME:-large-v3-turbo-q8}
-      - MODEL_PATH=${MODEL_PATH:-/app/models/ggml-large-v3-turbo-q8_0.bin}
-      - MAX_FILE_SIZE_MB=200
+      - MODEL_NAME=${MODEL_NAME:-breeze-asr-25}
+      # Override the default ./models/<name> resolution when mounting a pre-built model.
+      # - MODEL_DIR=/app/models/breeze-asr-25
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-default}
+      - DEVICE=${DEVICE:-auto}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      # - GEMINI_SYSTEM_PROMPT=
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-200}
       - TEMP_DIR=/tmp/whisper-wrap
-      - LOG_LEVEL=INFO
-      - UPLOAD_TIMEOUT_SECONDS=60
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - UPLOAD_TIMEOUT_SECONDS=${UPLOAD_TIMEOUT_SECONDS:-60}
     volumes:
-      - whisper-models:/app/models  # Persist downloaded models
-      # Note: /tmp/whisper-wrap uses container's tmpfs for automatic cleanup
+      - whisper-models:/app/models
+    # The container hosts a single FastAPI process — let the supervisor recover
+    # from process crashes instead of relying on in-app auto-restart.
     restart: unless-stopped
 
 volumes:

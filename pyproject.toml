@@ -1,20 +1,26 @@
 [project]
 name = "whisper-wrap"
-version = "1.0.0"
+version = "2.0.0"
 description = "FastAPI wrapper for whisper.cpp with universal audio format support"
 authors = [
     {name = "whisper-wrap", email = "whisper-wrap@example.com"}
 ]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.23.0",
     "python-multipart>=0.0.6",
-    "httpx>=0.24.0",
     "python-magic>=0.4.27",
     "python-dotenv>=1.0.0",
+    "faster-whisper>=1.0.0",
+    "google-genai>=0.3.0",
+    "PyYAML>=6.0",
+    "pywhispercpp>=1.2,<2.0; sys_platform == 'darwin'",
+    "silero-vad>=5.0,<6.0",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +40,7 @@ packages = ["app"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "C4", "PYI", "UP"]
@@ -47,4 +53,6 @@ testpaths = ["tests"]
 [dependency-groups]
 dev = [
     "pytest-asyncio>=0.24.0",
+    "sounddevice>=0.4.6",
+    "websockets>=12.0",
 ]

@@ -1,68 +1,61 @@
 # =============================================================================
-# Model Registry for whisper-wrap
+# Model Registry for whisper-wrap v2.1
 # =============================================================================
 #
-# Each model entry requires:
-#   url:         Direct download URL for the GGML model file
-#   filename:    Local filename to save as (used by download scripts)
-#   size:        Approximate file size (for user reference)
-#   languages:   List of supported languages or [multilingual]
-#   description: Brief description of the model
+# Schema:
+#   Each top-level key under `models:` is a kebab-case model identifier with:
+#     - `description`: brief human-readable description (required)
+#     - `languages`:  list of supported language tags (required)
+#     - `variants`:   non-empty list of backend-specific packagings (required)
+#     - `size`:       approximate disk footprint summed over installed variants (optional)
+#     - `default`:    exactly one entry across the registry SHALL be `true` (optional)
 #
-# Optional fields:
-#   default:     Set to true for the model used when none is specified
+#   Each variant in the `variants:` list declares:
+#     - `format`:     "ct2" or "ggml" (required)
+#     - `local_dir`:  subdirectory under ./models/ (required)
+#     - format-specific fields:
+#         ct2:   `compute_type` (e.g. "int8_float16")
+#         ggml:  `quant` (e.g. "q6_k"), `filename` (.bin name), `coreml_encoder` (.mlmodelc dir)
+#     - optional:     `repo_id`, `revision`, `subfolder`, `default_on` (list of
+#                     "darwin" / "linux"; controls per-platform default selection
+#                     when BACKEND_FORMAT is not set)
 #
-# To add a custom model, append an entry under "models:" following the format
-# below. Models are referenced by their key name (e.g. "large-v3-turbo").
+# Backend selection precedence (see app/services/registry.py):
+#   1. MODEL_DIR override → load directly, registry not consulted.
+#   2. BACKEND_FORMAT env var → pick variant with matching `format`.
+#   3. Otherwise → pick variant whose `default_on` contains the host platform.
+#
+# To add a custom model, append a top-level entry following the same shape.
 # =============================================================================
 
 models:
-  large-v3-turbo:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
-    filename: "ggml-large-v3-turbo.bin"
-    size: "1.6GB"
-    languages: [multilingual]
-    description: "OpenAI Whisper large-v3-turbo - fast, general purpose"
-
-  large-v3-turbo-q8:
-    default: true
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin"
-    filename: "ggml-large-v3-turbo-q8_0.bin"
-    size: "874MB"
-    languages: [multilingual]
-    description: "OpenAI Whisper large-v3-turbo (8-bit quantized, smaller + faster)"
-
   breeze-asr-25:
-    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-model.bin"
-    filename: "ggml-breeze-asr-25.bin"
-    size: "3.1GB"
+    description: "MediaTek Breeze ASR 25 — Taiwanese Mandarin + English code-switching"
     languages: [zh-TW, en]
-    description: "MediaTek Breeze ASR 25 - Taiwanese Mandarin + English code-switching"
+    default: true
+    size: "1.5-2.0 GB"
+    variants:
+      - format: ct2
+        repo_id: "shdennlin/breeze-asr-25-ct2"
+        subfolder: int8_float16
+        compute_type: int8_float16
+        local_dir: breeze-asr-25-ct2
+        default_on: [linux]
+      - format: ggml
+        repo_id: "shdennlin/breeze-asr-25-ggml"
+        quant: q6_k
+        filename: ggml-breeze-asr-25-q6_k.bin
+        coreml_encoder: ggml-breeze-asr-25-encoder.mlmodelc
+        local_dir: breeze-asr-25-ggml
+        default_on: [darwin]
 
-  breeze-asr-25-q8:
-    url: "https://huggingface.co/alan314159/Breeze-ASR-25-whispercpp/resolve/main/ggml-model-q8_0.bin"
-    filename: "ggml-breeze-asr-25-q8_0.bin"
-    size: "1.7GB"
-    languages: [zh-TW, en]
-    description: "MediaTek Breeze ASR 25 (8-bit quantized, smaller + faster)"
-
-  large-v3:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin"
-    filename: "ggml-large-v3.bin"
-    size: "3.1GB"
+  large-v3-turbo:
+    description: "OpenAI Whisper large-v3-turbo — multilingual fallback"
     languages: [multilingual]
-    description: "OpenAI Whisper large-v3 - highest accuracy, slower"
-
-  medium:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
-    filename: "ggml-medium.bin"
-    size: "1.5GB"
-    languages: [multilingual]
-    description: "OpenAI Whisper medium - balanced speed/accuracy"
-
-  base:
-    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-    filename: "ggml-base.bin"
-    size: "148MB"
-    languages: [multilingual]
-    description: "OpenAI Whisper base - lightweight, fast"
+    size: "1.6 GB"
+    variants:
+      - format: ct2
+        repo_id: "Systran/faster-whisper-large-v3-turbo"
+        compute_type: int8_float16
+        local_dir: large-v3-turbo
+        default_on: [linux, darwin]
