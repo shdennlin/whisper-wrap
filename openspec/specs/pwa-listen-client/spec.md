@@ -207,72 +207,6 @@ tests:
 -->
 
 ---
-### Requirement: History panel persists last 20 capture sessions to localStorage
-
-The PWA SHALL persist capture sessions to the browser's `localStorage` under a single key. One session is one record-to-stop cycle. The list of sessions SHALL be capped at 20 entries; adding the 21st session SHALL drop the oldest. The PWA SHALL write to `localStorage` incrementally as each `final` event arrives during a recording — not only on Stop — so that a browser crash or backend restart mid-session does NOT lose finals that have already been confirmed.
-
-Each session record SHALL contain at minimum: a unique `id` (ULID or equivalent timestamp-orderable identifier), `started_at` (milliseconds since epoch), `ended_at` (milliseconds since epoch, or `null` while recording), an ordered `finals` array of `{text, start_ms, end_ms}` records, and an `action_runs` array of `{action_id, prompt, answer, ran_at}` records for any Actions invoked against the session.
-
-The History panel SHALL render the 20 sessions in reverse chronological order (newest first) with: an `mm:ss` total duration label, a word-count label, an expand/collapse control showing the finals concatenated, a Copy-to-clipboard button that copies the joined transcript as plain text, a Delete-session button that removes the entry from localStorage, and an Export menu with options for SRT, VTT, and TXT.
-
-#### Scenario: Final events are persisted as they arrive
-
-- **WHEN** 5 finals arrive during an active recording session
-- **THEN** after each final, the session record in localStorage under `whisper-wrap.sessions` SHALL contain at least that many entries in its `finals` array, and the running session's record SHALL have `ended_at = null`
-
-#### Scenario: Oldest session evicted at the cap
-
-- **WHEN** the user records a 21st session while 20 already exist
-- **THEN** the oldest session by `started_at` SHALL be removed from `localStorage` before the new session is appended, keeping the total at 20
-
-
-<!-- @trace
-source: v2-4-pwa-listen-client
-updated: 2026-05-17
-code:
-  - frontend/package.json
-  - app/api/status.py
-  - frontend/src/capture/downsample.ts
-  - README.md
-  - docs/INSTALLATION.md
-  - frontend/src/capture/listen-socket.ts
-  - docs/HTTPS-TAILSCALE.md
-  - frontend/src/ui/transcript-view.ts
-  - frontend/src/storage/history-store.ts
-  - registry/actions.yaml
-  - frontend/src/ui/connection-indicator.ts
-  - app/api/actions.py
-  - frontend/src/main.ts
-  - frontend/CHECKLIST.md
-  - frontend/src/capture/audio-worklet.ts
-  - app/main.py
-  - frontend/src/ui/actions-bar.ts
-  - frontend/public/icons/icon-192.png
-  - frontend/tsconfig.json
-  - frontend/src/capture/mic-pipeline.ts
-  - frontend/src/style.css
-  - frontend/index.html
-  - frontend/src/ui/settings-panel.ts
-  - frontend/src/ui/history-panel.ts
-  - app/services/actions.py
-  - frontend/src/export/subtitle-export.ts
-  - CLAUDE.md
-  - frontend/src/types/audioworklet.d.ts
-  - Makefile
-  - frontend/public/icons/icon-512.png
-  - frontend/vite.config.ts
-tests:
-  - frontend/src/export/subtitle-export.test.ts
-  - tests/test_actions.py
-  - frontend/src/capture/downsample.test.ts
-  - frontend/src/ui/ui-components.test.ts
-  - frontend/src/ui/actions-and-settings.test.ts
-  - frontend/src/storage/history-store.test.ts
-  - frontend/src/capture/listen-socket.test.ts
-  - tests/test_status.py
--->
-
----
 ### Requirement: Subtitle export (SRT, VTT, TXT) generated client-side from finals
 
 The PWA SHALL offer Export menu actions for each persisted session producing:
@@ -616,4 +550,79 @@ tests:
   - frontend/src/storage/history-store.test.ts
   - frontend/src/capture/listen-socket.test.ts
   - tests/test_status.py
+-->
+
+---
+### Requirement: History view renders as master-detail pseudo-route with re-runnable AI Actions
+
+The PWA SHALL render history as a master-detail view mounted on the hash route `#/history` (no selection) and `#/history/<session_id>` (with selection). The recording shell SHALL remain mounted at the empty hash. The History view SHALL claim the full viewport width (not the sidebar) and SHALL contain a left rail listing sessions and a right detail panel for the selected session.
+
+The rail SHALL render sessions in reverse chronological order (newest first) and SHALL include a search box that filters the rail entries case-insensitively against each session's formatted `started_at` (`YYYY-MM-DD HH:MM`) and the concatenation of `finals[].text`. Search filtering SHALL be debounced to 120 ms on input and SHALL operate over the in-memory cache populated by `HistoryStore.prime()`. Each rail row SHALL display the session's date, duration, and word count.
+
+The detail panel SHALL render the selected session's metadata (date, duration, word count), waveform audio player (when an audio file exists, behaviorally identical to the existing `WaveformPlayer`), full transcript (joined `finals[].text`), an action-runs list, and an "Add AI Action" control. The action-runs list SHALL render every row of `action_runs` for the session, sorted by `ran_at DESC`, each row showing the resolved action label, the timestamp, the answer body, and a per-run Delete button.
+
+The "Add AI Action" control SHALL open the existing action picker (the same templates loaded from `/actions`); on confirm the PWA SHALL POST the templated prompt to `/ask` as text input (no audio body), and on the answer SHALL POST `{"action_id", "prompt", "answer", "ran_at"}` to `POST /v1/sessions/<id>/runs`. While a re-run is in flight, the "Add AI Action" control SHALL be disabled to prevent duplicate concurrent submissions for the same session. On success the runs list SHALL re-render to include the new row.
+
+Each action-run row's Delete button SHALL open a confirm dialog and on confirm SHALL call `HistoryStore.deleteRun(session_id, run_id)`. On 204 the run row SHALL be removed from the panel without a full page reload.
+
+When the viewport width is at or below 768 px the rail and detail SHALL occupy the full width and SHALL toggle: when no `session_id` is present the rail SHALL be visible; when a `session_id` is present the detail SHALL be visible with a "Back" affordance that navigates to `#/history` (rail-only).
+
+#### Scenario: Hash route mounts History view
+
+- **GIVEN** the PWA is loaded with hash `""`
+- **AND** the recording shell is mounted
+- **WHEN** the user activates the Show-history control or `location.hash` becomes `#/history`
+- **THEN** the recording shell is hidden and the History view is mounted with the rail populated and the detail panel showing an empty state
+
+#### Scenario: Selecting a session updates the route
+
+- **GIVEN** the History view is mounted at `#/history`
+- **WHEN** the user clicks a session row in the rail
+- **THEN** `location.hash` SHALL become `#/history/<session_id>` and the detail panel SHALL render that session's transcript and `action_runs`
+
+#### Scenario: Search filters the rail
+
+- **GIVEN** the rail contains 12 sessions with various transcript content
+- **WHEN** the user types "meeting" into the search box
+- **THEN** within 120 ms only sessions whose formatted date or `finals[].text` contains "meeting" (case-insensitive) SHALL remain visible in the rail
+- **AND** clearing the search box SHALL restore all 12 sessions
+
+#### Scenario: Re-running an Action against a past session appends a new run
+
+- **GIVEN** the detail panel is rendered for session `S` with two existing `action_runs`
+- **WHEN** the user clicks "Add AI Action", picks template `summarize`, and confirms
+- **THEN** the PWA SHALL POST `{"text": "<templated prompt>"}` to `/ask`
+- **AND** on the answer SHALL POST `{"action_id": "summarize", "prompt": "...", "answer": "...", "ran_at": <ms>}` to `POST /v1/sessions/S/runs`
+- **AND** the detail panel SHALL render three runs sorted by `ran_at DESC`, the newest at the top
+
+#### Scenario: Concurrent re-run guard
+
+- **GIVEN** the detail panel is showing session `S` and the user clicks "Add AI Action" and confirms template `summarize`
+- **WHEN** the user clicks "Add AI Action" again before the in-flight `/ask` resolves
+- **THEN** the "Add AI Action" control SHALL be disabled and the second click SHALL NOT produce a second `/ask` POST
+
+#### Scenario: Deleting one run leaves others intact
+
+- **GIVEN** session `S` has three `action_runs` rendered in the detail panel
+- **WHEN** the user clicks the Delete button on the middle row, confirms the dialog, and `DELETE /v1/sessions/S/runs/<run_id>` returns 204
+- **THEN** that row SHALL be removed from the detail panel
+- **AND** the remaining two rows SHALL still render in their original order
+- **AND** `HistoryStore.list()` for session `S` SHALL return two `action_runs`
+
+#### Scenario: Mobile collapse toggles between rail and detail
+
+- **GIVEN** the viewport is 360 px wide and the user is at `#/history`
+- **WHEN** the user clicks a session row
+- **THEN** the rail SHALL hide, the detail SHALL fill the viewport, and a "Back" control SHALL be visible
+- **WHEN** the user clicks "Back"
+- **THEN** `location.hash` SHALL become `#/history` and the rail SHALL be visible while the detail SHALL be hidden
+
+<!-- @trace
+source: history-ux-overhaul
+updated: 2026-06-05
+code:
+  - frontend/package.json
+  - CHANGELOG.md
+  - pyproject.toml
+  - uv.lock
 -->

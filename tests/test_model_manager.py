@@ -261,7 +261,6 @@ def _make_fake_hf(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "fake-bin"
     bin_dir.mkdir(exist_ok=True)
     hf = bin_dir / "hf"
-    log = tmp_path / "hf-args.log"
     hf.write_text(
         """#!/bin/bash
 # Append every argv as one line so the test can assert on includes.

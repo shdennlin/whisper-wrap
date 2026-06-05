@@ -9,6 +9,7 @@ failure path (logged-and-swallowed, caller proceeds).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -178,8 +179,7 @@ def test_log_transcribe_persists_audio_blob_when_provided():
     assert sess.audio_mime_type == "audio/wav"
     assert sess.audio_size_bytes == len(blob)
     # The file MUST actually be on disk at the recorded path.
-    from pathlib import Path as _P
-    assert _P(sess.audio_path).read_bytes() == blob
+    assert Path(sess.audio_path).read_bytes() == blob
 
 
 def test_log_transcribe_without_audio_leaves_audio_columns_null():

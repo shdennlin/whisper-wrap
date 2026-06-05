@@ -1,6 +1,6 @@
 [project]
 name = "whisper-wrap"
-version = "1.0.0"
+version = "2.0.0"
 description = "FastAPI wrapper for whisper.cpp with universal audio format support"
 authors = [
     {name = "whisper-wrap", email = "whisper-wrap@example.com"}
