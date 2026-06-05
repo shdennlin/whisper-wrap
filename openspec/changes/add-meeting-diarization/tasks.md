@@ -40,22 +40,22 @@
 
 ## 8. Model manager script
 
-- [ ] 8.1 Implement the requirement "Download command supports diarization pre-fetch flag" by adding `--with-diarization` to `scripts/model-manager.sh` (pre-fetch `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0` into the HF cache when present). Verified by `tests/test_model_manager.py::test_download_with_diarization_flag` mocking `huggingface_hub` and asserting both pyannote model snapshots are requested.
-- [ ] 8.2 [P] Implement the fail-fast behaviour when `--with-diarization` is used without `HF_TOKEN`. Verified by `tests/test_model_manager.py::test_with_diarization_requires_hf_token` asserting the script exits non-zero with an error mentioning `HF_TOKEN` and the README installation section.
+- [x] 8.1 Implement the requirement "Download command supports diarization pre-fetch flag" by adding `--with-diarization` to `scripts/model-manager.sh` (pre-fetch `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0` into the HF cache when present). Verified by `tests/test_model_manager.py::test_download_with_diarization_flag` mocking `huggingface_hub` and asserting both pyannote model snapshots are requested.
+- [x] 8.2 [P] Implement the fail-fast behaviour when `--with-diarization` is used without `HF_TOKEN`. Verified by `tests/test_model_manager.py::test_with_diarization_requires_hf_token` asserting the script exits non-zero with an error mentioning `HF_TOKEN` and the README installation section.
 
 ## 9. PWA Meeting Mode page
 
-- [ ] 9.1 Create the Meeting Mode page at route `/app/meeting` per **Decision: PWA Meeting Mode is a separate top-level route**, with file modules under `frontend/src/meeting/`. The page SHALL render an upload control, a poll-driven progress indicator, and a speaker-coloured transcript per the requirement "PWA Meeting Mode page renders speaker-labelled transcript". Verified by `frontend/src/meeting/meeting-page.test.ts` driving a fake fetch through pending → done and asserting the rendered DOM includes one CSS class per distinct speaker.
-- [ ] 9.2 Implement deterministic speaker-to-colour mapping (same `speakers` array order yields the same colour assignment across reloads) using a fixed palette. Verified by a vitest case asserting the same input produces the same colour map across two invocations.
-- [ ] 9.3 Implement click-to-seek on the embedded audio player so clicking a segment seeks the player to the segment's `start`. Verified by a vitest case asserting `audio.currentTime` is set to the expected segment start when the segment element is clicked.
-- [ ] 9.4 [P] Handle the meeting-unavailable case by reading `/status.meeting.available` and rendering a disabled upload control with the reason text when false. Verified by a vitest case where the mocked `/status` reports `available: false` and the upload control is disabled.
+- [x] 9.1 Create the Meeting Mode page at route `/app/meeting` per **Decision: PWA Meeting Mode is a separate top-level route**, with file modules under `frontend/src/meeting/`. The page SHALL render an upload control, a poll-driven progress indicator, and a speaker-coloured transcript per the requirement "PWA Meeting Mode page renders speaker-labelled transcript". Verified by `frontend/src/meeting/meeting-page.test.ts` driving a fake fetch through pending → done and asserting the rendered DOM includes one CSS class per distinct speaker.
+- [x] 9.2 Implement deterministic speaker-to-colour mapping (same `speakers` array order yields the same colour assignment across reloads) using a fixed palette. Verified by a vitest case asserting the same input produces the same colour map across two invocations.
+- [x] 9.3 Implement click-to-seek on the embedded audio player so clicking a segment seeks the player to the segment's `start`. Verified by a vitest case asserting `audio.currentTime` is set to the expected segment start when the segment element is clicked.
+- [x] 9.4 [P] Handle the meeting-unavailable case by reading `/status.meeting.available` and rendering a disabled upload control with the reason text when false. Verified by a vitest case where the mocked `/status` reports `available: false` and the upload control is disabled.
 
 ## 10. Speaker-aware exports
 
-- [ ] 10.1 Implement `frontend/src/export/speaker-srt.ts` per **Decision: Speaker-aware export by extending existing export modules** so the requirement "Speaker-aware export of SRT, VTT, and TXT" holds for SRT (cue text begins with `[<speaker>] `). Verified by `frontend/src/export/speaker-srt.test.ts` asserting the cue format on a two-segment fixture.
-- [ ] 10.2 [P] Implement `frontend/src/export/speaker-vtt.ts` with the same speaker-tag-in-cue-text contract as SRT. Verified by `frontend/src/export/speaker-vtt.test.ts` against the same fixture.
-- [ ] 10.3 [P] Implement `frontend/src/export/speaker-txt.ts` so consecutive same-speaker segments merge into a single `SPEAKER_xx:` paragraph. Verified by `frontend/src/export/speaker-txt.test.ts` covering both same-speaker grouping and speaker-change boundaries.
-- [ ] 10.4 Wire the three export buttons into the Meeting Mode page so client-side export runs entirely on the rendered `MeetingResult` without an additional server request. Verified by a vitest case asserting clicking each button triggers a download with the expected filename pattern and no network fetch.
+- [x] 10.1 Implement `frontend/src/export/speaker-srt.ts` per **Decision: Speaker-aware export by extending existing export modules** so the requirement "Speaker-aware export of SRT, VTT, and TXT" holds for SRT (cue text begins with `[<speaker>] `). Verified by `frontend/src/export/speaker-srt.test.ts` asserting the cue format on a two-segment fixture.
+- [x] 10.2 [P] Implement `frontend/src/export/speaker-vtt.ts` with the same speaker-tag-in-cue-text contract as SRT. Verified by `frontend/src/export/speaker-vtt.test.ts` against the same fixture.
+- [x] 10.3 [P] Implement `frontend/src/export/speaker-txt.ts` so consecutive same-speaker segments merge into a single `SPEAKER_xx:` paragraph. Verified by `frontend/src/export/speaker-txt.test.ts` covering both same-speaker grouping and speaker-change boundaries.
+- [x] 10.4 Wire the three export buttons into the Meeting Mode page so client-side export runs entirely on the rendered `MeetingResult` without an additional server request. Verified by a vitest case asserting clicking each button triggers a download with the expected filename pattern and no network fetch.
 
 ## 11. Documentation
 

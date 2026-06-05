@@ -579,3 +579,120 @@ def test_list_rejects_empty_variants_list(tmp_path):
     result = _run(tmp_path, "list", registry=bad)
     assert result.returncode != 0
     assert "at least one variant" in result.stderr
+
+
+# ---------- --with-diarization flag ----------
+
+
+def _make_fake_hf_hub(tmp_path: Path) -> Path:
+    """Drop a fake `huggingface_hub` module on the test's PYTHONPATH that
+    records `snapshot_download` calls to $HF_LOG. Used to verify the script's
+    `--with-diarization` path without hitting the network."""
+    pkg_root = tmp_path / "fake-py"
+    pkg_dir = pkg_root / "huggingface_hub"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    (pkg_dir / "__init__.py").write_text(
+        textwrap.dedent(
+            """
+            import os
+
+            def snapshot_download(repo_id, token=None, **kw):
+                with open(os.environ["HF_LOG"], "a") as f:
+                    f.write(repo_id + "\\n")
+                return "/fake/cache/" + repo_id.replace("/", "--")
+            """
+        ).lstrip("\n")
+    )
+    return pkg_root
+
+
+def test_download_with_diarization_flag_prefetches_pyannote(tmp_path):
+    """`--with-diarization` SHALL request snapshot_download for both pyannote
+    diarization and segmentation models after the model variants are installed."""
+    bin_dir = _make_fake_hf(tmp_path)
+    fake_py = _make_fake_hf_hub(tmp_path)
+    hf_log = tmp_path / "hf-hub.log"
+    hf_args_log = tmp_path / "hf-args.log"
+    registry = _variants_registry(tmp_path)
+
+    env = os.environ.copy()
+    env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PYTHON_BIN"] = sys.executable
+    env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
+    env["WHISPER_WRAP_ENV_FILE"] = str(tmp_path / ".env")
+    env["WHISPER_WRAP_REGISTRY"] = str(registry)
+    env["LOGFILE"] = str(hf_args_log)
+    env["HF_LOG"] = str(hf_log)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    # PYTHONPATH front so the fake huggingface_hub wins over the real one
+    # (if it's installed in the venv via faster-whisper's transitive deps).
+    env["PYTHONPATH"] = f"{fake_py}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["HF_TOKEN"] = "hf_test_token_xyz"
+    env["BACKEND_FORMAT"] = "ggml"  # platform-pin
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "download", "breeze", "--with-diarization"],
+        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert hf_log.exists(), "fake huggingface_hub was not invoked"
+    repos = hf_log.read_text().strip().splitlines()
+    assert "pyannote/speaker-diarization-3.1" in repos
+    assert "pyannote/segmentation-3.0" in repos
+
+
+def test_download_with_diarization_requires_hf_token(tmp_path):
+    """`--with-diarization` without HF_TOKEN SHALL exit non-zero with an error
+    pointing at the README installation section."""
+    bin_dir = _make_fake_hf(tmp_path)
+    registry = _variants_registry(tmp_path)
+
+    env = os.environ.copy()
+    env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PYTHON_BIN"] = sys.executable
+    env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
+    env["WHISPER_WRAP_ENV_FILE"] = str(tmp_path / "missing-env")  # no .env
+    env["WHISPER_WRAP_REGISTRY"] = str(registry)
+    env["LOGFILE"] = str(tmp_path / "hf-args.log")
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env.pop("HF_TOKEN", None)
+    env["BACKEND_FORMAT"] = "ggml"
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "download", "breeze", "--with-diarization"],
+        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode != 0
+    combined = result.stderr + result.stdout
+    assert "HF_TOKEN" in combined
+    assert "README" in combined or "Meeting Mode" in combined
+
+
+def test_download_without_diarization_flag_skips_pyannote(tmp_path):
+    """Default behaviour without `--with-diarization` SHALL NOT touch pyannote."""
+    bin_dir = _make_fake_hf(tmp_path)
+    fake_py = _make_fake_hf_hub(tmp_path)
+    hf_log = tmp_path / "hf-hub.log"
+    registry = _variants_registry(tmp_path)
+
+    env = os.environ.copy()
+    env["WHISPER_WRAP_PYTHONPATH"] = str(PROJECT_ROOT)
+    env["PYTHON_BIN"] = sys.executable
+    env["WHISPER_WRAP_MODELS_DIR"] = str(tmp_path / "models")
+    env["WHISPER_WRAP_ENV_FILE"] = str(tmp_path / ".env")
+    env["WHISPER_WRAP_REGISTRY"] = str(registry)
+    env["LOGFILE"] = str(tmp_path / "hf-args.log")
+    env["HF_LOG"] = str(hf_log)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["PYTHONPATH"] = f"{fake_py}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["HF_TOKEN"] = "hf_test_token_xyz"
+    env["BACKEND_FORMAT"] = "ggml"
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "download", "breeze"],
+        capture_output=True, text=True, env=env, cwd=PROJECT_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not hf_log.exists() or hf_log.read_text() == "", (
+        "pyannote pre-fetch MUST NOT run without --with-diarization"
+    )
