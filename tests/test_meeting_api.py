@@ -262,6 +262,76 @@ def test_post_meeting_default_routes_to_slow_analyze(
     assert slow_called_with.get("audio_path") is not None
 
 
+def test_completed_meeting_persists_to_db(stubbed_app, meeting_available):
+    """End-to-end regression-lock for the auto-persist path.
+
+    When `_run_meeting_job` finishes a job successfully, it SHALL write
+    a row to `/v1/meetings` (via _persist_completed_job). Without this,
+    the PWA history sidebar would only see jobs that completed during
+    the current browser session and lose them on reload."""
+
+    async def fake_analyze(audio_path, **kwargs):
+        return _fake_meeting_result()
+
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, fake_analyze)
+        # GET /v1/meetings starts empty.
+        before = client.get("/v1/meetings")
+        assert before.status_code == 200
+        assert before.json()["meetings"] == []
+
+        # Submit a meeting + drain the background task by polling.
+        resp = _post_meeting_audio(client, filename="my-meeting.wav")
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        poll = client.get(f"/transcribe/meeting/{job_id}")
+        assert poll.status_code == 200
+        assert poll.json()["status"] == "done"
+
+        # The row should now exist in the meeting history with the
+        # job_id as primary key + the filename we supplied.
+        after = client.get("/v1/meetings")
+        body = after.json()
+        assert len(body["meetings"]) == 1
+        row = body["meetings"][0]
+        assert row["id"] == job_id
+        assert row["filename"] == "my-meeting.wav"
+        # The full result was serialised into result_json.
+        assert row["result"]["speakers"] == ["SPEAKER_00", "SPEAKER_01"]
+        assert row["status"] == "done"
+
+
+def test_persistence_failure_does_not_break_live_polling(
+    stubbed_app, meeting_available, monkeypatch
+):
+    """If the DB write fails mid-completion, the in-memory JobStore
+    SHALL still surface `status=done` to the client. Persistence is
+    best-effort; the polling response is the contract."""
+
+    async def fake_analyze(audio_path, **kwargs):
+        return _fake_meeting_result()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated DB outage")
+
+    monkeypatch.setattr(
+        "app.services.persistence.meeting_analyses_repo.create_meeting_analysis",
+        boom,
+    )
+
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, fake_analyze)
+        resp = _post_meeting_audio(client)
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        poll = client.get(f"/transcribe/meeting/{job_id}")
+        # Live polling still returns done even though the DB write
+        # raised — the user sees their result, just won't see it in
+        # the sidebar on next reload.
+        assert poll.status_code == 200
+        assert poll.json()["status"] == "done"
+
+
 def test_post_meeting_returns_job_handle(stubbed_app, meeting_available):
     """A valid upload SHALL return HTTP 202 with job_id and status_url."""
 

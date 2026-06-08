@@ -246,6 +246,7 @@ export const STRINGS = {
     "meeting.sidebar.title": "Recent analyses",
     "meeting.sidebar.empty":
       "No analyses yet — upload a file to get started.",
+    "meeting.sidebar.deleteTooltip": "Delete this analysis",
   },
 
   "zh-TW": {
@@ -477,5 +478,6 @@ export const STRINGS = {
     "meeting.unavailable.noExtras": "未安裝 meeting 套件",
     "meeting.sidebar.title": "最近分析",
     "meeting.sidebar.empty": "尚無分析紀錄 — 上傳檔案來開始。",
+    "meeting.sidebar.deleteTooltip": "刪除這份分析",
   },
 } as const;

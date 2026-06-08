@@ -1108,7 +1108,33 @@ export function createMeetingPage(
     meta.textContent = `${ago} · ${dur}${speakerStr}${statusStr}`;
     btn.append(name, meta);
     btn.addEventListener("click", () => void loadFromHistory(entry));
-    item.appendChild(btn);
+
+    // Delete button (×) — backend DELETE + cache removal. Hover-visible
+    // so the sidebar stays clean in idle state. Click stops propagation
+    // so the row itself doesn't trigger loadFromHistory.
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "sidebar-item-delete";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = t("meeting.sidebar.deleteTooltip");
+    deleteBtn.setAttribute("aria-label", t("meeting.sidebar.deleteTooltip"));
+    deleteBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      // No confirm dialog — the action is undo-light (re-upload is cheap)
+      // and a modal interrupt would feel heavy for a single sidebar
+      // entry. If users delete by accident often, add a confirm later.
+      try {
+        await removeHistory(entry.job_id);
+      } finally {
+        renderSidebar();
+        // If the user just deleted the entry they're currently viewing,
+        // reset back to the upload screen so the page doesn't show a
+        // ghost transcript pointing at nothing.
+        if (activeJobId === entry.job_id) resetPage();
+      }
+    });
+
+    item.append(btn, deleteBtn);
     return item;
   }
 

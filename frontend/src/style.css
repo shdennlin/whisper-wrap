@@ -1872,8 +1872,14 @@ body { min-height: 100vh; }
   flex-direction: column;
   gap: 0.4rem;
 }
+.sidebar-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 0.3rem;
+}
 .sidebar-item-btn {
-  width: 100%;
+  flex: 1;
   text-align: left;
   background: transparent;
   border: 1px solid var(--border);
@@ -1883,10 +1889,38 @@ body { min-height: 100vh; }
   cursor: pointer;
   font: inherit;
   transition: border-color 0.15s ease, background 0.15s ease;
+  min-width: 0; /* let the flex item shrink so ellipsis kicks in */
 }
 .sidebar-item-btn:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+/* × delete affordance — opaque on hover/focus, faint when idle so the
+   row stays clean. Sized to be tappable on mobile (32×32). */
+.sidebar-item-delete {
+  flex-shrink: 0;
+  width: 32px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease,
+    border-color 120ms ease;
+}
+.sidebar-item:hover .sidebar-item-delete,
+.sidebar-item:focus-within .sidebar-item-delete {
+  opacity: 0.6;
+}
+.sidebar-item-delete:hover {
+  opacity: 1;
+  color: var(--red);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
 }
 .sidebar-item-name {
   font-size: 0.82rem;
