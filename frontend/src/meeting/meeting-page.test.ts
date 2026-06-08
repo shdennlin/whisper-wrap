@@ -264,6 +264,157 @@ describe("createMeetingPage — unavailability", () => {
   });
 });
 
+describe("createMeetingPage — fast mode", () => {
+  // The fast-mode checkbox default depends on platform detection (userAgent
+  // and navigator.platform). happy-dom defaults to a Linux-ish ua, so for
+  // the "macOS default ON" case we monkey-patch userAgent for the duration
+  // of the test and restore afterwards.
+
+  function mountWithFile(): { file: File; fileInput: HTMLInputElement } {
+    const page = mountAvailable();
+    void page;
+    const fileInput = document.querySelector<HTMLInputElement>(
+      ".meeting-upload input[type=file]",
+    )!;
+    const file = new File([new Uint8Array([0, 1])], "meeting.wav", {
+      type: "audio/wav",
+    });
+    Object.defineProperty(fileInput, "files", {
+      value: [file],
+      writable: false,
+    });
+    fileInput.dispatchEvent(new Event("change"));
+    return { file, fileInput };
+  }
+
+  function fastModeCheckbox(): HTMLInputElement {
+    // The fast-mode checkbox is the LAST .confirm-field-checkbox in
+    // confirmOptions (appended after word-ts in meeting-page.ts).
+    const boxes = document.querySelectorAll<HTMLInputElement>(
+      ".confirm-field-checkbox input[type=checkbox]",
+    );
+    return boxes[boxes.length - 1];
+  }
+
+  function wordTsCheckbox(): HTMLInputElement {
+    // First checkbox; word-ts appears before fast-mode in confirmOptions.
+    return document.querySelector<HTMLInputElement>(
+      ".confirm-field-checkbox input[type=checkbox]",
+    )!;
+  }
+
+  it("defaults fast-mode ON for macOS users", () => {
+    const origUA = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
+      configurable: true,
+    });
+    try {
+      mountWithFile();
+      expect(fastModeCheckbox().checked).toBe(true);
+      // Word-ts default OFF (independent of platform).
+      expect(wordTsCheckbox().checked).toBe(false);
+    } finally {
+      Object.defineProperty(navigator, "userAgent", {
+        value: origUA,
+        configurable: true,
+      });
+    }
+  });
+
+  it("defaults fast-mode OFF for non-macOS users", () => {
+    const origUA = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      value: "Mozilla/5.0 (X11; Linux x86_64)",
+      configurable: true,
+    });
+    // Also clear platform — happy-dom may default to a Mac-ish value.
+    const origPlatform = (navigator as { platform?: string }).platform;
+    Object.defineProperty(navigator, "platform", {
+      value: "Linux x86_64",
+      configurable: true,
+    });
+    try {
+      mountWithFile();
+      expect(fastModeCheckbox().checked).toBe(false);
+      expect(wordTsCheckbox().checked).toBe(false);
+    } finally {
+      Object.defineProperty(navigator, "userAgent", {
+        value: origUA,
+        configurable: true,
+      });
+      Object.defineProperty(navigator, "platform", {
+        value: origPlatform,
+        configurable: true,
+      });
+    }
+  });
+
+  it("checking fast-mode clears the word-ts checkbox (one-shot interlock)", () => {
+    const origUA = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      value: "Mozilla/5.0 (X11; Linux x86_64)",
+      configurable: true,
+    });
+    Object.defineProperty(navigator, "platform", {
+      value: "Linux x86_64",
+      configurable: true,
+    });
+    try {
+      mountWithFile();
+      // Manually flip word-ts on first to simulate a user who wanted both.
+      const wts = wordTsCheckbox();
+      wts.checked = true;
+      // Then turn on fast-mode — the change handler should reset word-ts.
+      const fast = fastModeCheckbox();
+      fast.checked = true;
+      fast.dispatchEvent(new Event("change"));
+      expect(wts.checked).toBe(false);
+    } finally {
+      Object.defineProperty(navigator, "userAgent", {
+        value: origUA,
+        configurable: true,
+      });
+    }
+  });
+
+  it("Start with fast-mode ON sends ?fast=true in the submit URL", async () => {
+    const origUA = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
+      configurable: true,
+    });
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        job_id: "fast-1",
+        status_url: "/transcribe/meeting/fast-1",
+      }),
+    }));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchFn as unknown as typeof fetch;
+    try {
+      mountWithFile();
+      // Default-on for Mac; just click Start.
+      const startBtn = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".confirm-actions button"),
+      ).find((b) => b.textContent?.includes("Start"))!;
+      startBtn.click();
+      // Drain one tick so the fetch resolves.
+      await new Promise((r) => setTimeout(r, 5));
+      expect(fetchFn).toHaveBeenCalled();
+      const submitUrl = fetchFn.mock.calls[0][0] as string;
+      expect(submitUrl).toContain("fast=true");
+    } finally {
+      globalThis.fetch = originalFetch;
+      Object.defineProperty(navigator, "userAgent", {
+        value: origUA,
+        configurable: true,
+      });
+    }
+  });
+});
+
 describe("createMeetingPage — upload flow", () => {
   it("polls until done and renders the final result", async () => {
     const responses = [

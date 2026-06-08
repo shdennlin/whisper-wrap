@@ -142,6 +142,126 @@ def test_query_params_flow_to_analyzer(stubbed_app, meeting_available):
     assert captured.get("enable_word_timestamps") is False
 
 
+def test_post_meeting_fast_routes_to_external_asr(
+    stubbed_app, meeting_available
+):
+    """`?fast=true` SHALL route through `app.state.whisper.transcribe` to
+    produce ASR segments, then call `analyzer.analyze_with_external_asr`
+    with those segments + the detected language. The slow `analyze`
+    method SHALL NOT be invoked.
+    """
+    from app.services._whisper_backend import Segment as BackendSegment
+    from app.services._whisper_backend import TranscriptionResult
+
+    fake_result = TranscriptionResult(
+        text="hello world",
+        segments=[
+            BackendSegment(text="hello", start=0.0, end=1.0),
+            BackendSegment(text="world", start=1.0, end=2.0),
+        ],
+        language="zh",
+        duration_seconds=2.0,
+    )
+
+    transcribe_calls: list[dict] = []
+
+    async def fake_transcribe(audio_path, *, language=None, initial_prompt=None):
+        transcribe_calls.append(
+            {"audio_path": audio_path, "language": language}
+        )
+        return fake_result
+
+    external_calls: list[dict] = []
+
+    async def fake_external_asr(audio_path, **kwargs):
+        external_calls.append({"audio_path": audio_path, **kwargs})
+        return _fake_meeting_result()
+
+    slow_called = False
+
+    async def fake_slow_analyze(audio_path, **kwargs):
+        nonlocal slow_called
+        slow_called = True
+        return _fake_meeting_result()
+
+    with TestClient(stubbed_app) as client:
+        # `app.state.whisper` is only populated once lifespan runs (entering
+        # the TestClient context manager). Patch it INSIDE the `with` so we
+        # overwrite the lifespan-installed MagicMock with our async fake.
+        stubbed_app.state.whisper.transcribe = fake_transcribe
+
+        analyzer = MeetingAnalyzer(
+            ct2_model_dir="/fake/ct2",
+            hf_token="fake-token",
+            diarization_pipeline="pyannote/speaker-diarization-3.1",
+        )
+        analyzer.analyze = fake_slow_analyze
+        analyzer.analyze_with_external_asr = fake_external_asr
+        stubbed_app.state.meeting_analyzer = analyzer
+
+        resp = _post_meeting_audio(client, fast="true")
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        # Drain the background task.
+        poll = client.get(f"/transcribe/meeting/{job_id}")
+        assert poll.status_code == 200
+        assert poll.json()["status"] == "done"
+
+    assert slow_called is False, (
+        "analyze() SHALL NOT be called when fast=true"
+    )
+    assert len(external_calls) == 1
+    call = external_calls[0]
+    # Segments reshaped to dicts and language threaded through.
+    assert call["asr_segments"] == [
+        {"start": 0.0, "end": 1.0, "text": "hello"},
+        {"start": 1.0, "end": 2.0, "text": "world"},
+    ]
+    assert call["language"] == "zh"
+    # The same audio path went into both backend.transcribe AND
+    # analyze_with_external_asr (pyannote re-reads the file).
+    assert len(transcribe_calls) == 1
+    assert transcribe_calls[0]["audio_path"] == call["audio_path"]
+
+
+def test_post_meeting_default_routes_to_slow_analyze(
+    stubbed_app, meeting_available
+):
+    """Regression: POST without `fast` query param SHALL still run the
+    existing `analyze()` path. No behavioural drift for current users."""
+    slow_called_with: dict = {}
+
+    async def fake_analyze(audio_path, **kwargs):
+        slow_called_with.update({"audio_path": audio_path, **kwargs})
+        return _fake_meeting_result()
+
+    external_called = False
+
+    async def fake_external_asr(audio_path, **kwargs):
+        nonlocal external_called
+        external_called = True
+        return _fake_meeting_result()
+
+    with TestClient(stubbed_app) as client:
+        analyzer = MeetingAnalyzer(
+            ct2_model_dir="/fake/ct2",
+            hf_token="fake-token",
+            diarization_pipeline="pyannote/speaker-diarization-3.1",
+        )
+        analyzer.analyze = fake_analyze
+        analyzer.analyze_with_external_asr = fake_external_asr
+        stubbed_app.state.meeting_analyzer = analyzer
+
+        resp = _post_meeting_audio(client)
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        poll = client.get(f"/transcribe/meeting/{job_id}")
+        assert poll.status_code == 200
+
+    assert external_called is False
+    assert slow_called_with.get("audio_path") is not None
+
+
 def test_post_meeting_returns_job_handle(stubbed_app, meeting_available):
     """A valid upload SHALL return HTTP 202 with job_id and status_url."""
 

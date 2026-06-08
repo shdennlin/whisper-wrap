@@ -241,7 +241,31 @@ export function createMeetingPage(
   wordTsText.textContent = t("meeting.confirm.wordTimestamps");
   wordTsField.append(wordTsInput, wordTsText);
 
-  confirmOptions.append(speakersField, languageField, wordTsField);
+  // Fast mode — routes ASR through the platform-default WhisperBackend
+  // (ggml+ANE on macOS, ct2+CUDA on Linux). Default ON for macOS users
+  // because ct2 batched ASR on Apple Silicon CPU is structurally slow
+  // (~35-40 min for a 2h15min file vs ~12-15 min via ANE). On other
+  // platforms default OFF: Linux with CUDA already gets the same backend
+  // on the slow path, and Linux CPU has no equivalent of ANE so the slow
+  // path is the only honest baseline.
+  const fastModeField = document.createElement("label");
+  fastModeField.className = "confirm-field confirm-field-checkbox";
+  const fastModeInput = document.createElement("input");
+  fastModeInput.type = "checkbox";
+  fastModeInput.checked = isMacPlatform();
+  const fastModeText = document.createElement("span");
+  fastModeText.textContent = t("meeting.confirm.fastMode");
+  fastModeField.append(fastModeInput, fastModeText);
+
+  // Soft interlock: turning Fast mode ON clears Word timestamps so the
+  // user gets the fastest possible result by default. They can re-check
+  // word-ts afterwards if they want both (align runs on MPS, ~1-2 min);
+  // we don't force-clear in the reverse direction.
+  fastModeInput.addEventListener("change", () => {
+    if (fastModeInput.checked) wordTsInput.checked = false;
+  });
+
+  confirmOptions.append(speakersField, languageField, wordTsField, fastModeField);
 
   const confirmActions = document.createElement("div");
   confirmActions.className = "confirm-actions";
@@ -602,6 +626,10 @@ export function createMeetingPage(
     }
     // Word timestamps — backend default is true, our UI default is false.
     out.enableWordTimestamps = wordTsInput.checked;
+    // Fast mode — only sent when ON so the backend default (slow path)
+    // applies unless the user opted in. Matches the wordTs serialisation
+    // pattern in meeting-api.ts.
+    if (fastModeInput.checked) out.fast = true;
     return out;
   }
 
@@ -1021,6 +1049,21 @@ export function createMeetingPage(
 
 function cssSafe(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Best-effort detection of macOS so Fast mode defaults ON for the user
+ * who benefits most from it. Checks both userAgent and the deprecated-
+ * but-still-implemented `navigator.platform` so older Safari builds and
+ * older Chromium without User-Agent Client Hints both resolve correctly.
+ * The detection only seeds the default; the checkbox can always be
+ * toggled by hand, so a false negative just means one extra click.
+ */
+function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const platform = (navigator as { platform?: string }).platform || "";
+  return /Mac/i.test(ua) || platform.toLowerCase().startsWith("mac");
 }
 
 function formatTime(totalSeconds: number): string {

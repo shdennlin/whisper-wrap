@@ -114,6 +114,170 @@ async def test_analyzer_runs_pipeline_on_fixture(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_analyze_with_external_asr_skips_asr(monkeypatch):
+    """Fast path: `analyze_with_external_asr` SHALL run align+diarize+merge
+    using caller-supplied segments WITHOUT touching the internal ASR
+    stage. This is the contract that lets the meeting endpoint reuse the
+    fast /transcribe backend (ggml+ANE) instead of WhisperX's CT2 ASR."""
+    aligned, diar_out, fake_assign = _fake_pipeline()
+    analyzer = _make_analyzer()
+
+    asr_called = False
+    align_called_with: dict = {}
+    diarize_called = False
+
+    async def _noop_load(self):
+        self._loaded = True
+
+    async def _fake_asr(self, path, *, language=None):
+        nonlocal asr_called
+        asr_called = True
+        return {"language": "en", "segments": []}
+
+    async def _fake_align(self, asr_out, path):
+        align_called_with.update(asr_out)
+        return aligned
+
+    async def _fake_diarize(
+        self, path, *, num_speakers=None, min_speakers=None, max_speakers=None
+    ):
+        nonlocal diarize_called
+        diarize_called = True
+        return diar_out
+
+    import sys
+    import types
+
+    fake_wx = types.ModuleType("whisperx")
+    fake_wx.assign_word_speakers = fake_assign
+    monkeypatch.setitem(sys.modules, "whisperx", fake_wx)
+    monkeypatch.setattr(MeetingAnalyzer, "_load_pipeline", _noop_load)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_asr", _fake_asr)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_align", _fake_align)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_diarize", _fake_diarize)
+
+    external_segments = [
+        {"start": 0.0, "end": 5.5, "text": "First speaker says hello."},
+        {"start": 6.0, "end": 11.2, "text": "Second speaker replies."},
+    ]
+    result = await analyzer.analyze_with_external_asr(
+        str(FIXTURE_WAV),
+        asr_segments=external_segments,
+        language="zh",
+    )
+
+    assert asr_called is False, (
+        "_run_asr SHALL NOT be called on the fast path"
+    )
+    assert diarize_called is True
+    assert align_called_with["language"] == "zh"
+    assert align_called_with["segments"] == external_segments
+    assert isinstance(result, MeetingResult)
+    assert len(result.segments) == 2
+
+
+@pytest.mark.asyncio
+async def test_analyze_with_external_asr_skips_align_when_word_ts_off(
+    monkeypatch,
+):
+    """`enable_word_timestamps=False` SHALL skip align entirely on the fast
+    path — the merge then runs with caller-supplied segments directly,
+    same as on the slow path."""
+    aligned, diar_out, fake_assign = _fake_pipeline()
+    analyzer = _make_analyzer()
+
+    align_called = False
+
+    async def _noop_load(self):
+        self._loaded = True
+
+    async def _fake_align(self, asr_out, path):
+        nonlocal align_called
+        align_called = True
+        return aligned
+
+    async def _fake_diarize(
+        self, path, *, num_speakers=None, min_speakers=None, max_speakers=None
+    ):
+        return diar_out
+
+    import sys
+    import types
+
+    fake_wx = types.ModuleType("whisperx")
+    fake_wx.assign_word_speakers = fake_assign
+    monkeypatch.setitem(sys.modules, "whisperx", fake_wx)
+    monkeypatch.setattr(MeetingAnalyzer, "_load_pipeline", _noop_load)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_align", _fake_align)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_diarize", _fake_diarize)
+
+    external_segments = [
+        {"start": 0.0, "end": 5.5, "text": "A."},
+        {"start": 6.0, "end": 11.2, "text": "B."},
+    ]
+    result = await analyzer.analyze_with_external_asr(
+        str(FIXTURE_WAV),
+        asr_segments=external_segments,
+        language="en",
+        enable_word_timestamps=False,
+    )
+
+    assert align_called is False
+    assert all(seg.words is None for seg in result.segments)
+
+
+@pytest.mark.asyncio
+async def test_analyze_with_external_asr_progress_cancellation(monkeypatch):
+    """Progress callback raising CancelledError SHALL abort the fast
+    pipeline cleanly — diarize MUST NOT run after a cancel raised in the
+    asr_external progress checkpoint."""
+    aligned, diar_out, fake_assign = _fake_pipeline()
+    analyzer = _make_analyzer()
+
+    diarize_called = False
+
+    async def _noop_load(self):
+        self._loaded = True
+
+    async def _fake_align(self, asr_out, path):
+        return aligned
+
+    async def _fake_diarize(
+        self, path, *, num_speakers=None, min_speakers=None, max_speakers=None
+    ):
+        nonlocal diarize_called
+        diarize_called = True
+        return diar_out
+
+    import sys
+    import types
+
+    fake_wx = types.ModuleType("whisperx")
+    fake_wx.assign_word_speakers = fake_assign
+    monkeypatch.setitem(sys.modules, "whisperx", fake_wx)
+    monkeypatch.setattr(MeetingAnalyzer, "_load_pipeline", _noop_load)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_align", _fake_align)
+    monkeypatch.setattr(MeetingAnalyzer, "_run_diarize", _fake_diarize)
+
+    def aborting_progress(stage: str, progress: float) -> None:
+        # Cancellation kicked in at the asr_external checkpoint — same
+        # contract the meeting endpoint relies on for DELETE-during-job.
+        if stage == "asr_external":
+            raise asyncio.CancelledError("user cancelled")
+
+    import asyncio
+
+    with pytest.raises(asyncio.CancelledError):
+        await analyzer.analyze_with_external_asr(
+            str(FIXTURE_WAV),
+            asr_segments=[{"start": 0.0, "end": 1.0, "text": "x"}],
+            language="en",
+            progress_callback=aborting_progress,
+        )
+    assert diarize_called is False
+
+
+@pytest.mark.asyncio
 async def test_analyzer_omits_words_when_word_timestamps_disabled(monkeypatch):
     """`enable_word_timestamps=False` skips the alignment stage and emits no
     `words` field per segment."""

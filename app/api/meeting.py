@@ -24,6 +24,7 @@ from app.api.transcribe import (
     _read_raw_audio,
 )
 from app.config import config
+from app.services._whisper_backend import WhisperBackend
 from app.services.converter import audio_converter
 from app.services.files import file_manager
 from app.services.meeting import MeetingAnalyzer, MeetingResult
@@ -191,11 +192,19 @@ async def _run_meeting_job(
     min_speakers: int | None,
     max_speakers: int | None,
     enable_word_timestamps: bool,
+    fast: bool = False,
+    backend: WhisperBackend | None = None,
 ) -> None:
     """Background entrypoint — runs the pipeline and updates the job record.
 
     Wraps every failure in a typed error code so the GET endpoint can surface
     a stable `error.code` to the client.
+
+    When `fast=True`, the ASR stage is delegated to the platform-default
+    WhisperBackend (`backend.transcribe`) instead of WhisperX's CT2 batched
+    ASR. The resulting segments are then handed to
+    `analyzer.analyze_with_external_asr` which runs only align + diarize +
+    merge. Caller MUST supply `backend` when `fast=True`.
     """
     # Honour cancellation requested before the worker even started running.
     pre_job = store.get(job_id)
@@ -204,7 +213,10 @@ async def _run_meeting_job(
         file_manager.cleanup_file(audio_path)
         return
 
-    store.mark_running(job_id, stage="asr")
+    # Stage label differs by path so log scrapers and the UI's progress
+    # display can distinguish "fast ASR" from "WhisperX batched ASR".
+    initial_stage = "asr_external" if fast else "asr"
+    store.mark_running(job_id, stage=initial_stage)
     try:
 
         def progress(stage: str, progress: float) -> None:
@@ -216,15 +228,43 @@ async def _run_meeting_job(
             if curr is not None and curr.cancel_requested:
                 raise asyncio.CancelledError("meeting job cancelled by client")
 
-        result = await analyzer.analyze(
-            audio_path,
-            language=language if language and language != "auto" else None,
-            num_speakers=num_speakers,
-            min_speakers=min_speakers,
-            max_speakers=max_speakers,
-            enable_word_timestamps=enable_word_timestamps,
-            progress_callback=progress,
-        )
+        if fast:
+            if backend is None:
+                raise RuntimeError(
+                    "fast=true requires a WhisperBackend instance (server bug)"
+                )
+            # Wire the existing /transcribe path. initial_prompt left None
+            # because pyannote diarize is already speaker-agnostic and we
+            # don't have a per-job prompt convention for meetings yet.
+            asr_result = await backend.transcribe(
+                audio_path,
+                language=language if language and language != "auto" else None,
+                initial_prompt=None,
+            )
+            asr_segments = [
+                {"start": s.start, "end": s.end, "text": s.text}
+                for s in asr_result.segments
+            ]
+            result = await analyzer.analyze_with_external_asr(
+                audio_path,
+                asr_segments=asr_segments,
+                language=asr_result.language or "und",
+                num_speakers=num_speakers,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+                enable_word_timestamps=enable_word_timestamps,
+                progress_callback=progress,
+            )
+        else:
+            result = await analyzer.analyze(
+                audio_path,
+                language=language if language and language != "auto" else None,
+                num_speakers=num_speakers,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+                enable_word_timestamps=enable_word_timestamps,
+                progress_callback=progress,
+            )
         # Late-cancel: client called DELETE after the pipeline ran but before
         # we recorded the result. Honour the cancel and discard the result.
         curr = store.get(job_id)
@@ -238,6 +278,7 @@ async def _run_meeting_job(
         stage = store.get(job_id).stage if store.get(job_id) else "unknown"
         code_map = {
             "asr": "asr_failed",
+            "asr_external": "asr_failed",
             "align": "align_failed",
             "diarize": "diarize_failed",
         }
@@ -263,6 +304,15 @@ async def post_meeting(
     max_speakers: int | None = Query(None, description="Upper bound on speaker count"),
     enable_word_timestamps: bool = Query(
         True, description="Include per-word timestamps (alignment stage)"
+    ),
+    fast: bool = Query(
+        False,
+        description=(
+            "Run ASR via the platform-default WhisperBackend (ggml+ANE on "
+            "macOS, ct2+CUDA on Linux) instead of WhisperX's CT2 batched "
+            "ASR. ~3x faster on Apple Silicon; word timestamps still "
+            "available via enable_word_timestamps."
+        ),
     ),
 ) -> dict[str, Any]:
     """Accept a meeting audio upload and return a job handle.
@@ -307,6 +357,10 @@ async def post_meeting(
 
     store = _get_store(request)
     analyzer = _get_or_create_analyzer(request)
+    # Capture the WhisperBackend reference now so the BackgroundTasks
+    # worker can reach it after the Request goes out of scope. Always
+    # present (lifespan eagerly loads the backend) so safe to read.
+    backend: WhisperBackend = request.app.state.whisper
     job = store.create()
     background_tasks.add_task(
         _run_meeting_job,
@@ -319,6 +373,8 @@ async def post_meeting(
         min_speakers=min_speakers,
         max_speakers=max_speakers,
         enable_word_timestamps=enable_word_timestamps,
+        fast=fast,
+        backend=backend,
     )
     return {
         "job_id": job.job_id,

@@ -315,6 +315,102 @@ class MeetingAnalyzer:
             )
             return result
 
+    async def analyze_with_external_asr(
+        self,
+        audio_path: str,
+        *,
+        asr_segments: list[dict[str, Any]],
+        language: str,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        enable_word_timestamps: bool = True,
+        progress_callback: ProgressCallback | None = None,
+    ) -> MeetingResult:
+        """Run align + diarize + merge given pre-computed ASR segments.
+
+        Fast-mode entry point. Caller (the meeting endpoint) is expected to
+        have produced `asr_segments` by calling the platform-default
+        `WhisperBackend.transcribe()` — pywhispercpp+ggml+ANE on macOS,
+        ct2 with CUDA on Linux. By skipping `_run_asr`, this method cuts
+        a 2h15min file's runtime on Apple Silicon from ~35-45 min to
+        ~5-10 min (the align+diarize stages run on MPS thanks to the
+        previous `503cc0f` perf commit).
+
+        Shape contract for `asr_segments`: each dict has at least
+        `"start"`, `"end"`, `"text"`. WhisperX's downstream stages
+        consume only those three keys (`meeting.py:_run_align` /
+        `_merge`); extra fields are accepted and ignored.
+
+        Reuses `_run_align`, `_run_diarize`, `_merge` unchanged so the
+        result is byte-for-byte identical with the slow-path output for
+        the same effective transcript — only the ASR backend swapped.
+        """
+        async with self._lock:
+            import time as _time
+
+            pipeline_start = _time.monotonic()
+            await self._load_pipeline()
+
+            # The "asr_external" stage label distinguishes this path from
+            # the WhisperX ASR stage in log scrapers and progress UI.
+            _report(progress_callback, "asr_external", 0.1)
+            logger.info(
+                "Meeting stage=asr_external (using external segments, %d items)",
+                len(asr_segments),
+            )
+
+            asr_out: dict[str, Any] = {
+                "language": language,
+                "segments": asr_segments,
+            }
+
+            align_elapsed = 0.0
+            if enable_word_timestamps:
+                _report(progress_callback, "align", 0.4)
+                align_start = _time.monotonic()
+                logger.info("Meeting stage=align start (fast path)")
+                aligned = await self._run_align(asr_out, audio_path)
+                align_elapsed = _time.monotonic() - align_start
+                logger.info(
+                    "Meeting stage=align done elapsed=%.1fs", align_elapsed
+                )
+            else:
+                logger.info(
+                    "Meeting stage=align skipped (word_timestamps=false)"
+                )
+                aligned = asr_out
+
+            _report(progress_callback, "diarize", 0.7)
+            diar_start = _time.monotonic()
+            logger.info("Meeting stage=diarize start (fast path)")
+            diarize_out = await self._run_diarize(
+                audio_path,
+                num_speakers=num_speakers,
+                min_speakers=min_speakers,
+                max_speakers=max_speakers,
+            )
+            diar_elapsed = _time.monotonic() - diar_start
+            logger.info(
+                "Meeting stage=diarize done elapsed=%.1fs", diar_elapsed
+            )
+
+            result = self._merge(
+                aligned,
+                diarize_out,
+                enable_word_timestamps=enable_word_timestamps,
+            )
+            _report(progress_callback, "complete", 1.0)
+            total = _time.monotonic() - pipeline_start
+            logger.info(
+                "Meeting pipeline complete (fast) total=%.1fs"
+                " (align=%.1fs diarize=%.1fs)",
+                total,
+                align_elapsed,
+                diar_elapsed,
+            )
+            return result
+
     async def _run_asr(
         self, audio_path: str, *, language: str | None
     ) -> dict[str, Any]:

@@ -14,6 +14,13 @@ export interface SubmitOptions {
   minSpeakers?: number;
   maxSpeakers?: number;
   language?: string;
+  /**
+   * Run ASR via the platform-default WhisperBackend (ggml+ANE on macOS,
+   * ct2+CUDA on Linux) instead of WhisperX's CT2 batched ASR. ~3× faster
+   * on Apple Silicon; word timestamps still available via
+   * `enableWordTimestamps`. Backend default is false (existing slow path).
+   */
+  fast?: boolean;
 }
 
 export interface JobHandle {
@@ -40,6 +47,9 @@ export async function submitMeeting(
     params.set("enable_word_timestamps", "false");
   else if (opts.enableWordTimestamps === true)
     params.set("enable_word_timestamps", "true");
+  // Same opt-in pattern as enableWordTimestamps: only send when true, so a
+  // future backend default change to fast-on-everywhere is honoured.
+  if (opts.fast === true) params.set("fast", "true");
 
   const url = `/transcribe/meeting${params.toString() ? `?${params}` : ""}`;
   const resp = await fetch(url, {
