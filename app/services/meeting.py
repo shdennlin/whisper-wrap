@@ -148,9 +148,18 @@ class MeetingAnalyzer:
         except ImportError as e:
             raise MeetingExtrasMissingError("meeting extras not installed") from e
 
+        import time as _time
+
         import whisperx as _wx
 
-        logger.info("Loading WhisperX ASR model from %s", self.ct2_model_dir)
+        load_start = _time.monotonic()
+        logger.info(
+            "Loading WhisperX ASR model from %s (compute_type=%s, device=%s)",
+            self.ct2_model_dir,
+            self.compute_type,
+            self.device,
+        )
+        asr_load_start = _time.monotonic()
         self._asr = await asyncio.to_thread(
             _wx.load_model,
             self.ct2_model_dir,
@@ -158,14 +167,27 @@ class MeetingAnalyzer:
             compute_type=self.compute_type,
         )
         logger.info(
+            "Loaded WhisperX ASR model in %.1fs",
+            _time.monotonic() - asr_load_start,
+        )
+        logger.info(
             "Loading pyannote diarization pipeline %s", self.diarization_pipeline_name
         )
+        diar_load_start = _time.monotonic()
         self._diarize = await asyncio.to_thread(
             Pipeline.from_pretrained,
             self.diarization_pipeline_name,
             token=self.hf_token,
         )
+        logger.info(
+            "Loaded pyannote pipeline in %.1fs",
+            _time.monotonic() - diar_load_start,
+        )
         self._loaded = True
+        logger.info(
+            "Meeting pipeline ready (total load %.1fs)",
+            _time.monotonic() - load_start,
+        )
 
     async def analyze(
         self,
@@ -179,25 +201,59 @@ class MeetingAnalyzer:
         progress_callback: ProgressCallback | None = None,
     ) -> MeetingResult:
         async with self._lock:
+            # Per-stage timing log. Uses time.monotonic() so wall-clock
+            # adjustments don't skew the elapsed numbers. Same lines also
+            # double as the canonical "how long did each stage take" record
+            # that future regressions can be compared against.
+            import time as _time
+
+            pipeline_start = _time.monotonic()
             await self._load_pipeline()
+
             _report(progress_callback, "asr", 0.1)
+            asr_start = _time.monotonic()
+            logger.info("Meeting stage=asr start")
             asr_out = await self._run_asr(audio_path, language=language)
+            asr_elapsed = _time.monotonic() - asr_start
+            logger.info("Meeting stage=asr done elapsed=%.1fs", asr_elapsed)
+
+            align_elapsed = 0.0
             if enable_word_timestamps:
                 _report(progress_callback, "align", 0.4)
+                align_start = _time.monotonic()
+                logger.info("Meeting stage=align start")
                 aligned = await self._run_align(asr_out, audio_path)
+                align_elapsed = _time.monotonic() - align_start
+                logger.info("Meeting stage=align done elapsed=%.1fs", align_elapsed)
             else:
+                logger.info("Meeting stage=align skipped (word_timestamps=false)")
                 aligned = asr_out
+
             _report(progress_callback, "diarize", 0.7)
+            diar_start = _time.monotonic()
+            logger.info("Meeting stage=diarize start")
             diarize_out = await self._run_diarize(
                 audio_path,
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )
+            diar_elapsed = _time.monotonic() - diar_start
+            logger.info("Meeting stage=diarize done elapsed=%.1fs", diar_elapsed)
+
             result = self._merge(
                 aligned, diarize_out, enable_word_timestamps=enable_word_timestamps
             )
             _report(progress_callback, "complete", 1.0)
+            total = _time.monotonic() - pipeline_start
+            logger.info(
+                "Meeting pipeline complete total=%.1fs"
+                " (asr=%.1fs align=%.1fs diarize=%.1fs)",
+                total,
+                asr_elapsed,
+                align_elapsed,
+                diar_elapsed,
+            )
             return result
 
     async def _run_asr(

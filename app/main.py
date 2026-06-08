@@ -159,7 +159,30 @@ def _infer_quant(filename: str) -> str | None:
 async def lifespan(app: FastAPI):
     # Surface .env first so subsequent reads see the developer's overrides.
     load_env_file()
-    logging.basicConfig(level=config.LOG_LEVEL)
+    # Consistent timestamped format across our app + uvicorn + whisperx +
+    # pyannote. Default uvicorn format omits timestamps; that makes trace-
+    # by-grep painful when something fails 12 hours into a long meeting run.
+    # ISO-ish "YYYY-MM-DD HH:MM:SS,mmm" matches what whisperx/pyannote
+    # already emit so the visual columns line up across libraries.
+    _log_format = "%(asctime)s %(levelname)-7s %(name)s | %(message)s"
+    logging.basicConfig(
+        level=config.LOG_LEVEL,
+        format=_log_format,
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,  # override any handler other libs installed at import time
+    )
+    # uvicorn manages its own loggers (uvicorn, uvicorn.access, uvicorn.error)
+    # with bare default handlers — install our formatter on each so the access
+    # log ("GET /... 200 OK") also gets a timestamp. propagate=False prevents
+    # double-emit through the root logger.
+    _uvicorn_formatter = logging.Formatter(fmt=_log_format, datefmt="%Y-%m-%d %H:%M:%S")
+    for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        _u = logging.getLogger(_name)
+        _u.handlers.clear()
+        _h = logging.StreamHandler()
+        _h.setFormatter(_uvicorn_formatter)
+        _u.addHandler(_h)
+        _u.propagate = False
     logger.info("Starting whisper-wrap API server")
     config.ensure_temp_dir()
 
