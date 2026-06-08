@@ -19,6 +19,11 @@ export interface MeetingFull {
   result: MeetingResult;
   speaker_names: Record<string, string>;
   status: string;
+  // Audio metadata — null until the original recording is uploaded
+  // via POST /v1/meetings/{id}/audio.
+  audio_path?: string | null;
+  audio_mime_type?: string | null;
+  audio_size_bytes?: number | null;
 }
 
 export interface MeetingListResponse {
@@ -93,4 +98,41 @@ export async function deleteMeeting(id: string): Promise<void> {
   if (!r.ok && r.status !== 404) {
     throw new Error(`HTTP ${r.status}: ${await r.text()}`);
   }
+}
+
+export interface MeetingAudioMeta {
+  audio_path: string;
+  audio_mime_type: string;
+  audio_size_bytes: number;
+}
+
+/** Upload the original recording as a sidecar to a finished meeting
+ *  analysis. Multipart form (`file` field) mirrors /v1/sessions/{id}
+ *  /audio. Best-effort from the caller's perspective: failures are
+ *  non-fatal; the analysis row still exists, just without audio. */
+export async function uploadMeetingAudio(
+  id: string,
+  blob: Blob,
+  mimeType: string,
+): Promise<MeetingAudioMeta> {
+  const form = new FormData();
+  // Wrap in a Blob carrying the mime so the server sees the right
+  // Content-Type per multipart part. DON'T set a manual fetch header;
+  // the browser MUST generate Content-Type: multipart/form-data with
+  // a boundary itself.
+  form.append("file", new Blob([blob], { type: mimeType }), "audio");
+  const r = await fetch(`/v1/meetings/${encodeURIComponent(id)}/audio`, {
+    method: "POST",
+    body: form,
+  });
+  return ok<MeetingAudioMeta>(r);
+}
+
+/** Returns the audio URL to set as `<audio src>` (we use the
+ *  endpoint URL directly so the browser streams without buffering
+ *  the entire blob in memory). Callers check `meeting.audio_path`
+ *  first — null means no audio uploaded yet, in which case this
+ *  endpoint would 404. */
+export function meetingAudioUrl(id: string): string {
+  return `/v1/meetings/${encodeURIComponent(id)}/audio`;
 }

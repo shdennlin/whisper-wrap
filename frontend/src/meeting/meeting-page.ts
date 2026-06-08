@@ -33,6 +33,10 @@ import {
   type MeetingViewMode,
 } from "./view-mode-store";
 import {
+  meetingAudioUrl,
+  uploadMeetingAudio,
+} from "./meeting-history-api";
+import {
   loadHistory,
   prime as primeMeetingHistory,
   recordHistory,
@@ -805,6 +809,18 @@ export function createMeetingPage(
         result: final.result,
       });
       renderSidebar();
+      // Upload the original audio as a sidecar so the user can replay
+      // it from the sidebar later. Fire-and-forget: failures are
+      // non-fatal (the analysis row still exists, just without audio).
+      // Backend stores by job_id, no client roundtrip needed after.
+      void uploadMeetingAudio(handle.job_id, file, file.type).catch(
+        (err: unknown) => {
+          console.warn(
+            "Meeting audio upload failed (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
+        },
+      );
     } catch (e) {
       if (localAbort.signal.aborted) return;
       showError(
@@ -1149,7 +1165,15 @@ export function createMeetingPage(
     if (entry.status === "done" && entry.result) {
       speakerNames = { ...(entry.speaker_names ?? {}) };
       activeJobId = entry.job_id;
-      audioEl.removeAttribute("src");
+      // If the server has the original audio, point the player at the
+      // streaming endpoint so the user can replay + click-to-seek into
+      // a past meeting. Otherwise clear the src so the player shows
+      // its empty state instead of trying to replay stale audio.
+      if (entry.audio_path) {
+        audioEl.src = meetingAudioUrl(entry.job_id);
+      } else {
+        audioEl.removeAttribute("src");
+      }
       renderResult(entry.result, "");
       uploadForm.hidden = true;
       confirmCard.hidden = true;

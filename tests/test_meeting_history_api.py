@@ -147,3 +147,118 @@ def test_pagination_via_before_ms(client):
     r = client.get(f"/v1/meetings?limit=2&before_ms={cursor}")
     body = r.json()
     assert [m["id"] for m in body["meetings"]] == ["m2", "m1"]
+
+
+# --- Audio endpoints ---------------------------------------------------------
+
+
+def test_audio_upload_and_download_roundtrip(client, tmp_path, monkeypatch):
+    # Redirect audio_dir into a temp path so the test doesn't pollute
+    # the project's `data/audio/` directory.
+    from app import config as config_module
+
+    # audio_dir is a derived property of DATA_DIR; redirect the
+    # source so audio writes land in tmp_path instead of the real
+    # data/audio/ directory.
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+
+    client.post("/v1/meetings", json=_sample_meeting("m-audio"))
+
+    # Upload
+    audio_bytes = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 100
+    r = client.post(
+        "/v1/meetings/m-audio/audio",
+        files={"file": ("clip.wav", audio_bytes, "audio/wav")},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["audio_mime_type"] == "audio/wav"
+    assert body["audio_size_bytes"] == len(audio_bytes)
+    assert body["audio_path"].endswith(".wav")
+
+    # The row now carries audio metadata.
+    r = client.get("/v1/meetings/m-audio")
+    detail = r.json()
+    assert detail["audio_mime_type"] == "audio/wav"
+    assert detail["audio_size_bytes"] == len(audio_bytes)
+
+    # Download — should return the exact bytes we uploaded.
+    r = client.get("/v1/meetings/m-audio/audio")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/wav")
+    assert r.content == audio_bytes
+
+
+def test_audio_upload_to_unknown_meeting_returns_404(client, tmp_path, monkeypatch):
+    from app import config as config_module
+
+    # audio_dir is a derived property of DATA_DIR; redirect the
+    # source so audio writes land in tmp_path instead of the real
+    # data/audio/ directory.
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    r = client.post(
+        "/v1/meetings/missing/audio",
+        files={"file": ("x.wav", b"data", "audio/wav")},
+    )
+    assert r.status_code == 404
+
+
+def test_audio_download_before_upload_returns_404(client):
+    client.post("/v1/meetings", json=_sample_meeting("m-no-audio"))
+    r = client.get("/v1/meetings/m-no-audio/audio")
+    assert r.status_code == 404
+
+
+def test_audio_replace_unlinks_previous_file(client, tmp_path, monkeypatch):
+    """Uploading twice with different mime types SHALL NOT leave an
+    orphan from the first upload."""
+    from pathlib import Path as _Path
+
+    from app import config as config_module
+
+    # audio_dir is a derived property of DATA_DIR; redirect the
+    # source so audio writes land in tmp_path instead of the real
+    # data/audio/ directory.
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    client.post("/v1/meetings", json=_sample_meeting("m-replace"))
+
+    audio_dir = tmp_path / "audio"
+
+    client.post(
+        "/v1/meetings/m-replace/audio",
+        files={"file": ("a.m4a", b"first", "audio/mp4")},
+    )
+    first = audio_dir / "meeting-m-replace.m4a"
+    assert first.exists()
+
+    client.post(
+        "/v1/meetings/m-replace/audio",
+        files={"file": ("a.wav", b"second", "audio/wav")},
+    )
+    second = audio_dir / "meeting-m-replace.wav"
+    assert second.exists()
+    # First file is gone — replacement unlinks it.
+    assert not first.exists()
+    # Listing audio_dir: only the .wav remains.
+    leftovers = sorted(p.name for p in _Path(audio_dir).iterdir())
+    assert leftovers == ["meeting-m-replace.wav"]
+
+
+def test_delete_meeting_unlinks_audio(client, tmp_path, monkeypatch):
+    from app import config as config_module
+
+    # audio_dir is a derived property of DATA_DIR; redirect the
+    # source so audio writes land in tmp_path instead of the real
+    # data/audio/ directory.
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    client.post("/v1/meetings", json=_sample_meeting("m-del-audio"))
+    client.post(
+        "/v1/meetings/m-del-audio/audio",
+        files={"file": ("x.wav", b"abcd", "audio/wav")},
+    )
+    target = tmp_path / "audio" / "meeting-m-del-audio.wav"
+    assert target.exists()
+
+    r = client.delete("/v1/meetings/m-del-audio")
+    assert r.status_code == 204
+    assert not target.exists(), "audio file SHALL be unlinked with the row"

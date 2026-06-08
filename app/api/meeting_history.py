@@ -15,21 +15,60 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as SASession
 
 from app.api.schemas.meeting_history import (
+    MeetingAudioMetaOut,
     MeetingCreate,
     MeetingFull,
     MeetingListResponse,
     MeetingPatch,
 )
+from app.config import config
 from app.services.persistence import get_db
 from app.services.persistence import meeting_analyses_repo as repo
 from app.services.persistence.models import MeetingAnalysisRow
+
+# audio/webm → .webm rather than mimetypes.guess_extension's ".weba".
+# Mirrors `app/api/sessions.py:MIME_TO_EXT`.
+_MIME_TO_EXT: dict[str, str] = {
+    "audio/webm": ".webm",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/mpeg": ".mp3",
+    "audio/aac": ".aac",
+    "audio/flac": ".flac",
+    "audio/opus": ".opus",
+}
+
+
+def _ext_for_mime(mime_type: str) -> str:
+    ext = _MIME_TO_EXT.get(mime_type.lower())
+    if ext is None:
+        logger.warning(
+            "Unknown audio mime type %s; defaulting to .bin", mime_type
+        )
+        return ".bin"
+    return ext
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +101,9 @@ def _row_to_full(row: MeetingAnalysisRow) -> MeetingFull:
         result=result,
         speaker_names=speaker_names,
         status=row.status,
+        audio_path=row.audio_path,
+        audio_mime_type=row.audio_mime_type,
+        audio_size_bytes=row.audio_size_bytes,
     )
 
 
@@ -134,10 +176,88 @@ def patch_meeting(
 def delete_meeting(
     meeting_id: str, db: SASession = Depends(get_db)
 ) -> Response:
+    # Capture the audio path BEFORE the DB delete so we can clean up
+    # the orphan file. Database delete cascades nothing here (audio
+    # is a sidecar file, not an FK).
+    row = repo.get_meeting_analysis(db, meeting_id)
+    audio_path = row.audio_path if row is not None else None
     if not repo.delete_meeting_analysis(db, meeting_id):
         raise HTTPException(status_code=404, detail="meeting not found")
     db.commit()
+    if audio_path:
+        try:
+            Path(audio_path).unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Failed to unlink %s: %s", audio_path, e)
     return Response(status_code=204)
+
+
+@router.post("/{meeting_id}/audio", response_model=MeetingAudioMetaOut)
+async def upload_meeting_audio(
+    meeting_id: str,
+    file: UploadFile = File(...),
+    db: SASession = Depends(get_db),
+) -> MeetingAudioMetaOut:
+    """Attach the original audio recording to a finished analysis.
+
+    Called by the PWA after `_run_meeting_job` completes (the
+    server-side temp WAV was already cleaned up at that point).
+    Re-upload replaces the existing file. Storage path follows
+    `app.config.audio_dir` with `meeting-{id}{ext}` to avoid
+    colliding with `/v1/sessions` audio.
+    """
+    row = repo.get_meeting_analysis(db, meeting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+
+    mime = file.content_type or "application/octet-stream"
+    ext = _ext_for_mime(mime)
+
+    # Replacement: unlink any previous file so we don't accumulate
+    # `meeting-<id>.m4a` + `meeting-<id>.wav` orphans on re-upload
+    # with a different mime.
+    if row.audio_path:
+        try:
+            Path(row.audio_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    config.ensure_data_dirs()
+    target = config.audio_dir / f"meeting-{meeting_id}{ext}"
+    body = await file.read()
+    target.write_bytes(body)
+
+    rel_path = str(target)
+    updated = repo.set_audio(
+        db,
+        meeting_id,
+        audio_path=rel_path,
+        audio_mime_type=mime,
+        audio_size_bytes=len(body),
+    )
+    db.commit()
+    assert updated is not None
+    return MeetingAudioMetaOut(
+        audio_path=rel_path,
+        audio_mime_type=mime,
+        audio_size_bytes=len(body),
+    )
+
+
+@router.get("/{meeting_id}/audio")
+def stream_meeting_audio(
+    meeting_id: str, db: SASession = Depends(get_db)
+) -> FileResponse:
+    row = repo.get_meeting_analysis(db, meeting_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    if not row.audio_path or not Path(row.audio_path).exists():
+        raise HTTPException(status_code=404, detail="audio not found")
+    return FileResponse(
+        row.audio_path,
+        media_type=row.audio_mime_type or "application/octet-stream",
+        filename=os.path.basename(row.audio_path),
+    )
 
 
 def _persist_completed_job(

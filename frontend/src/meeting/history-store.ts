@@ -45,6 +45,12 @@ export interface HistoryEntry {
   status?: string;
   speaker_names?: Record<string, string>;
   result?: MeetingResult;
+  /** Truthy when the server has the original audio file stored. The
+   *  exact server path is in `audio_path`; the client only needs to
+   *  know "is it there?" to decide whether to render the `<audio>`
+   *  element with a /v1/meetings/{id}/audio src. */
+  audio_path?: string | null;
+  audio_mime_type?: string | null;
 }
 
 let cache: HistoryEntry[] = [];
@@ -59,6 +65,8 @@ function fromBackend(m: MeetingFull): HistoryEntry {
     status: m.status,
     speaker_names: m.speaker_names,
     result: m.result,
+    audio_path: m.audio_path,
+    audio_mime_type: m.audio_mime_type,
   };
 }
 

@@ -56,6 +56,22 @@ class MeetingFull(BaseModel):
     result: dict[str, Any]
     speaker_names: dict[str, str] = Field(default_factory=dict)
     status: str
+    # Audio metadata — null until the client uploads via POST
+    # /v1/meetings/{id}/audio. `audio_path` is the server-side disk
+    # path (not exposed for fetch — the client uses GET
+    # /v1/meetings/{id}/audio); included so the PWA can tell whether
+    # to render an audio player or "audio not stored" hint.
+    audio_path: str | None = None
+    audio_mime_type: str | None = None
+    audio_size_bytes: int | None = None
+
+
+class MeetingAudioMetaOut(BaseModel):
+    """Response body after POST /v1/meetings/{id}/audio."""
+
+    audio_path: str
+    audio_mime_type: str
+    audio_size_bytes: int
 
 
 class MeetingListResponse(BaseModel):

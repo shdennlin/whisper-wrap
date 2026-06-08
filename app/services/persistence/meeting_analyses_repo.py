@@ -100,3 +100,27 @@ def delete_meeting_analysis(db: SASession, id: str) -> bool:
     db.delete(row)
     db.flush()
     return True
+
+
+def set_audio(
+    db: SASession,
+    id: str,
+    *,
+    audio_path: str,
+    audio_mime_type: str,
+    audio_size_bytes: int,
+) -> MeetingAnalysisRow | None:
+    """Attach an audio file reference to an existing analysis row.
+
+    Called by POST /v1/meetings/{id}/audio after the PWA finishes
+    uploading the original meeting recording. Returns None if the id
+    is unknown so the endpoint can map to 404.
+    """
+    row = db.get(MeetingAnalysisRow, id)
+    if row is None:
+        return None
+    row.audio_path = audio_path
+    row.audio_mime_type = audio_mime_type
+    row.audio_size_bytes = audio_size_bytes
+    db.flush()
+    return row

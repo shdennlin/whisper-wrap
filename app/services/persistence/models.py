@@ -146,6 +146,16 @@ class MeetingAnalysisRow(Base):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="done"
     )
+    # Audio file storage (optional, post-creation). The PWA uploads the
+    # original audio to /v1/meetings/{id}/audio after the analysis
+    # completes so that re-opening a past entry from the sidebar can
+    # replay audio + offer re-transcription. All three fields written
+    # together by `upload_audio`; null until then.
+    audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audio_mime_type: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    audio_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         Index("idx_meeting_analyses_created", "created_at"),
