@@ -101,6 +101,47 @@ def _post_meeting_audio(client, **query):
         )
 
 
+def test_query_params_flow_to_analyzer(stubbed_app, meeting_available):
+    """Audio fixture e2e: POST with explicit num_speakers/language/word-ts
+    query params SHALL reach analyzer.analyze() as kwargs. Uses the real
+    40s two-speaker WAV fixture so the upload also exercises libmagic
+    detection + ffmpeg → 16 kHz mono → backend dispatch."""
+    captured: dict[str, object] = {}
+
+    async def recording_analyze(audio_path, **kwargs):
+        captured["audio_path"] = audio_path
+        captured.update(kwargs)
+        return _fake_meeting_result()
+
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, recording_analyze)
+        # Send the real fixture with all three new query params engaged so
+        # the backend's parameter wiring is exercised end-to-end.
+        resp = _post_meeting_audio(
+            client,
+            num_speakers=2,
+            language="en",
+            enable_word_timestamps="false",
+        )
+    assert resp.status_code == 202
+    # Drain the background task by polling.
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, recording_analyze)
+        post = _post_meeting_audio(
+            client,
+            num_speakers=2,
+            language="en",
+            enable_word_timestamps="false",
+        )
+        job_id = post.json()["job_id"]
+        poll = client.get(f"/transcribe/meeting/{job_id}")
+        assert poll.status_code == 200
+
+    assert captured.get("num_speakers") == 2
+    assert captured.get("language") == "en"
+    assert captured.get("enable_word_timestamps") is False
+
+
 def test_post_meeting_returns_job_handle(stubbed_app, meeting_available):
     """A valid upload SHALL return HTTP 202 with job_id and status_url."""
 

@@ -77,6 +77,35 @@ def _parse_int(raw: str | None, *, default: int, var_name: str = "") -> int:
     return value
 
 
+def _parse_int_or_none(raw: str | None, *, var_name: str = "") -> int | None:
+    """Parse a positive integer env string, returning None when unset.
+
+    Distinct from `_parse_int(default=...)`: "no value" stays as None so
+    downstream code can pass through to the library's own default (e.g.
+    CTranslate2's internal cpu_threads heuristic) instead of being forced
+    to invent a number.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid value for %s=%r; ignoring",
+            var_name or "(unknown)",
+            raw,
+        )
+        return None
+    if value <= 0:
+        logger.warning(
+            "Invalid value for %s=%r (must be positive); ignoring",
+            var_name or "(unknown)",
+            raw,
+        )
+        return None
+    return value
+
+
 class Config:
     """Application configuration loaded from environment variables at construction time."""
 
@@ -94,6 +123,14 @@ class Config:
         # map 1:1 to a CPU compute path.
         self.COMPUTE_TYPE: str = os.getenv("COMPUTE_TYPE", "default")
         self.DEVICE: str = os.getenv("DEVICE", "auto")
+        # CT2 worker thread count. None → CT2's default (4). Apple Silicon
+        # M2 (10 cores: 4P + 6E) typically benefits from bumping to 6-8 so
+        # the matmul kernels saturate P-cores; faster-whisper does NOT
+        # auto-detect. Applied to both /transcribe and /transcribe/meeting
+        # CT2 backends.
+        self.CPU_THREADS: int | None = _parse_int_or_none(
+            os.getenv("CPU_THREADS"), var_name="CPU_THREADS"
+        )
 
         # v2.1 backend override. When set ("ct2" | "ggml"), the lifespan SHALL pick
         # the matching variant of the active model. When unset, platform-based

@@ -119,12 +119,125 @@ describe("createMeetingPage — rendering", () => {
       srtBtn.click();
       vttBtn.click();
       txtBtn.click();
+      const jsonBtn = document.querySelector<HTMLButtonElement>(
+        '[data-export="json"]',
+      )!;
+      jsonBtn.click();
     } finally {
       HTMLAnchorElement.prototype.click = origClick;
     }
-    expect(clicks).toEqual(["meeting.srt", "meeting.vtt", "meeting.txt"]);
-    // createObjectURL was called once for the audio source + 3 export blobs.
-    expect(createObjectURL).toHaveBeenCalledTimes(3);
+    expect(clicks).toEqual([
+      "meeting.srt",
+      "meeting.vtt",
+      "meeting.txt",
+      "meeting.json",
+    ]);
+    // createObjectURL was called once per export blob (4 total).
+    expect(createObjectURL).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("createMeetingPage — speaker rename", () => {
+  it("rename via prompt updates every chip of that speaker", () => {
+    const promptFn = vi.fn(() => "Alice");
+    const page = createMeetingPage({
+      fetchStatus: async () => ({ available: true }),
+      createObjectURL: () => "blob:fake",
+      promptFn,
+    });
+    document.body.appendChild(page.element);
+    page.renderResult(SAMPLE_RESULT, "blob:fake");
+
+    // SPEAKER_00 occurs in segments 0 + 2; rename via the edit icon on
+    // segment 0 SHALL update both occurrences.
+    const editBtns = document.querySelectorAll<HTMLElement>(
+      ".transcript-segment .segment-meta-edit",
+    );
+    expect(editBtns.length).toBeGreaterThan(0);
+    editBtns[0].click();
+
+    expect(promptFn).toHaveBeenCalledTimes(1);
+    const chips = document.querySelectorAll<HTMLElement>(".segment-meta-name");
+    // Two segments for SPEAKER_00 (segments 0 + 2), one for SPEAKER_01.
+    expect(chips[0].textContent).toContain("Alice");
+    expect(chips[1].textContent).toContain("SPEAKER_01"); // untouched
+    expect(chips[2].textContent).toContain("Alice");
+  });
+
+  it("rename to empty string reverts to raw SPEAKER_xx label", () => {
+    let returnValue: string | null = "Bob";
+    const promptFn = vi.fn(() => returnValue);
+    const page = createMeetingPage({
+      fetchStatus: async () => ({ available: true }),
+      createObjectURL: () => "blob:fake",
+      promptFn,
+    });
+    document.body.appendChild(page.element);
+    page.renderResult(SAMPLE_RESULT, "blob:fake");
+
+    const edit0 = document.querySelector<HTMLElement>(
+      ".transcript-segment .segment-meta-edit",
+    )!;
+    edit0.click();
+    // Now rename back to "" — should revert.
+    returnValue = "";
+    document
+      .querySelector<HTMLElement>(".transcript-segment .segment-meta-edit")!
+      .click();
+    const chip = document.querySelector<HTMLElement>(".segment-meta-name")!;
+    expect(chip.textContent).toContain("SPEAKER_00");
+  });
+
+  it("renamed speakers flow into JSON export payload", () => {
+    const promptFn = vi.fn(() => "Charlie");
+    let downloadedJson: string | null = null;
+    // Capture the Blob payload by spying on createObjectURL: in the JSON
+    // export path we pass the blob through createObjectURL, so we can use
+    // a closure to grab the source.
+    const createObjectURL = vi.fn((b: File | Blob) => {
+      if (b instanceof Blob) {
+        // Synchronous text read isn't possible — use FileReader's sync-ish
+        // text() promise. Tests await this below.
+        void b.text().then((t) => {
+          if (t.startsWith("{")) downloadedJson = t;
+        });
+      }
+      return "blob:export";
+    });
+    const page = createMeetingPage({
+      fetchStatus: async () => ({ available: true }),
+      createObjectURL,
+      promptFn,
+    });
+    document.body.appendChild(page.element);
+    page.renderResult(SAMPLE_RESULT, "blob:fake");
+
+    // Rename SPEAKER_00 → Charlie via the icon on the first segment.
+    document
+      .querySelector<HTMLElement>(".transcript-segment .segment-meta-edit")!
+      .click();
+
+    // Trigger JSON download.
+    const origClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {};
+    try {
+      document.querySelector<HTMLButtonElement>('[data-export="json"]')!.click();
+    } finally {
+      HTMLAnchorElement.prototype.click = origClick;
+    }
+
+    // Drain the microtask queue so the Blob.text() promise resolves.
+    return Promise.resolve()
+      .then(() => Promise.resolve())
+      .then(() => {
+        expect(downloadedJson).not.toBeNull();
+        const parsed = JSON.parse(downloadedJson!);
+        // SPEAKER_00 was renamed to Charlie in segments 0 and 2.
+        expect(parsed.speakers).toContain("Charlie");
+        expect(parsed.segments[0].speaker).toBe("Charlie");
+        expect(parsed.segments[0].raw_speaker).toBe("SPEAKER_00");
+        expect(parsed.segments[1].speaker).toBe("SPEAKER_01");
+      });
   });
 });
 

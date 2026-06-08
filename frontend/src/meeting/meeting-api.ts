@@ -33,8 +33,13 @@ export async function submitMeeting(
     params.set("min_speakers", String(opts.minSpeakers));
   if (opts.maxSpeakers !== undefined)
     params.set("max_speakers", String(opts.maxSpeakers));
+  // Backend default is true. Only explicitly pass false so the URL stays
+  // short and a future backend default change is honoured by clients that
+  // haven't opted in.
   if (opts.enableWordTimestamps === false)
     params.set("enable_word_timestamps", "false");
+  else if (opts.enableWordTimestamps === true)
+    params.set("enable_word_timestamps", "true");
 
   const url = `/transcribe/meeting${params.toString() ? `?${params}` : ""}`;
   const resp = await fetch(url, {

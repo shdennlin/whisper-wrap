@@ -249,6 +249,58 @@ def test_analyzer_keeps_int8_on_macos(monkeypatch):
     assert analyzer.compute_type == "int8"
 
 
+def test_analyzer_passes_cpu_threads_from_config(monkeypatch):
+    """CPU_THREADS env var SHALL flow through from_config → analyzer →
+    eventually `cpu_threads` kwarg on faster_whisper.WhisperModel. Without
+    this knob, CT2 picks 4 regardless of host core count — Apple Silicon
+    M2 leaves 4 cores idle by default."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "any-model")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    monkeypatch.setenv("CPU_THREADS", "8")
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.cpu_threads == 8
+
+
+def test_analyzer_cpu_threads_unset_passes_none(monkeypatch):
+    """Unset CPU_THREADS SHALL leave analyzer.cpu_threads=None so the
+    library default is preserved (we don't impose a value)."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "any-model")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    monkeypatch.delenv("CPU_THREADS", raising=False)
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.cpu_threads is None
+
+
 @pytest.mark.asyncio
 async def test_concurrent_jobs_serialise(monkeypatch):
     """Two analyze() calls submitted back-to-back SHALL execute one at a time:

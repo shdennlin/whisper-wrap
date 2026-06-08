@@ -82,6 +82,7 @@ class MeetingAnalyzer:
         align_model: str | None = None,
         device: str = "cpu",
         compute_type: str = "default",
+        cpu_threads: int | None = None,
     ) -> None:
         self.ct2_model_dir = ct2_model_dir
         self.hf_token = hf_token
@@ -89,6 +90,7 @@ class MeetingAnalyzer:
         self.align_model_name = align_model
         self.device = device
         self.compute_type = compute_type
+        self.cpu_threads = cpu_threads
         self._asr: Any = None
         self._diarize: Any = None
         self._lock = asyncio.Lock()
@@ -133,6 +135,7 @@ class MeetingAnalyzer:
             diarization_pipeline=config.MEETING_DIARIZATION_PIPELINE,
             align_model=config.MEETING_ALIGN_MODEL,
             compute_type=compute_type,
+            cpu_threads=getattr(config, "CPU_THREADS", None),
         )
 
     async def _load_pipeline(self) -> None:
@@ -154,17 +157,27 @@ class MeetingAnalyzer:
 
         load_start = _time.monotonic()
         logger.info(
-            "Loading WhisperX ASR model from %s (compute_type=%s, device=%s)",
+            "Loading WhisperX ASR model from %s (compute_type=%s, device=%s, cpu_threads=%s)",
             self.ct2_model_dir,
             self.compute_type,
             self.device,
+            self.cpu_threads if self.cpu_threads is not None else "default",
         )
         asr_load_start = _time.monotonic()
+        # WhisperX forwards extra kwargs to faster-whisper's WhisperModel.
+        # cpu_threads is a real WhisperModel parameter; only pass it when
+        # set so we don't override CT2's heuristic when the user hasn't
+        # opted in.
+        load_kwargs: dict[str, Any] = {
+            "device": self.device,
+            "compute_type": self.compute_type,
+        }
+        if self.cpu_threads is not None:
+            load_kwargs["threads"] = self.cpu_threads
         self._asr = await asyncio.to_thread(
             _wx.load_model,
             self.ct2_model_dir,
-            device=self.device,
-            compute_type=self.compute_type,
+            **load_kwargs,
         )
         logger.info(
             "Loaded WhisperX ASR model in %.1fs",

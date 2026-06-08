@@ -49,6 +49,7 @@ def _build_backend(
     backend_format_override: str | None,
     compute_type: str,
     device: str,
+    cpu_threads: int | None = None,
 ) -> tuple[WhisperBackend, dict]:
     """Resolve the active variant and instantiate the matching backend.
 
@@ -64,6 +65,7 @@ def _build_backend(
                 model_dir=str(model_dir),
                 compute_type=compute_type,
                 device=device,
+                cpu_threads=cpu_threads,
             )
             return backend, {
                 "backend": "ctranslate2",
@@ -118,6 +120,7 @@ def _build_backend(
             model_dir=str(variant_dir),
             compute_type=compute_type,
             device=device,
+            cpu_threads=cpu_threads,
         )
         return backend, {
             "backend": "ctranslate2",
@@ -211,6 +214,7 @@ async def lifespan(app: FastAPI):
         backend_format_override=config.BACKEND_FORMAT,
         compute_type=config.COMPUTE_TYPE,
         device=config.DEVICE,
+        cpu_threads=config.CPU_THREADS,
     )
     load_time_ms = int((time.perf_counter() - load_start) * 1000)
 

@@ -23,6 +23,10 @@ export interface HistoryEntry {
   speakers?: number;
   /** "done" | "cancelled" | "error" | "running"; tracks last known state. */
   status?: string;
+  /** User-renamed speaker labels: SPEAKER_xx → friendly name. Empty/absent
+   *  means use the raw pyannote labels. Persisted so reloading a past
+   *  analysis from the sidebar still shows "Alice" not "SPEAKER_00". */
+  speaker_names?: Record<string, string>;
 }
 
 export function loadHistory(): HistoryEntry[] {

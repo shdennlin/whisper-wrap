@@ -1,18 +1,17 @@
 /**
  * Meeting Mode page wiring.
  *
- * Composes: upload zone → confirm card (filename + duration + Start) →
+ * Composes: upload zone → confirm card (filename + duration + speakers
+ * dropdown + language dropdown + word-timestamps toggle + Start/Change) →
  * 4-step stepper with per-stage progress + elapsed/estimated remaining →
- * speaker-coloured transcript + click-to-seek + speaker-aware exports →
- * Recent analyses sidebar (localStorage). Stop button is available while
- * the pipeline runs (best-effort: fires DELETE; UI resets either way).
+ * speaker-coloured transcript with rename-on-hover + click-to-seek +
+ * speaker-aware exports (SRT/VTT/TXT/JSON) → Recent analyses sidebar.
  *
- * Stage timing model: each stage has its own 0-100% progress bar computed
- * from elapsed time vs an audio-length-derived estimate (purely client-side
- * — backend just emits the discrete stage transitions). The estimate caps
- * at 95% so the bar doesn't show "100%" while still running.
+ * All user-facing text routes through `t()` for i18n; the speaker name
+ * map is per-job and persists into localStorage history.
  */
 
+import { t, type StringKey } from "../i18n";
 import { exportSpeakerSrt } from "../export/speaker-srt";
 import { exportSpeakerTxt } from "../export/speaker-txt";
 import { exportSpeakerVtt } from "../export/speaker-vtt";
@@ -28,6 +27,7 @@ import {
   fetchJobStatus,
   pollUntilDone,
   submitMeeting,
+  type SubmitOptions,
 } from "./meeting-api";
 import { speakerColorMap } from "./speaker-colors";
 import type { JobStatusResponse, MeetingResult, Segment } from "./types";
@@ -44,16 +44,13 @@ export interface MeetingPageHandle {
 }
 
 export interface MeetingPageOptions {
-  /** Override fetch (for tests). */
   fetchFn?: typeof fetch;
-  /** Override URL.createObjectURL (for tests with happy-dom). */
   createObjectURL?: (file: File | Blob) => string;
-  /** Override status fetch (returns availability shape). */
   fetchStatus?: () => Promise<StatusInfo>;
-  /** Polling interval for status updates (default 2 s; tests can lower it). */
   pollIntervalMs?: number;
-  /** Override Date.now (for tests). */
   now?: () => number;
+  /** Test seam: replaces window.prompt for speaker rename. */
+  promptFn?: (message: string, defaultValue?: string) => string | null;
 }
 
 // --- Stage model -------------------------------------------------------------
@@ -61,19 +58,15 @@ export interface MeetingPageOptions {
 type StageKey = "upload" | "asr" | "align" | "diarize";
 interface StageDef {
   key: StageKey;
-  label: string;
-  /** Default hint shown when this stage is pending or complete. */
-  defaultHint: string;
-  /** Fraction of audio_duration to estimate this stage's wall-clock duration.
-   *  Values calibrated against macOS CPU baseline; GPU finishes faster but
-   *  estimates will then over-shoot, which the 95% cap smooths over. */
+  labelKey: StringKey;
+  hintKey: StringKey;
   ratio: number;
 }
 const STAGES: StageDef[] = [
-  { key: "upload", label: "Upload", defaultHint: "send file", ratio: 0 },
-  { key: "asr", label: "Transcribe", defaultHint: "speech → text", ratio: 0.05 },
-  { key: "align", label: "Align", defaultHint: "word timing", ratio: 0.1 },
-  { key: "diarize", label: "Diarize", defaultHint: "who spoke when", ratio: 0.2 },
+  { key: "upload", labelKey: "meeting.stepper.upload", hintKey: "meeting.stepper.upload.hint", ratio: 0 },
+  { key: "asr", labelKey: "meeting.stepper.asr", hintKey: "meeting.stepper.asr.hint", ratio: 0.05 },
+  { key: "align", labelKey: "meeting.stepper.align", hintKey: "meeting.stepper.align.hint", ratio: 0.1 },
+  { key: "diarize", labelKey: "meeting.stepper.diarize", hintKey: "meeting.stepper.diarize.hint", ratio: 0.2 },
 ];
 type StepState = "pending" | "active" | "complete";
 
@@ -83,6 +76,53 @@ const SPINNER_SVG =
   '<animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite"/>' +
   "</circle></svg>";
 
+const EDIT_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
+
+// --- Speaker / language options ----------------------------------------------
+
+interface SpeakerOption {
+  value: string; // serialised payload e.g. "auto" / "n=2" / "min=5,max=6"
+  labelKey: StringKey;
+  labelVars?: Record<string, string | number>;
+  /** Resolved to API kwargs at submit time. */
+  apply(opts: SubmitOptions): void;
+}
+const SPEAKER_OPTIONS: SpeakerOption[] = [
+  { value: "auto", labelKey: "meeting.speakers.auto", apply: () => {} },
+  { value: "n=1", labelKey: "meeting.speakers.n", labelVars: { n: 1 }, apply: (o) => { o.numSpeakers = 1; } },
+  { value: "n=2", labelKey: "meeting.speakers.n", labelVars: { n: 2 }, apply: (o) => { o.numSpeakers = 2; } },
+  { value: "n=3", labelKey: "meeting.speakers.n", labelVars: { n: 3 }, apply: (o) => { o.numSpeakers = 3; } },
+  { value: "n=4", labelKey: "meeting.speakers.n", labelVars: { n: 4 }, apply: (o) => { o.numSpeakers = 4; } },
+  { value: "min=5,max=6", labelKey: "meeting.speakers.range", labelVars: { min: 5, max: 6 }, apply: (o) => { o.minSpeakers = 5; o.maxSpeakers = 6; } },
+  { value: "min=7", labelKey: "meeting.speakers.manyPlus", labelVars: { min: 7 }, apply: (o) => { o.minSpeakers = 7; } },
+];
+
+interface LanguageOption {
+  value: string; // ISO code or "auto" / "custom"
+  /** Literal labels for language names are pulled from LANGUAGE_LITERAL
+   *  for the language codes; the StringKey is only used for "auto" and
+   *  "custom" where the label should follow the active locale. */
+  labelKey: StringKey | "_literal";
+}
+const LANGUAGE_OPTIONS: LanguageOption[] = [
+  { value: "auto", labelKey: "meeting.language.auto" },
+  { value: "zh", labelKey: "_literal" },
+  { value: "en", labelKey: "_literal" },
+  { value: "ja", labelKey: "_literal" },
+  { value: "ko", labelKey: "_literal" },
+  { value: "custom", labelKey: "meeting.language.custom" },
+];
+// Literal labels for language options that aren't translated (the names of
+// languages are typically left in their native script across locales).
+const LANGUAGE_LITERAL: Record<string, string> = {
+  zh: "中文",
+  en: "English",
+  ja: "日本語",
+  ko: "한국어",
+};
+
 // --- Page factory ------------------------------------------------------------
 
 export function createMeetingPage(
@@ -90,8 +130,8 @@ export function createMeetingPage(
 ): MeetingPageHandle {
   const root = document.createElement("section");
   root.className = "meeting-page";
-
   const now = opts.now ?? (() => Date.now());
+  const promptFn = opts.promptFn ?? ((m, d) => globalThis.prompt(m, d));
 
   // ------ DOM ---------------------------------------------------------------
   const layout = document.createElement("div");
@@ -103,11 +143,10 @@ export function createMeetingPage(
   const header = document.createElement("header");
   header.className = "meeting-header";
   const h1 = document.createElement("h1");
-  h1.textContent = "Meeting Mode";
+  h1.textContent = t("meeting.title");
   const subtitle = document.createElement("p");
   subtitle.className = "meeting-subtitle";
-  subtitle.textContent =
-    "Upload a meeting recording to get speaker-labelled transcripts with word-level timestamps.";
+  subtitle.textContent = t("meeting.subtitle");
   header.append(h1, subtitle);
 
   const unavailableEl = document.createElement("div");
@@ -119,7 +158,6 @@ export function createMeetingPage(
   audioEl.controls = true;
   audioEl.preload = "metadata";
 
-  // Initial state: drop-zone upload area inviting a file pick.
   const uploadForm = document.createElement("form");
   uploadForm.className = "meeting-upload";
   const uploadLabel = document.createElement("label");
@@ -134,18 +172,18 @@ export function createMeetingPage(
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
   const uploadTitle = document.createElement("span");
   uploadTitle.className = "upload-title";
-  uploadTitle.textContent = "Choose audio file or drop here";
+  uploadTitle.textContent = t("meeting.upload.title");
   const uploadHint = document.createElement("span");
   uploadHint.className = "upload-hint";
-  uploadHint.textContent = "WAV, MP3, M4A, FLAC, OGG — up to 100 MB";
+  uploadHint.textContent = t("meeting.upload.hint");
   uploadLabel.append(fileInput, uploadIcon, uploadTitle, uploadHint);
   uploadForm.append(uploadLabel);
 
-  // Confirm card: shown after file pick, before upload starts. Hidden in
-  // initial state and during pipeline run.
+  // Confirm card with options grid.
   const confirmCard = document.createElement("div");
   confirmCard.className = "meeting-confirm";
   confirmCard.hidden = true;
+
   const confirmInfo = document.createElement("div");
   confirmInfo.className = "confirm-info";
   const confirmName = document.createElement("div");
@@ -153,18 +191,70 @@ export function createMeetingPage(
   const confirmMeta = document.createElement("div");
   confirmMeta.className = "confirm-meta";
   confirmInfo.append(confirmName, confirmMeta);
+
+  // Options grid: speakers select, language select, word-timestamps checkbox
+  const confirmOptions = document.createElement("div");
+  confirmOptions.className = "confirm-options";
+
+  const speakersField = document.createElement("label");
+  speakersField.className = "confirm-field";
+  const speakersLabel = document.createElement("span");
+  speakersLabel.className = "confirm-field-label";
+  speakersLabel.textContent = t("meeting.confirm.speakers");
+  const speakersSelect = document.createElement("select");
+  speakersSelect.className = "confirm-select";
+  for (const opt of SPEAKER_OPTIONS) {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.textContent = t(opt.labelKey, opt.labelVars);
+    speakersSelect.appendChild(o);
+  }
+  speakersField.append(speakersLabel, speakersSelect);
+
+  const languageField = document.createElement("label");
+  languageField.className = "confirm-field";
+  const languageLabel = document.createElement("span");
+  languageLabel.className = "confirm-field-label";
+  languageLabel.textContent = t("meeting.confirm.language");
+  const languageSelect = document.createElement("select");
+  languageSelect.className = "confirm-select";
+  for (const opt of LANGUAGE_OPTIONS) {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.textContent =
+      opt.labelKey === "_literal"
+        ? LANGUAGE_LITERAL[opt.value] ?? opt.value
+        : t(opt.labelKey);
+    languageSelect.appendChild(o);
+  }
+  languageField.append(languageLabel, languageSelect);
+
+  const wordTsField = document.createElement("label");
+  wordTsField.className = "confirm-field confirm-field-checkbox";
+  const wordTsInput = document.createElement("input");
+  wordTsInput.type = "checkbox";
+  // Default OFF — skipping align saves ~30% time; users who want
+  // word-level timing opt in explicitly. Matches the plan's decision.
+  wordTsInput.checked = false;
+  const wordTsText = document.createElement("span");
+  wordTsText.textContent = t("meeting.confirm.wordTimestamps");
+  wordTsField.append(wordTsInput, wordTsText);
+
+  confirmOptions.append(speakersField, languageField, wordTsField);
+
   const confirmActions = document.createElement("div");
   confirmActions.className = "confirm-actions";
   const changeBtn = document.createElement("button");
   changeBtn.type = "button";
   changeBtn.className = "btn-secondary";
-  changeBtn.textContent = "Change file";
+  changeBtn.textContent = t("meeting.confirm.change");
   const startBtn = document.createElement("button");
   startBtn.type = "button";
   startBtn.className = "btn-primary";
-  startBtn.textContent = "Start analysis";
+  startBtn.textContent = t("meeting.confirm.start");
   confirmActions.append(changeBtn, startBtn);
-  confirmCard.append(confirmInfo, confirmActions);
+
+  confirmCard.append(confirmInfo, confirmOptions, confirmActions);
 
   // Stepper.
   const stepperEl = document.createElement("div");
@@ -174,7 +264,7 @@ export function createMeetingPage(
   const stepHints = new Map<StageKey, HTMLElement>();
   const stepMarkers = new Map<StageKey, HTMLElement>();
   const stepFills = new Map<StageKey, HTMLElement>();
-  STAGES.forEach(({ key, label, defaultHint }, idx) => {
+  STAGES.forEach(({ key, labelKey, hintKey }, idx) => {
     const step = document.createElement("div");
     step.className = "step";
     step.dataset.stage = key;
@@ -184,7 +274,7 @@ export function createMeetingPage(
     marker.textContent = String(idx + 1);
     const labelEl = document.createElement("span");
     labelEl.className = "step-label";
-    labelEl.textContent = label;
+    labelEl.textContent = t(labelKey);
     const bar = document.createElement("div");
     bar.className = "step-bar";
     const fill = document.createElement("div");
@@ -192,7 +282,7 @@ export function createMeetingPage(
     bar.appendChild(fill);
     const hintEl = document.createElement("span");
     hintEl.className = "step-hint";
-    hintEl.textContent = defaultHint;
+    hintEl.textContent = t(hintKey);
     step.append(marker, labelEl, bar, hintEl);
     stepperEl.appendChild(step);
     stepEls.set(key, step);
@@ -201,14 +291,13 @@ export function createMeetingPage(
     stepFills.set(key, fill);
   });
 
-  // Stop button — visible only during stepper run.
   const stopRow = document.createElement("div");
   stopRow.className = "meeting-stop-row";
   stopRow.hidden = true;
   const stopBtn = document.createElement("button");
   stopBtn.type = "button";
   stopBtn.className = "btn-danger";
-  stopBtn.textContent = "Stop analysis";
+  stopBtn.textContent = t("meeting.stop");
   stopRow.appendChild(stopBtn);
 
   const errorEl = document.createElement("div");
@@ -221,17 +310,23 @@ export function createMeetingPage(
   const exportsEl = document.createElement("footer");
   exportsEl.className = "meeting-exports";
   exportsEl.hidden = true;
-  for (const fmt of ["srt", "vtt", "txt"] as const) {
+  const exportLabels: Record<string, string> = {
+    srt: t("meeting.exports.srt"),
+    vtt: t("meeting.exports.vtt"),
+    txt: t("meeting.exports.txt"),
+    json: t("meeting.exports.json"),
+  };
+  for (const fmt of ["srt", "vtt", "txt", "json"] as const) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.dataset.export = fmt;
-    btn.textContent = `Download ${fmt.toUpperCase()}`;
+    btn.textContent = exportLabels[fmt];
     exportsEl.appendChild(btn);
   }
   const resetBtn = document.createElement("button");
   resetBtn.type = "button";
   resetBtn.className = "meeting-reset btn-secondary";
-  resetBtn.textContent = "Analyze another file";
+  resetBtn.textContent = t("meeting.reset");
   exportsEl.appendChild(resetBtn);
 
   mainCol.append(
@@ -247,19 +342,18 @@ export function createMeetingPage(
     exportsEl,
   );
 
-  // Sidebar — Recent analyses (localStorage)
   const sideCol = document.createElement("aside");
   sideCol.className = "meeting-sidebar";
   const sideHeader = document.createElement("div");
   sideHeader.className = "sidebar-header";
   const sideTitle = document.createElement("h2");
-  sideTitle.textContent = "Recent analyses";
+  sideTitle.textContent = t("meeting.sidebar.title");
   sideHeader.appendChild(sideTitle);
   const sideList = document.createElement("ul");
   sideList.className = "sidebar-list";
   const sideEmpty = document.createElement("p");
   sideEmpty.className = "sidebar-empty";
-  sideEmpty.textContent = "No analyses yet — upload a file to get started.";
+  sideEmpty.textContent = t("meeting.sidebar.empty");
   sideCol.append(sideHeader, sideEmpty, sideList);
 
   layout.append(mainCol, sideCol);
@@ -282,10 +376,10 @@ export function createMeetingPage(
       const reason = m.available
         ? undefined
         : m.hf_token_configured === false
-          ? "HF_TOKEN is not configured"
+          ? t("meeting.unavailable.noToken")
           : m.extras_installed === false
-            ? "meeting extras not installed"
-            : "Meeting analysis is unavailable.";
+            ? t("meeting.unavailable.noExtras")
+            : t("meeting.unavailable.default");
       return { available: !!m.available, reason };
     });
 
@@ -295,9 +389,11 @@ export function createMeetingPage(
   let audioDurationSeconds: number | null = null;
   let activeJobId: string | null = null;
   let abortController: AbortController | null = null;
-  // Per-stage start timestamps for elapsed/remaining calculation.
   const stageStartedAt = new Map<StageKey, number>();
   let tickHandle: ReturnType<typeof setInterval> | null = null;
+  // Speaker rename map: SPEAKER_xx → user-chosen name. Per-job, persisted
+  // into history. Empty map renders original SPEAKER_xx labels.
+  let speakerNames: Record<string, string> = {};
 
   // ------ Helpers ----------------------------------------------------------
 
@@ -316,7 +412,6 @@ export function createMeetingPage(
     if (state === "complete") {
       marker.textContent = "✓";
     } else if (state === "active") {
-      // Spinner SVG replaces the numeric marker so "running" is unmistakable.
       marker.innerHTML = SPINNER_SVG;
     } else {
       marker.textContent = String(idx + 1);
@@ -333,13 +428,10 @@ export function createMeetingPage(
     if (fill) {
       if (state === "complete") fill.style.width = "100%";
       else if (state === "pending") fill.style.width = "0%";
-      // active: width updated by tickStage()
     }
     if (state === "complete") {
-      // Reset hint so a stale "running…" line doesn't linger under the ✓.
-      const defaultHint = STAGES[idx]?.defaultHint ?? "";
-      const el = stepHints.get(stage);
-      if (el) el.textContent = state === "complete" ? "done" : defaultHint;
+      const hint = stepHints.get(stage);
+      if (hint) hint.textContent = t("meeting.stepper.done");
     }
   }
 
@@ -356,7 +448,7 @@ export function createMeetingPage(
       const marker = stepMarkers.get(s.key);
       if (marker) marker.textContent = String(i + 1);
       const hint = stepHints.get(s.key);
-      if (hint) hint.textContent = s.defaultHint;
+      if (hint) hint.textContent = t(s.hintKey);
       const fill = stepFills.get(s.key);
       if (fill) fill.style.width = "0%";
     });
@@ -367,13 +459,11 @@ export function createMeetingPage(
     stopRow.hidden = false;
     const idx = STAGES.findIndex((s) => s.key === stage);
     if (idx < 0) return;
-    // Mark all prior stages complete (handles align-skipped case).
     for (let i = 0; i < idx; i++) {
       setStepState(STAGES[i].key, "complete");
     }
     setStepState(stage, "active");
     if (!stageStartedAt.has(stage)) stageStartedAt.set(stage, now());
-    // Start the per-second ticker if not running.
     if (tickHandle === null) {
       tickHandle = setInterval(() => tickActiveStage(), 1000);
     }
@@ -381,7 +471,6 @@ export function createMeetingPage(
   }
 
   function tickActiveStage(): void {
-    // Find the currently active stage and update its progress bar + hint.
     const activeIdx = STAGES.findIndex(
       (s) => stepEls.get(s.key)?.dataset.state === "active",
     );
@@ -392,13 +481,14 @@ export function createMeetingPage(
     const elapsedMs = now() - startedAt;
     const elapsedSec = Math.floor(elapsedMs / 1000);
 
-    // For upload stage there's no audio-derived estimate — just show elapsed.
     if (stage.key === "upload") {
       const hint = stepHints.get(stage.key);
-      if (hint) hint.textContent = `sending ${formatDuration(elapsedSec)}…`;
+      if (hint)
+        hint.textContent = t("meeting.stepper.upload.active", {
+          elapsed: formatDuration(elapsedSec),
+        });
       const fill = stepFills.get(stage.key);
       if (fill) {
-        // Animate fill to look alive even without a known total.
         const pct = Math.min(85, 30 + ((elapsedSec * 8) % 56));
         fill.style.width = `${pct}%`;
       }
@@ -406,9 +496,11 @@ export function createMeetingPage(
     }
 
     if (audioDurationSeconds == null || audioDurationSeconds <= 0) {
-      // No audio metadata → can't estimate. Show elapsed only.
       const hint = stepHints.get(stage.key);
-      if (hint) hint.textContent = `${formatDuration(elapsedSec)} elapsed`;
+      if (hint)
+        hint.textContent = t("meeting.stepper.elapsed", {
+          elapsed: formatDuration(elapsedSec),
+        });
       return;
     }
 
@@ -421,8 +513,13 @@ export function createMeetingPage(
     if (hint) {
       hint.textContent =
         remainingSec > 5
-          ? `${formatDuration(elapsedSec)} · ~${formatDuration(Math.ceil(remainingSec))} left`
-          : `${formatDuration(elapsedSec)} elapsed`;
+          ? t("meeting.stepper.elapsedRemaining", {
+              elapsed: formatDuration(elapsedSec),
+              remaining: formatDuration(Math.ceil(remainingSec)),
+            })
+          : t("meeting.stepper.elapsed", {
+              elapsed: formatDuration(elapsedSec),
+            });
     }
   }
 
@@ -440,26 +537,28 @@ export function createMeetingPage(
   function showConfirm(file: File) {
     selectedFile = file;
     confirmName.textContent = file.name;
-    const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-    confirmMeta.textContent = `${sizeMB} MB · reading duration…`;
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(1) + " MB";
+    confirmMeta.textContent = t("meeting.confirm.metaProbing", { size: sizeMB });
     confirmCard.hidden = false;
     uploadForm.hidden = true;
     audioDurationSeconds = null;
-    // Probe duration by setting <audio src>. We hide the player until results
-    // are in, so this is a metadata-only probe.
     const probeUrl = createObjectURL(file);
     audioEl.src = probeUrl;
     const onMeta = () => {
       audioEl.removeEventListener("loadedmetadata", onMeta);
       if (Number.isFinite(audioEl.duration)) {
         audioDurationSeconds = audioEl.duration;
-        confirmMeta.textContent = `${sizeMB} MB · ${formatDuration(Math.round(audioEl.duration))}`;
+        confirmMeta.textContent = t("meeting.confirm.meta", {
+          size: sizeMB,
+          duration: formatDuration(Math.round(audioEl.duration)),
+        });
       } else {
-        confirmMeta.textContent = `${sizeMB} MB`;
+        confirmMeta.textContent = t("meeting.confirm.metaNoDuration", {
+          size: sizeMB,
+        });
       }
     };
     audioEl.addEventListener("loadedmetadata", onMeta);
-    // Remember the probe URL so we can release it if the user cancels.
     lastObjectUrl = probeUrl;
   }
 
@@ -481,34 +580,51 @@ export function createMeetingPage(
   startBtn.addEventListener("click", () => {
     if (!selectedFile) return;
     const file = selectedFile;
+    const submitOpts = buildSubmitOpts();
     hideConfirm();
-    void startUpload(file);
+    void startUpload(file, submitOpts);
   });
+
+  function buildSubmitOpts(): SubmitOptions {
+    const out: SubmitOptions = {};
+    // Speakers
+    const sel = SPEAKER_OPTIONS.find((o) => o.value === speakersSelect.value);
+    sel?.apply(out);
+    // Language
+    const lang = languageSelect.value;
+    if (lang === "custom") {
+      const entered = promptFn(t("meeting.language.customPrompt"), "");
+      if (entered && /^[a-z]{2,3}$/i.test(entered.trim()))
+        out.language = entered.trim().toLowerCase();
+    } else if (lang !== "auto") {
+      out.language = lang;
+    }
+    // Word timestamps — backend default is true, our UI default is false.
+    out.enableWordTimestamps = wordTsInput.checked;
+    return out;
+  }
 
   // ------ Pipeline run ------------------------------------------------------
 
-  async function startUpload(file: File) {
+  async function startUpload(file: File, submitOpts: SubmitOptions) {
     clearError();
     transcriptEl.replaceChildren();
     exportsEl.hidden = true;
     uploadForm.hidden = true;
     audioEl.removeAttribute("src");
     resetStepper();
+    speakerNames = {};
     activateStage("upload");
     abortController = new AbortController();
     const localAbort = abortController;
 
     try {
-      const handle = await submitMeeting(file);
+      const handle = await submitMeeting(file, submitOpts);
       if (localAbort.signal.aborted) {
-        // User clicked Stop before the POST returned. Don't proceed; the
-        // server may already be running but UI is reset.
         void cancelMeeting(handle.job_id);
         return;
       }
       activeJobId = handle.job_id;
-      // Record into history immediately so a refresh during the run still
-      // shows this analysis.
       recordHistory({
         job_id: handle.job_id,
         filename: file.name,
@@ -538,15 +654,15 @@ export function createMeetingPage(
       );
 
       if (final.status === "cancelled") {
-        // Either client-side abort or server-side cancelled — either way
-        // the UI should already be reset. Just patch history.
         updateHistory(handle.job_id, { status: "cancelled" });
         renderSidebar();
         return;
       }
       if (final.status === "error") {
         showError(
-          `Pipeline failed: ${final.error?.message ?? "unknown error"}`,
+          t("meeting.error.pipelineFailed", {
+            message: final.error?.message ?? "unknown error",
+          }),
         );
         uploadForm.hidden = false;
         resetStepper();
@@ -555,7 +671,7 @@ export function createMeetingPage(
         return;
       }
       if (!final.result) {
-        showError("Pipeline returned no result.");
+        showError(t("meeting.error.noResult"));
         uploadForm.hidden = false;
         resetStepper();
         return;
@@ -567,11 +683,10 @@ export function createMeetingPage(
       });
       renderSidebar();
     } catch (e) {
-      if (localAbort.signal.aborted) {
-        // Aborted mid-fetch — silent reset, already handled below.
-        return;
-      }
-      showError(`Upload error: ${(e as Error).message}`);
+      if (localAbort.signal.aborted) return;
+      showError(
+        t("meeting.error.uploadFailed", { message: (e as Error).message }),
+      );
       uploadForm.hidden = false;
       resetStepper();
     }
@@ -590,10 +705,14 @@ export function createMeetingPage(
 
   // ------ Result rendering --------------------------------------------------
 
+  function displaySpeakerName(rawSpeaker: string): string {
+    return speakerNames[rawSpeaker] ?? rawSpeaker;
+  }
+
   function renderResult(result: MeetingResult, objectUrl: string) {
     lastResult = result;
     lastObjectUrl = objectUrl;
-    audioEl.src = objectUrl;
+    if (objectUrl) audioEl.src = objectUrl;
     const colors = speakerColorMap(result.speakers);
 
     transcriptEl.replaceChildren();
@@ -609,7 +728,23 @@ export function createMeetingPage(
 
       const metaEl = document.createElement("span");
       metaEl.className = "segment-meta";
-      metaEl.textContent = `${seg.speaker} · ${formatTime(seg.start)}`;
+      // Chip text uses display name (renamed or raw).
+      const chipText = document.createElement("span");
+      chipText.className = "segment-meta-name";
+      chipText.textContent = `${displaySpeakerName(seg.speaker)} · ${formatTime(seg.start)}`;
+      // Edit pencil shown on hover.
+      const editBtn = document.createElement("span");
+      editBtn.className = "segment-meta-edit";
+      editBtn.setAttribute("role", "button");
+      editBtn.setAttribute("aria-label", t("meeting.speaker.renameTooltip"));
+      editBtn.title = t("meeting.speaker.renameTooltip");
+      editBtn.innerHTML = EDIT_ICON_SVG;
+      editBtn.addEventListener("click", (e) => {
+        // Stop the click bubbling up to the seek-on-click handler.
+        e.stopPropagation();
+        renameSpeaker(seg.speaker);
+      });
+      metaEl.append(chipText, editBtn);
 
       const textEl = document.createElement("span");
       textEl.className = "segment-text";
@@ -624,11 +759,36 @@ export function createMeetingPage(
     completeAll();
   }
 
+  function renameSpeaker(rawSpeaker: string): void {
+    const current = displaySpeakerName(rawSpeaker);
+    const next = promptFn(
+      t("meeting.speaker.renamePrompt", { speaker: rawSpeaker }),
+      current === rawSpeaker ? "" : current,
+    );
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (trimmed === "" || trimmed === rawSpeaker) {
+      delete speakerNames[rawSpeaker];
+    } else {
+      speakerNames = { ...speakerNames, [rawSpeaker]: trimmed };
+    }
+    // Persist into history so reloading still shows the rename.
+    if (activeJobId) {
+      updateHistory(activeJobId, { speaker_names: { ...speakerNames } });
+    }
+    // Re-render to update every occurrence of this speaker in the
+    // transcript. We re-render the whole transcript (vs. surgically
+    // touching matching nodes) because it's simple and the segment count
+    // in a typical meeting is small (~hundreds).
+    if (lastResult) {
+      renderResult(lastResult, lastObjectUrl ?? "");
+    }
+  }
+
   function seekTo(seg: Segment) {
+    if (!audioEl.src) return;
     audioEl.currentTime = seg.start;
-    void audioEl.play().catch(() => {
-      // Autoplay block — that's fine; the user can hit play themselves.
-    });
+    void audioEl.play().catch(() => {});
   }
 
   // ------ Exports + reset ---------------------------------------------------
@@ -644,13 +804,22 @@ export function createMeetingPage(
     a.remove();
   }
 
+  /** Apply the active speakerNames map to every segment so exports carry
+   *  the user's renames instead of raw SPEAKER_xx labels. */
+  function renamedSegments(result: MeetingResult): Segment[] {
+    return result.segments.map((s) => ({
+      ...s,
+      speaker: displaySpeakerName(s.speaker),
+    }));
+  }
+
   exportsEl
     .querySelector<HTMLButtonElement>('[data-export="srt"]')!
     .addEventListener("click", () => {
       if (!lastResult) return;
       downloadBlob(
         "meeting.srt",
-        exportSpeakerSrt(lastResult.segments),
+        exportSpeakerSrt(renamedSegments(lastResult)),
         "application/x-subrip",
       );
     });
@@ -660,7 +829,7 @@ export function createMeetingPage(
       if (!lastResult) return;
       downloadBlob(
         "meeting.vtt",
-        exportSpeakerVtt(lastResult.segments),
+        exportSpeakerVtt(renamedSegments(lastResult)),
         "text/vtt",
       );
     });
@@ -670,9 +839,27 @@ export function createMeetingPage(
       if (!lastResult) return;
       downloadBlob(
         "meeting.txt",
-        exportSpeakerTxt(lastResult.segments),
+        exportSpeakerTxt(renamedSegments(lastResult)),
         "text/plain",
       );
+    });
+  exportsEl
+    .querySelector<HTMLButtonElement>('[data-export="json"]')!
+    .addEventListener("click", () => {
+      if (!lastResult) return;
+      // Build a "renamed result" payload so consumers downstream see
+      // user labels too. Keep raw SPEAKER_xx in a parallel `raw_speaker`
+      // field so tools can correlate back to pyannote's output.
+      const payload = {
+        ...lastResult,
+        speakers: lastResult.speakers.map((s) => displaySpeakerName(s)),
+        segments: lastResult.segments.map((seg) => ({
+          ...seg,
+          speaker: displaySpeakerName(seg.speaker),
+          raw_speaker: seg.speaker,
+        })),
+      };
+      downloadBlob("meeting.json", JSON.stringify(payload, null, 2), "application/json");
     });
 
   function revokeObjectUrl(url: string) {
@@ -692,6 +879,7 @@ export function createMeetingPage(
     selectedFile = null;
     activeJobId = null;
     audioDurationSeconds = null;
+    speakerNames = {};
     transcriptEl.replaceChildren();
     exportsEl.hidden = true;
     audioEl.removeAttribute("src");
@@ -703,8 +891,6 @@ export function createMeetingPage(
     fileInput.value = "";
   }
   resetBtn.addEventListener("click", resetPage);
-
-  // ------ File input + drag-and-drop ---------------------------------------
 
   fileInput.addEventListener("change", () => {
     const file = fileInput.files?.[0];
@@ -761,7 +947,8 @@ export function createMeetingPage(
         ? formatDuration(Math.round(entry.audio_duration_seconds))
         : "—";
     const speakerStr = entry.speakers != null ? ` · ${entry.speakers}👥` : "";
-    const statusStr = entry.status && entry.status !== "done" ? ` · ${entry.status}` : "";
+    const statusStr =
+      entry.status && entry.status !== "done" ? ` · ${entry.status}` : "";
     meta.textContent = `${ago} · ${dur}${speakerStr}${statusStr}`;
     btn.append(name, meta);
     btn.addEventListener("click", () => void loadFromHistory(entry));
@@ -774,60 +961,52 @@ export function createMeetingPage(
     try {
       const status = await fetchJobStatus(`/transcribe/meeting/${entry.job_id}`);
       if (status.status === "done" && status.result) {
-        // No audio URL — we don't have the original file anymore. Click-to-
-        // seek will still work as time updates on the <audio>, but only if
-        // the user later loads the same file. For v1 we render the
-        // transcript without audio.
+        // Restore the saved speaker names so the transcript renders with
+        // the rename the user did last time.
+        speakerNames = { ...(entry.speaker_names ?? {}) };
+        activeJobId = entry.job_id;
         audioEl.removeAttribute("src");
         renderResult(status.result, "");
         uploadForm.hidden = true;
         confirmCard.hidden = true;
         completeAll();
       } else if (status.status === "running" || status.status === "pending") {
-        showError(
-          "This job is still running. Refresh the page in a moment to see results.",
-        );
+        showError(t("meeting.error.stillRunning"));
       } else if (status.status === "error") {
         showError(
-          `That job ended with error: ${status.error?.message ?? "unknown"}`,
+          t("meeting.error.jobErrored", {
+            message: status.error?.message ?? "unknown",
+          }),
         );
       } else if (status.status === "cancelled") {
-        showError("That job was cancelled.");
+        showError(t("meeting.error.jobCancelled"));
       }
     } catch (e) {
       const msg = (e as Error).message;
       if (msg.includes("404")) {
-        // Server-side TTL evicted it — drop from local history too.
         removeHistory(entry.job_id);
         renderSidebar();
-        showError(
-          "That analysis expired (server keeps results for 1 hour). Removed from history.",
-        );
+        showError(t("meeting.error.expired"));
       } else {
-        showError(`Failed to load that analysis: ${msg}`);
+        showError(t("meeting.error.loadFailed", { message: msg }));
       }
     }
   }
 
   renderSidebar();
 
-  // ------ Availability gate ------------------------------------------------
-
   void fetchStatus()
     .then((info) => {
       if (!info.available) {
         unavailableEl.hidden = false;
         unavailableEl.textContent =
-          info.reason ?? "Meeting analysis is unavailable.";
+          info.reason ?? t("meeting.unavailable.default");
         fileInput.disabled = true;
         uploadLabel.classList.add("disabled");
         startBtn.disabled = true;
       }
     })
-    .catch(() => {
-      // If /status fails entirely, leave the page enabled — submit will
-      // surface the 503 instead.
-    });
+    .catch(() => {});
 
   return {
     element: root,
@@ -849,8 +1028,6 @@ function formatTime(totalSeconds: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-/** Human-friendly duration: "45s", "2m 13s", "1h 4m". Drops smaller units
- *  once the value crosses the next threshold so labels stay short. */
 function formatDuration(totalSeconds: number): string {
   if (totalSeconds < 60) return `${totalSeconds}s`;
   if (totalSeconds < 3600) {

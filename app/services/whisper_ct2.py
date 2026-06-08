@@ -96,6 +96,7 @@ class CTranslate2Backend:
         model_dir: str | None = None,
         compute_type: str = "default",
         device: str = "auto",
+        cpu_threads: int | None = None,
     ):
         if model is None and model_dir is None:
             raise ValueError("CTranslate2Backend requires either model or model_dir")
@@ -105,10 +106,17 @@ class CTranslate2Backend:
             return
 
         _validate_ct2_directory(model_dir)
+        # Pass cpu_threads only when set so callers that haven't opted in get
+        # faster-whisper's library default (currently 4). Apple Silicon M2
+        # benefits from bumping to 6-8; documented in .env.example.
+        load_kwargs: dict[str, Any] = {
+            "compute_type": compute_type,
+            "device": device,
+        }
+        if cpu_threads is not None:
+            load_kwargs["cpu_threads"] = cpu_threads
         try:
-            self._model = WhisperModel(
-                model_dir, compute_type=compute_type, device=device
-            )
+            self._model = WhisperModel(model_dir, **load_kwargs)
         except Exception as e:
             raise WhisperLoadError(
                 f"Failed to load WhisperModel from {model_dir}: {e}"
