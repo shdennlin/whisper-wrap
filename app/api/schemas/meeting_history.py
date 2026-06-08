@@ -11,17 +11,24 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+_ID_PATTERN = r"^[A-Za-z0-9_-]{1,36}$"
+
 
 class MeetingCreate(BaseModel):
-    """POST /v1/meetings body — supplies the full payload.
+    r"""POST /v1/meetings body — supplies the full payload.
 
     Used by:
       - the worker's auto-persist path inside `_run_meeting_job` (so
         the row lands without a client roundtrip)
       - the PWA migration from localStorage on first load
+
+    `id` regex is intentionally restrictive — only alphanumerics, `_`,
+    and `-`. This blocks `..`, `/`, `\`, NUL, spaces, etc. so the id
+    is safe to interpolate into filesystem paths in
+    `upload_meeting_audio`. ULID-style and UUID job_ids both fit.
     """
 
-    id: str = Field(min_length=1, max_length=36)
+    id: str = Field(min_length=1, max_length=36, pattern=_ID_PATTERN)
     filename: str
     result: dict[str, Any]
     created_at: int | None = Field(default=None, ge=0)

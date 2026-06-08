@@ -262,3 +262,103 @@ def test_delete_meeting_unlinks_audio(client, tmp_path, monkeypatch):
     r = client.delete("/v1/meetings/m-del-audio")
     assert r.status_code == 204
     assert not target.exists(), "audio file SHALL be unlinked with the row"
+
+
+# --- Security: path traversal + MIME smuggling -----------------------------
+
+
+def test_create_rejects_path_traversal_in_id(client):
+    """`POST /v1/meetings` SHALL reject ids that don't match the safe
+    alphabet — Pydantic regex blocks `..`, `/`, NUL, etc. before they
+    reach `config.audio_dir / f'meeting-{id}{ext}'`."""
+    for bad_id in ("../etc", "..%2Ffoo", "a/b", "a\\b", "a b", "a.b"):
+        body = _sample_meeting(bad_id)
+        r = client.post("/v1/meetings", json=body)
+        assert r.status_code == 422, (
+            f"id {bad_id!r} SHALL be rejected by schema validation"
+        )
+
+
+def test_audio_upload_rejects_traversal_in_path_param(client, tmp_path, monkeypatch):
+    """The `{meeting_id}` path param is re-validated at the endpoint
+    level (Pydantic Field pattern doesn't apply to path params)."""
+    from app import config as config_module
+
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    # `..foo` has a dot — not in the alphabet → 400 from validator.
+    r = client.post(
+        "/v1/meetings/..foo/audio",
+        files={"file": ("x.wav", b"data", "audio/wav")},
+    )
+    assert r.status_code == 400
+
+
+def test_audio_upload_rejects_non_audio_mime(client, tmp_path, monkeypatch):
+    """Stored XSS defense — the GET endpoint returns the stored
+    audio_mime_type, so uploads that smuggle `text/html` could trigger
+    XSS. MIME is allowlist-validated to block this at upload."""
+    from app import config as config_module
+
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    client.post("/v1/meetings", json=_sample_meeting("m-xss"))
+    r = client.post(
+        "/v1/meetings/m-xss/audio",
+        files={"file": ("x.html", b"<script>alert(1)</script>", "text/html")},
+    )
+    assert r.status_code == 400
+    assert "unsupported audio mime type" in r.text
+
+
+def test_audio_download_sets_no_sniff_header(client, tmp_path, monkeypatch):
+    """`X-Content-Type-Options: nosniff` SHALL be on the audio GET so
+    the browser MUST trust the Content-Type header. Defense in depth
+    against historical/legacy bad audio_mime_type values."""
+    from app import config as config_module
+
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    client.post("/v1/meetings", json=_sample_meeting("m-headers"))
+    client.post(
+        "/v1/meetings/m-headers/audio",
+        files={"file": ("a.wav", b"RIFFdata", "audio/wav")},
+    )
+    r = client.get("/v1/meetings/m-headers/audio")
+    assert r.status_code == 200
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers["content-type"].startswith("audio/wav")
+
+
+def test_audio_download_coerces_legacy_bad_mime(client, tmp_path, monkeypatch):
+    """If a row carries a stored mime that isn't in the allowlist
+    (e.g. written before the MIME allowlist landed), the GET response
+    SHALL coerce to application/octet-stream rather than echoing it
+    back. Belt-and-braces with the upload-side allowlist."""
+    from pathlib import Path as _Path
+
+    from app import config as config_module
+    from app.services.persistence import meeting_analyses_repo as repo
+    from app.services.persistence.engine import SessionLocal
+
+    monkeypatch.setattr(config_module.config, "DATA_DIR", tmp_path)
+    client.post("/v1/meetings", json=_sample_meeting("m-legacy"))
+    # First do a legitimate upload so the file exists on disk.
+    client.post(
+        "/v1/meetings/m-legacy/audio",
+        files={"file": ("a.wav", b"audio data", "audio/wav")},
+    )
+    # Then directly mutate the row to simulate a legacy entry with a
+    # bad mime; bypasses the upload validation.
+    audio_file = _Path(tmp_path) / "audio" / "meeting-m-legacy.wav"
+    assert audio_file.exists()
+    with SessionLocal() as db:
+        repo.set_audio(
+            db,
+            "m-legacy",
+            audio_path=str(audio_file),
+            audio_mime_type="text/html",
+            audio_size_bytes=audio_file.stat().st_size,
+        )
+        db.commit()
+
+    r = client.get("/v1/meetings/m-legacy/audio")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/octet-stream")

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +46,10 @@ from app.services.persistence import meeting_analyses_repo as repo
 from app.services.persistence.models import MeetingAnalysisRow
 
 # audio/webm → .webm rather than mimetypes.guess_extension's ".weba".
-# Mirrors `app/api/sessions.py:MIME_TO_EXT`.
+# Mirrors `app/api/sessions.py:MIME_TO_EXT`. This is also the
+# authoritative content-type allowlist for `POST /v1/meetings/{id}/audio` —
+# we reject 400 for anything not in this map so an attacker can't smuggle
+# `text/html` into the FileResponse on the GET side and trigger stored XSS.
 _MIME_TO_EXT: dict[str, str] = {
     "audio/webm": ".webm",
     "audio/mp4": ".m4a",
@@ -60,15 +64,21 @@ _MIME_TO_EXT: dict[str, str] = {
     "audio/opus": ".opus",
 }
 
+# Mirrors the Pydantic schema regex for `id`. We re-validate at the
+# path-param level because FastAPI's `{meeting_id}` doesn't apply the
+# Pydantic Field pattern automatically — it's a string from the URL.
+_ID_PATTERN_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-def _ext_for_mime(mime_type: str) -> str:
-    ext = _MIME_TO_EXT.get(mime_type.lower())
-    if ext is None:
-        logger.warning(
-            "Unknown audio mime type %s; defaulting to .bin", mime_type
+
+def _validate_meeting_id(meeting_id: str) -> None:
+    """Reject ids that don't fit the safe alphabet — prevents path
+    traversal via `meeting_id` (e.g. `..%2F../password`) before it
+    reaches `config.audio_dir / f"meeting-{id}{ext}"`."""
+    if not _ID_PATTERN_RE.fullmatch(meeting_id):
+        raise HTTPException(
+            status_code=400,
+            detail="invalid meeting id (must match [A-Za-z0-9_-]{1,64})",
         )
-        return ".bin"
-    return ext
 
 logger = logging.getLogger(__name__)
 
@@ -205,13 +215,33 @@ async def upload_meeting_audio(
     Re-upload replaces the existing file. Storage path follows
     `app.config.audio_dir` with `meeting-{id}{ext}` to avoid
     colliding with `/v1/sessions` audio.
+
+    Security: `meeting_id` is regex-validated to block path traversal,
+    and the resolved target path is checked to live under audio_dir
+    via realpath (defense in depth). MIME is allowlist-validated so
+    a smuggled `text/html` can't end up in the GET response and
+    trigger stored XSS.
     """
+    _validate_meeting_id(meeting_id)
+
     row = repo.get_meeting_analysis(db, meeting_id)
     if row is None:
         raise HTTPException(status_code=404, detail="meeting not found")
 
-    mime = file.content_type or "application/octet-stream"
-    ext = _ext_for_mime(mime)
+    mime = (file.content_type or "").lower()
+    # MIME allowlist — reject anything not in _MIME_TO_EXT. Without
+    # this, a client could upload with `Content-Type: text/html`, which
+    # we'd store verbatim and replay on GET, parsing as HTML in the
+    # browser (stored XSS).
+    if mime not in _MIME_TO_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unsupported audio mime type: {mime or '<missing>'}. "
+                f"Allowed: {sorted(_MIME_TO_EXT.keys())}"
+            ),
+        )
+    ext = _MIME_TO_EXT[mime]
 
     # Replacement: unlink any previous file so we don't accumulate
     # `meeting-<id>.m4a` + `meeting-<id>.wav` orphans on re-upload
@@ -224,6 +254,18 @@ async def upload_meeting_audio(
 
     config.ensure_data_dirs()
     target = config.audio_dir / f"meeting-{meeting_id}{ext}"
+    # Realpath containment check — even with the regex guard above,
+    # belt-and-braces refuses to write outside audio_dir. Catches
+    # weird-but-legal ids that future regex relaxations might allow.
+    audio_root = config.audio_dir.resolve()
+    resolved_target = target.resolve()
+    try:
+        resolved_target.relative_to(audio_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="resolved path escapes audio_dir"
+        ) from exc
+
     body = await file.read()
     target.write_bytes(body)
 
@@ -248,15 +290,35 @@ async def upload_meeting_audio(
 def stream_meeting_audio(
     meeting_id: str, db: SASession = Depends(get_db)
 ) -> FileResponse:
+    _validate_meeting_id(meeting_id)
+
     row = repo.get_meeting_analysis(db, meeting_id)
     if row is None:
         raise HTTPException(status_code=404, detail="meeting not found")
     if not row.audio_path or not Path(row.audio_path).exists():
         raise HTTPException(status_code=404, detail="audio not found")
+
+    # Force a known-safe Content-Type from the allowlist — old rows
+    # written before the MIME allowlist landed could carry arbitrary
+    # strings in `audio_mime_type`. Falling back to
+    # application/octet-stream is the safe choice for the
+    # browser-rendering boundary.
+    safe_mime = (
+        row.audio_mime_type
+        if (row.audio_mime_type or "").lower() in _MIME_TO_EXT
+        else "application/octet-stream"
+    )
+
     return FileResponse(
         row.audio_path,
-        media_type=row.audio_mime_type or "application/octet-stream",
+        media_type=safe_mime,
         filename=os.path.basename(row.audio_path),
+        headers={
+            # Block MIME sniffing — even if the stored content has
+            # an HTML-looking byte prefix, the browser MUST trust the
+            # Content-Type header instead of guessing.
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
