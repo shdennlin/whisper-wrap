@@ -66,10 +66,10 @@ async def test_first_analyze_loads_models_second_call_reuses_them(monkeypatch):
     pipeline_load_calls = 0
 
     class _FakeASR:
-        def transcribe(self, audio, language=None):
+        def transcribe(self, audio, language=None, batch_size=None):
             return {"language": "en", "segments": []}
 
-    def fake_load_model(model_dir, device=None, compute_type=None):
+    def fake_load_model(model_dir, device=None, compute_type=None, threads=None):
         nonlocal asr_load_calls
         asr_load_calls += 1
         return _FakeASR()

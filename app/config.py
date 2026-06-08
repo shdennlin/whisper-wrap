@@ -174,6 +174,28 @@ class Config:
         self.MEETING_ALIGN_MODEL: str | None = (
             os.environ.get("MEETING_ALIGN_MODEL") or None
         )
+        # WhisperX ASR batch size. Higher = better CPU SIMD utilisation on
+        # long files; trade-off is RAM (~150-250 MB per batch slot for
+        # whisper-large). Default 32 matches whisperx's documented sweet
+        # spot for batched inference and gives ~10-15% speedup over the
+        # built-in default of 16 on Apple Silicon CPU. Unset → 32.
+        self.MEETING_BATCH_SIZE: int = _parse_int(
+            os.getenv("MEETING_BATCH_SIZE"),
+            default=32,
+            var_name="MEETING_BATCH_SIZE",
+        )
+        # Torch device for the align (wav2vec2) + diarize (pyannote) stages
+        # of the meeting pipeline. CTranslate2 ASR stays on CPU regardless
+        # because ct2 has no MPS/Metal backend. Values:
+        #   "auto" — try MPS on macOS, CUDA on Linux, else CPU (default)
+        #   "mps"  — force Apple Metal Performance Shaders
+        #   "cuda" — force CUDA
+        #   "cpu"  — force CPU
+        # On Apple Silicon, MPS typically cuts the align + diarize stages
+        # by 4-8x for long-form audio.
+        self.MEETING_TORCH_DEVICE: str = (
+            os.environ.get("MEETING_TORCH_DEVICE") or "auto"
+        )
 
         # File handling
         self.MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))

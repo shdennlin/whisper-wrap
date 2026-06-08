@@ -83,14 +83,26 @@ class MeetingAnalyzer:
         device: str = "cpu",
         compute_type: str = "default",
         cpu_threads: int | None = None,
+        batch_size: int = 32,
+        torch_device: str = "cpu",
     ) -> None:
         self.ct2_model_dir = ct2_model_dir
         self.hf_token = hf_token
         self.diarization_pipeline_name = diarization_pipeline
         self.align_model_name = align_model
+        # CT2 device — "cpu" or "cuda" only. ct2 has no MPS backend so on
+        # Apple Silicon this stays "cpu" regardless of torch_device.
         self.device = device
         self.compute_type = compute_type
         self.cpu_threads = cpu_threads
+        # ASR batched-inference width. Pushed into the FasterWhisperPipeline
+        # at transcribe() time (NOT at load_model() — whisperx takes it per
+        # call, not per model).
+        self.batch_size = batch_size
+        # Torch device for align + diarize stages. Decoupled from CT2's
+        # `device` because pyannote / wav2vec2 are torch-native and CAN use
+        # MPS on Apple Silicon, while ct2 cannot. Resolved by from_config().
+        self.torch_device = torch_device
         self._asr: Any = None
         self._diarize: Any = None
         self._lock = asyncio.Lock()
@@ -129,6 +141,14 @@ class MeetingAnalyzer:
         # needs for int8_float16. int8 is the supported equivalent.
         if compute_type == "int8_float16" and sys.platform == "darwin":
             compute_type = "int8"
+
+        # Resolve torch device for align + diarize stages. "auto" tries the
+        # fastest available accelerator. We import torch lazily INSIDE this
+        # block so configs that never touch the meeting endpoint don't pay
+        # the torch import cost.
+        configured_td = (getattr(config, "MEETING_TORCH_DEVICE", "auto") or "auto").lower()
+        torch_device = _resolve_torch_device(configured_td)
+
         return cls(
             ct2_model_dir=str(DEFAULT_MODELS_ROOT / variant["local_dir"]),
             hf_token=config.HF_TOKEN or "",
@@ -136,6 +156,8 @@ class MeetingAnalyzer:
             align_model=config.MEETING_ALIGN_MODEL,
             compute_type=compute_type,
             cpu_threads=getattr(config, "CPU_THREADS", None),
+            batch_size=getattr(config, "MEETING_BATCH_SIZE", 32),
+            torch_device=torch_device,
         )
 
     async def _load_pipeline(self) -> None:
@@ -184,7 +206,9 @@ class MeetingAnalyzer:
             _time.monotonic() - asr_load_start,
         )
         logger.info(
-            "Loading pyannote diarization pipeline %s", self.diarization_pipeline_name
+            "Loading pyannote diarization pipeline %s (torch_device=%s)",
+            self.diarization_pipeline_name,
+            self.torch_device,
         )
         diar_load_start = _time.monotonic()
         self._diarize = await asyncio.to_thread(
@@ -192,6 +216,28 @@ class MeetingAnalyzer:
             self.diarization_pipeline_name,
             token=self.hf_token,
         )
+        # Move the diarize pipeline to the configured torch device. pyannote
+        # supports MPS on Apple Silicon since 3.0 — for long-form audio this
+        # cuts the embedding-extraction stage by ~5-10x because the
+        # wav2vec2-style backbone gets to run on the Metal GPU. We use a
+        # try/except because some pyannote internals (e.g. PLDA scoring)
+        # have ops that fall back to CPU on MPS, and a hard failure here
+        # would block the entire pipeline.
+        if self.torch_device != "cpu":
+            import torch
+
+            try:
+                await asyncio.to_thread(self._diarize.to, torch.device(self.torch_device))
+                logger.info(
+                    "Moved pyannote pipeline to %s for accelerated inference",
+                    self.torch_device,
+                )
+            except Exception as e:  # noqa: BLE001 — broad to keep startup resilient
+                logger.warning(
+                    "Failed to move pyannote pipeline to %s (%s); diarize will run on cpu",
+                    self.torch_device,
+                    e,
+                )
         logger.info(
             "Loaded pyannote pipeline in %.1fs",
             _time.monotonic() - diar_load_start,
@@ -275,18 +321,29 @@ class MeetingAnalyzer:
         import whisperx as _wx
 
         audio = await asyncio.to_thread(_wx.load_audio, audio_path)
-        return await asyncio.to_thread(self._asr.transcribe, audio, language=language)
+        # batch_size is the WhisperX-specific knob — higher = better CPU
+        # SIMD saturation on long files. Memory cost ~150-250 MB per slot
+        # on whisper-large; 32 is the documented sweet spot.
+        return await asyncio.to_thread(
+            self._asr.transcribe,
+            audio,
+            language=language,
+            batch_size=self.batch_size,
+        )
 
     async def _run_align(
         self, asr_out: dict[str, Any], audio_path: str
     ) -> dict[str, Any]:
         import whisperx as _wx
 
+        # Align uses the torch-native wav2vec2 path, so it CAN take MPS
+        # while the ct2 ASR upstream stays CPU-bound. self.torch_device is
+        # the resolved device for the align + diarize stages.
         language = asr_out["language"]
         model_a, metadata = await asyncio.to_thread(
             _wx.load_align_model,
             language_code=language,
-            device=self.device,
+            device=self.torch_device,
             model_name=self.align_model_name,
         )
         audio = await asyncio.to_thread(_wx.load_audio, audio_path)
@@ -296,7 +353,7 @@ class MeetingAnalyzer:
             model_a,
             metadata,
             audio,
-            self.device,
+            self.torch_device,
             return_char_alignments=False,
         )
 
@@ -368,3 +425,47 @@ class MeetingAnalyzer:
 def _report(cb: ProgressCallback | None, stage: str, progress: float) -> None:
     if cb is not None:
         cb(stage, progress)
+
+
+def _resolve_torch_device(configured: str) -> str:
+    """Map MEETING_TORCH_DEVICE config to a usable torch device string.
+
+    Imports torch lazily to keep the meeting extras truly optional. Caller
+    is responsible for catching ImportError elsewhere in the load path —
+    `from_config` only runs when the endpoint is gated open, which already
+    requires the optional [meeting] extras group.
+
+    "auto" resolution: MPS on macOS if available, CUDA on Linux, else CPU.
+    Forced values fall back to CPU with a WARN log if the requested device
+    isn't available (instead of crashing at first transcribe).
+    """
+    import sys
+
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if configured == "auto":
+        if sys.platform == "darwin" and torch.backends.mps.is_available():
+            return "mps"
+        if torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
+    if configured == "mps":
+        if torch.backends.mps.is_available():
+            return "mps"
+        logger.warning(
+            "MEETING_TORCH_DEVICE=mps requested but MPS not available "
+            "(needs macOS + Apple Silicon + torch built with mps); falling back to cpu"
+        )
+        return "cpu"
+    if configured == "cuda":
+        if torch.cuda.is_available():
+            return "cuda"
+        logger.warning(
+            "MEETING_TORCH_DEVICE=cuda requested but CUDA not available; "
+            "falling back to cpu"
+        )
+        return "cpu"
+    return "cpu"

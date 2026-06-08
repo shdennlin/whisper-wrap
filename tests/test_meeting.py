@@ -301,6 +301,133 @@ def test_analyzer_cpu_threads_unset_passes_none(monkeypatch):
     assert analyzer.cpu_threads is None
 
 
+def test_analyzer_batch_size_defaults_to_32(monkeypatch):
+    """Unset MEETING_BATCH_SIZE SHALL pass 32 through to the analyzer so
+    the WhisperX transcribe step uses the documented sweet spot for CPU
+    batched inference instead of the library default of 16."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "any-model")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    monkeypatch.delenv("MEETING_BATCH_SIZE", raising=False)
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.batch_size == 32
+
+
+def test_analyzer_batch_size_override(monkeypatch):
+    """Explicit MEETING_BATCH_SIZE SHALL flow through to the analyzer."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "any-model")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    monkeypatch.setenv("MEETING_BATCH_SIZE", "64")
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.batch_size == 64
+
+
+def test_torch_device_auto_falls_back_to_cpu_when_no_accelerator(monkeypatch):
+    """`MEETING_TORCH_DEVICE=auto` SHALL resolve to 'cpu' when neither MPS
+    nor CUDA is available — this is the safe default for headless Linux
+    boxes without a GPU."""
+    from app.services.meeting import _resolve_torch_device
+
+    class _FakeMpsBackend:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class _FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class _FakeTorch:
+        backends = type("X", (), {"mps": _FakeMpsBackend})()
+        cuda = _FakeCuda()
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", _FakeTorch)
+    monkeypatch.setattr("sys.platform", "linux")
+    assert _resolve_torch_device("auto") == "cpu"
+
+
+def test_torch_device_auto_picks_mps_on_darwin(monkeypatch):
+    """On macOS with MPS available, `auto` SHALL resolve to 'mps' so the
+    align + diarize stages get the Metal GPU instead of running on CPU."""
+    from app.services.meeting import _resolve_torch_device
+
+    class _FakeMpsBackend:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+    class _FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class _FakeTorch:
+        backends = type("X", (), {"mps": _FakeMpsBackend})()
+        cuda = _FakeCuda()
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", _FakeTorch)
+    monkeypatch.setattr("sys.platform", "darwin")
+    assert _resolve_torch_device("auto") == "mps"
+
+
+def test_torch_device_forced_mps_falls_back_when_unavailable(monkeypatch, caplog):
+    """Forcing `mps` on a system without MPS SHALL log a warning and fall
+    back to cpu instead of raising — we want the meeting endpoint to keep
+    serving even when an env var is misconfigured for the deploy target."""
+    import logging
+
+    from app.services.meeting import _resolve_torch_device
+
+    class _FakeMpsBackend:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class _FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return False
+
+    class _FakeTorch:
+        backends = type("X", (), {"mps": _FakeMpsBackend})()
+        cuda = _FakeCuda()
+
+    monkeypatch.setitem(__import__("sys").modules, "torch", _FakeTorch)
+    with caplog.at_level(logging.WARNING, logger="app.services.meeting"):
+        assert _resolve_torch_device("mps") == "cpu"
+    assert any("MPS not available" in r.message for r in caplog.records)
+
+
 @pytest.mark.asyncio
 async def test_concurrent_jobs_serialise(monkeypatch):
     """Two analyze() calls submitted back-to-back SHALL execute one at a time:
