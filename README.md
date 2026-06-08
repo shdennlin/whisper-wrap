@@ -63,6 +63,8 @@ Open `http://localhost:8000/app/` for the PWA, `http://localhost:8000/status` fo
 - **`/listen` WebSocket**: live captioning — 16 kHz mono `pcm_s16le` frames in, timestamped `partial`/`final` events out. v2.1 adds a partial-consensus filter (simplified LocalAgreement-2) so `partial` text no longer thrashes between inferences. v2.2 swaps the RMS-energy VAD for [silero-vad](https://github.com/snakers4/silero-vad) (neural; with RMS fallback) so utterance endpointing is robust against environmental noise and quiet speech.
 - **Rich `/status`**: loaded model details, runtime device, compute type, Gemini configuration, uptime — useful for distinguishing Mac mini vs GPU deployments at a glance.
 - **Variants-aware model registry** (v2.1): `registry/models.yaml` ships `breeze-asr-25` with both a `ct2` and a `ggml` variant (`q6_k` quantisation + bundled `.mlmodelc` Core ML encoder), plus `large-v3-turbo` as the multilingual fallback. `make download-model MODEL=<name>` fetches only the variant your platform will load; add `ALL=1` to fetch every variant.
+- **Meeting Mode** (v2.5): long-form upload → speaker-diarized transcript with word-level timestamps via WhisperX + pyannote. Optional `?fast=true` re-uses `/transcribe`'s ggml+ANE backend for ASR (skipping WhisperX's CT2), cutting macOS wall-clock by **~3×** while keeping diarization. Results persist to a SQLite-backed `/v1/meetings` API with optional audio sidecar storage so the PWA history sidebar survives restarts and works cross-device.
+- **PWA Batch file upload**: drop or pick an existing audio file on the Batch card instead of recording — same `/transcribe` pipeline, no second endpoint.
 - **iOS Shortcuts ready**: bundled shortcut for one-tap voice transcription.
 
 ## 🏗️ Architecture
@@ -154,10 +156,19 @@ last 20 sessions to `localStorage`, and lets you run pre-defined Action
 templates (defined in `registry/actions.yaml`, surfaced via `GET /actions`)
 against the transcript via `POST /ask`.
 
+The Batch capture card also accepts **file uploads** — click 📁 or drag
+an audio file onto it to transcribe an existing recording instead of
+recording a fresh one. Same `/transcribe` pipeline; no second endpoint.
+
+A separate **Meeting Mode** page lives at `/app/#/meeting` (see the
+[Meeting Mode](#-meeting-mode) section below for the long-form
+diarization workflow with chat/detail views and AI Enhance).
+
 | Method | Path | Description |
 | ------ | ---- | --- |
-| GET    | `/app/`    | PWA live-captioning client (open in browser, install to home screen) |
-| GET    | `/actions` | Action templates registry (consumed by the PWA's chip bar) |
+| GET    | `/app/`          | PWA live-captioning client (Live, Batch, Meeting modes) |
+| GET    | `/app/#/meeting` | Meeting Mode page (diarization, AI Enhance, history sidebar) |
+| GET    | `/actions`       | Action templates registry (consumed by the chip bar) |
 
 ```bash
 make build-frontend     # one-time: produces app/static/app/
@@ -273,8 +284,14 @@ specific URL the error names and re-run the command — it's idempotent.
 ### Usage
 
 ```bash
-# Upload a meeting → returns a job handle
-curl -s -X POST http://localhost:8000/transcribe/meeting \
+# Upload a meeting → returns a job handle.
+# ?fast=true     re-uses /transcribe's platform-default backend for ASR
+#                (ggml+ANE on macOS, ct2+CUDA on Linux), then routes the
+#                segments through WhisperX align + pyannote diarize on MPS.
+#                ~3× faster on Apple Silicon. Recommended unless you need
+#                word-level alignment precision from WhisperX's CT2 path.
+# ?filename=...  shown as the meeting title in the PWA history sidebar.
+curl -s -X POST "http://localhost:8000/transcribe/meeting?fast=true&filename=Q3-review.m4a" \
   -H "Content-Type: audio/wav" \
   --data-binary @meeting.wav
 # → {"job_id":"01JFA…","status_url":"/transcribe/meeting/01JFA…"}
@@ -287,37 +304,65 @@ curl -s http://localhost:8000/transcribe/meeting/01JFA…
 #              "segments":[{"speaker":"SPEAKER_00",
 #                           "start":0.52,"end":4.18,
 #                           "text":"今天會議的主題是…","words":[…]},…]}}
+
+# Cancel a running job (best-effort, between stage boundaries).
+curl -s -X DELETE http://localhost:8000/transcribe/meeting/01JFA…
 ```
 
 The PWA Meeting Mode page at `/app/#/meeting` wraps the same workflow with
-upload, speaker-coloured transcript, click-to-seek audio playback, and
-speaker-aware SRT/VTT/TXT export.
+**chat / detail view-mode toggle**, **speaker rename via hover ✏️**,
+**click-to-seek audio playback**, **AI Enhance** (reuses the main page's
+`registry/actions.yaml` chips — `Meeting notes` produces structured
+summaries), speaker-aware **SRT / VTT / TXT (chat) / TXT (script) / JSON**
+exports, an editable **meeting note title**, and a persistent history
+sidebar.
+
+### Persisted history & cross-device replay
+
+Meeting analyses (and the original audio, if uploaded) persist to the
+existing SQLite history DB so the PWA sidebar survives the in-memory
+job-store TTL (default 1 h), server restarts, and access from another
+device on the same server.
+
+| Method | Path | Description |
+| - | - | - |
+| GET | `/v1/meetings` | Paginated list (`limit`, `before_ms`). |
+| GET | `/v1/meetings/{id}` | Single analysis with full result + speaker_names. |
+| POST | `/v1/meetings` | Create (used by worker auto-persist + PWA legacy-localStorage migration). |
+| PATCH | `/v1/meetings/{id}` | Patch `speaker_names` and/or `filename`. |
+| DELETE | `/v1/meetings/{id}` | Removes the row AND unlinks the audio sidecar file. |
+| POST | `/v1/meetings/{id}/audio` | Upload original audio as a sidecar (multipart `file`). |
+| GET | `/v1/meetings/{id}/audio` | Stream the audio back (`X-Content-Type-Options: nosniff`; MIME allowlisted). |
 
 ### Performance
 
-Meeting analysis runs the WhisperX pipeline (CT2 ASR + wav2vec2 align +
-pyannote diarize). CTranslate2 has no Core ML/ANE backend, so **the ASR
-stage stays on CPU on macOS** — only `/transcribe` reaches the Apple
-Neural Engine. The other two stages are torch-native and DO accept MPS:
-align and diarize run on the Metal GPU when available, cutting their
-contribution by 4-8×.
+Meeting analysis runs three stages — ASR + wav2vec2 align + pyannote
+diarize. CTranslate2 has no Core ML/ANE backend, so the slow-path ASR
+stays on CPU on macOS; the torch-native align + diarize stages DO
+accept MPS and cut their contribution by 4-8× on Apple Silicon.
 
-| Platform | 1-hour meeting wall-clock |
-| - | - |
-| macOS (Mac mini, ASR on CPU + align/diarize on MPS) | ~6-12 min |
-| macOS (everything on CPU — `MEETING_TORCH_DEVICE=cpu`) | ~10-20 min |
-| Linux + NVIDIA GPU | ~1-3 min |
+Two ASR paths are available — pick at request time via `?fast=true`:
 
-ASR dominates the macOS wall-clock (~70% of total time). To attack it
-further you either need CUDA, or you can keep ASR on `/transcribe`
-(ggml + ANE) and accept the loss of diarization — that path takes
-~3-6 min for a 1-hour file but only returns segment-level text.
+| Path | ASR backend | macOS Apple Silicon | Loses |
+| - | - | - | - |
+| **Fast (`?fast=true`)** | ggml + Core ML + ANE (same as `/transcribe`) | **~3-5 min** for a 1 h meeting | Nothing — diarize + align still run |
+| Slow (`?fast=false`, default) | WhisperX CT2 batched on CPU | ~10-20 min for a 1 h meeting | — |
+| Linux + NVIDIA GPU | WhisperX CT2 on CUDA | ~1-3 min for a 1 h meeting | — |
+
+Fast mode is the default in the PWA on macOS (toggleable). It works on
+Linux too — there it routes through whatever `/transcribe` already uses
+(ct2+CUDA if available, else ct2+CPU which matches the slow path).
+
+ASR dominates the slow-path macOS wall-clock (~70% of total time);
+fast mode collapses that 70% to whatever `/transcribe` takes for the
+same audio (~10× real-time on M-series via ANE) and leaves only the
+~2-5 min align+diarize tail.
 
 Two tunables (both in `.env`, both have sensible defaults — touch only
 when debugging perf):
 
 ```env
-MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size; 16-64
+MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size; 16-64 (slow path only)
 MEETING_TORCH_DEVICE=auto    # auto | mps | cuda | cpu (align + diarize)
 ```
 
