@@ -21,6 +21,13 @@ export interface SubmitOptions {
    * `enableWordTimestamps`. Backend default is false (existing slow path).
    */
   fast?: boolean;
+  /**
+   * Original filename of the uploaded audio. Used by the backend's
+   * auto-persist path to populate the `meeting_analyses.filename`
+   * column so the PWA history sidebar shows the file the user
+   * uploaded, not a synthesised `meeting-<job_id>` placeholder.
+   */
+  filename?: string;
 }
 
 export interface JobHandle {
@@ -50,6 +57,7 @@ export async function submitMeeting(
   // Same opt-in pattern as enableWordTimestamps: only send when true, so a
   // future backend default change to fast-on-everywhere is honoured.
   if (opts.fast === true) params.set("fast", "true");
+  if (opts.filename) params.set("filename", opts.filename);
 
   const url = `/transcribe/meeting${params.toString() ? `?${params}` : ""}`;
   const resp = await fetch(url, {

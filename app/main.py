@@ -23,6 +23,7 @@ from app.api.actions import router as actions_router
 from app.api.ask import router as ask_router
 from app.api.listen import router as listen_router
 from app.api.meeting import router as meeting_router
+from app.api.meeting_history import router as meeting_history_router
 from app.api.openai_compat import router as openai_compat_router
 from app.api.sessions import router as sessions_router
 from app.api.status import router as status_router
@@ -319,6 +320,7 @@ app.include_router(openai_compat_router)
 app.include_router(actions_router)
 app.include_router(sessions_router)
 app.include_router(meeting_router)
+app.include_router(meeting_history_router)
 
 # v2.4: PWA static bundle mounted at /app/. The bundle is produced by
 # `make build-frontend`; if it's missing (developer hasn't run the frontend

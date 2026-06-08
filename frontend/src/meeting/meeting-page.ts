@@ -34,6 +34,7 @@ import {
 } from "./view-mode-store";
 import {
   loadHistory,
+  prime as primeMeetingHistory,
   recordHistory,
   removeHistory,
   updateHistory,
@@ -690,6 +691,10 @@ export function createMeetingPage(
     if (!selectedFile) return;
     const file = selectedFile;
     const submitOpts = buildSubmitOpts();
+    // Plumb the original filename into the upload so the backend's
+    // auto-persist row carries the user-recognisable name in the
+    // history sidebar, not a synthesised `meeting-<job_id>` label.
+    submitOpts.filename = file.name;
     hideConfirm();
     void startUpload(file, submitOpts);
   });
@@ -738,7 +743,7 @@ export function createMeetingPage(
         return;
       }
       activeJobId = handle.job_id;
-      recordHistory({
+      void recordHistory({
         job_id: handle.job_id,
         filename: file.name,
         audio_duration_seconds: audioDurationSeconds,
@@ -767,7 +772,7 @@ export function createMeetingPage(
       );
 
       if (final.status === "cancelled") {
-        updateHistory(handle.job_id, { status: "cancelled" });
+        void updateHistory(handle.job_id, { status: "cancelled" });
         renderSidebar();
         return;
       }
@@ -779,7 +784,7 @@ export function createMeetingPage(
         );
         uploadForm.hidden = false;
         resetStepper();
-        updateHistory(handle.job_id, { status: "error" });
+        void updateHistory(handle.job_id, { status: "error" });
         renderSidebar();
         return;
       }
@@ -790,7 +795,7 @@ export function createMeetingPage(
         return;
       }
       renderResult(final.result, objectUrl);
-      updateHistory(handle.job_id, {
+      void updateHistory(handle.job_id, {
         status: "done",
         speakers: final.result.speakers.length,
         // Persist the full result so the user can re-open this entry
@@ -898,7 +903,7 @@ export function createMeetingPage(
     }
     // Persist into history so reloading still shows the rename.
     if (activeJobId) {
-      updateHistory(activeJobId, { speaker_names: { ...speakerNames } });
+      void updateHistory(activeJobId, { speaker_names: { ...speakerNames } });
     }
     // Re-render to update every occurrence of this speaker in the
     // transcript. We re-render the whole transcript (vs. surgically
@@ -1135,7 +1140,7 @@ export function createMeetingPage(
         audioEl.removeAttribute("src");
         renderResult(status.result, "");
         // Back-fill the cache so subsequent reloads hit the fast path.
-        updateHistory(entry.job_id, {
+        void updateHistory(entry.job_id, {
           status: "done",
           speakers: status.result.speakers.length,
           result: status.result,
@@ -1157,7 +1162,7 @@ export function createMeetingPage(
     } catch (e) {
       const msg = (e as Error).message;
       if (msg.includes("404")) {
-        removeHistory(entry.job_id);
+        void removeHistory(entry.job_id);
         renderSidebar();
         showError(t("meeting.error.expired"));
       } else {
@@ -1166,7 +1171,17 @@ export function createMeetingPage(
     }
   }
 
-  renderSidebar();
+  // Prime the cache from the backend before the first sidebar render.
+  // Also runs the one-shot localStorage → backend migration (idempotent
+  // after first success). renderSidebar() is then called inside the
+  // .then to reflect what we got from the server.
+  void primeMeetingHistory()
+    .then(() => renderSidebar())
+    .catch(() => {
+      // Backend unreachable at boot — render whatever (empty) cache
+      // we have. The sidebar will populate on the next manual refresh.
+      renderSidebar();
+    });
 
   void fetchStatus()
     .then((info) => {

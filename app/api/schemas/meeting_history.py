@@ -1,0 +1,65 @@
+"""Pydantic v2 schemas for /v1/meetings endpoints.
+
+The meeting history endpoint persists what `/transcribe/meeting`
+produces so the PWA sidebar survives JobStore TTL eviction and
+restarts. Shapes mirror `app/api/schemas/sessions.py` patterns.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class MeetingCreate(BaseModel):
+    """POST /v1/meetings body — supplies the full payload.
+
+    Used by:
+      - the worker's auto-persist path inside `_run_meeting_job` (so
+        the row lands without a client roundtrip)
+      - the PWA migration from localStorage on first load
+    """
+
+    id: str = Field(min_length=1, max_length=36)
+    filename: str
+    result: dict[str, Any]
+    created_at: int | None = Field(default=None, ge=0)
+    duration_seconds: float | None = None
+    language: str | None = None
+    speakers_count: int | None = Field(default=None, ge=0)
+    speaker_names: dict[str, str] = Field(default_factory=dict)
+    status: str = "done"
+
+
+class MeetingPatch(BaseModel):
+    """PATCH /v1/meetings/{id} — only `speaker_names` is mutable.
+
+    Result content + metadata are write-once. Renames are the only
+    post-write user input on a finished analysis.
+    """
+
+    speaker_names: dict[str, str]
+
+
+class MeetingFull(BaseModel):
+    """Detail / list-row response shape."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    created_at: int
+    filename: str
+    duration_seconds: float | None = None
+    language: str | None = None
+    speakers_count: int | None = None
+    result: dict[str, Any]
+    speaker_names: dict[str, str] = Field(default_factory=dict)
+    status: str
+
+
+class MeetingListResponse(BaseModel):
+    """GET /v1/meetings envelope. Cursor pagination via `before_ms`."""
+
+    meetings: list[MeetingFull]
+    next_before_ms: int | None = None

@@ -1,103 +1,230 @@
 /**
- * localStorage-backed list of recent meeting analyses.
+ * Meeting history store — backed by `/v1/meetings` (SQLite via
+ * backend), not localStorage.
  *
- * Stores the last N job_ids the user submitted, with enough metadata to
- * render a list entry (filename, duration, started timestamp) without
- * re-fetching from the server. The result itself stays on the server until
- * its TTL evicts it — clicking a history entry triggers a GET to fetch the
- * full result.
+ * Public API names (`loadHistory`, `recordHistory`, `updateHistory`,
+ * `removeHistory`, `clearHistory`) are kept so call sites in
+ * `meeting-page.ts` don't churn. Internally we:
  *
- * Schema is forward-compatible: unknown extra fields are kept, missing
- * fields are tolerated, version changes are detected via the wrapping shape.
+ *   1. Maintain a synchronous in-memory cache so `loadHistory()`
+ *      stays sync (the renderer calls it on every refresh tick).
+ *   2. Sync to the backend over HTTP via `meeting-history-api.ts`.
+ *   3. One-shot migrate any pre-existing localStorage entries on
+ *      first `prime()` call after this feature ships, then clear the
+ *      localStorage key so we never re-migrate.
+ *
+ * Lifecycle: `prime()` runs once on PWA mount (awaited). After that
+ * the cache is the source of truth for renders; mutations write
+ * through to the backend AND update the cache.
  */
 
+import {
+  createMeeting,
+  deleteMeeting,
+  listMeetings,
+  patchMeetingSpeakerNames,
+  type MeetingFull,
+} from "./meeting-history-api";
 import type { MeetingResult } from "./types";
 
-const STORAGE_KEY = "whisper-wrap.meeting-history.v1";
-const MAX_ENTRIES = 20;
+/** Legacy localStorage key — used only for the one-shot migration. */
+const LEGACY_KEY = "whisper-wrap.meeting-history.v1";
 
+/**
+ * Public entry shape — preserved so meeting-page.ts call sites don't
+ * change. New rows persist via MeetingFull-style fields; the optional
+ * `result` carries the analyzer output (used by the renderer's
+ * fast-path cache lookup).
+ */
 export interface HistoryEntry {
   job_id: string;
   filename: string;
   audio_duration_seconds: number | null;
-  started_at: number; // unix ms
-  /** Set once the job completes successfully; lets the sidebar show speaker count. */
+  started_at: number;
   speakers?: number;
-  /** "done" | "cancelled" | "error" | "running"; tracks last known state. */
   status?: string;
-  /** User-renamed speaker labels: SPEAKER_xx → friendly name. Empty/absent
-   *  means use the raw pyannote labels. Persisted so reloading a past
-   *  analysis from the sidebar still shows "Alice" not "SPEAKER_00". */
   speaker_names?: Record<string, string>;
-  /** Full MeetingResult, persisted so the user can re-open a past
-   *  analysis even AFTER the backend has evicted the job from its
-   *  in-memory store (default TTL: 1 hour). Without this the sidebar
-   *  item would just 404 once an hour passed, which is bad UX for what
-   *  is otherwise a permanent history list.
-   *
-   *  Storage cost: ~50-200KB per result for typical meetings; with
-   *  MAX_ENTRIES=20 we cap at ~4MB worst case, well under the
-   *  ~5-10MB localStorage budget. */
   result?: MeetingResult;
 }
 
-export function loadHistory(): HistoryEntry[] {
+let cache: HistoryEntry[] = [];
+
+function fromBackend(m: MeetingFull): HistoryEntry {
+  return {
+    job_id: m.id,
+    filename: m.filename,
+    audio_duration_seconds: m.duration_seconds,
+    started_at: m.created_at,
+    speakers: m.speakers_count ?? undefined,
+    status: m.status,
+    speaker_names: m.speaker_names,
+    result: m.result,
+  };
+}
+
+interface LegacyEntry {
+  job_id?: string;
+  filename?: string;
+  audio_duration_seconds?: number | null;
+  started_at?: number;
+  speakers?: number;
+  status?: string;
+  speaker_names?: Record<string, string>;
+  result?: MeetingResult;
+}
+
+function readLegacyLocalStorage(): LegacyEntry[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(LEGACY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
-      (e): e is HistoryEntry =>
-        typeof e?.job_id === "string" && typeof e?.filename === "string",
+      (e: unknown): e is LegacyEntry =>
+        typeof e === "object" &&
+        e !== null &&
+        typeof (e as LegacyEntry).job_id === "string",
     );
   } catch {
-    // Corrupted JSON or quota-related getItem failure — start fresh rather
-    // than throw, so a busted entry doesn't permanently disable history.
     return [];
   }
 }
 
-function saveHistory(entries: HistoryEntry[]): void {
+/**
+ * Initial fetch from the backend + one-shot legacy migration. Idempotent:
+ * once the legacy localStorage key is cleared, the migration block is
+ * a no-op forever. Call once on PWA mount.
+ */
+export async function prime(): Promise<void> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    const initial = await listMeetings({ limit: 100 });
+    cache = initial.meetings.map(fromBackend);
   } catch {
-    // Quota exceeded / private mode — silent. The UI keeps working;
-    // history just won't persist this session.
+    cache = [];
+    return; // Backend unreachable — can't migrate either, so bail.
+  }
+
+  // Migration: only run when backend is empty AND localStorage has
+  // legacy entries. This is the natural "first load after pulling
+  // this change" state. If the user already has rows in the backend
+  // (e.g. they used another device first), localStorage is just
+  // dropped without overwriting backend state.
+  if (cache.length === 0) {
+    const legacy = readLegacyLocalStorage();
+    if (legacy.length > 0) {
+      for (const entry of legacy) {
+        if (!entry.job_id || !entry.result) continue;
+        try {
+          await createMeeting({
+            id: entry.job_id,
+            filename: entry.filename ?? `meeting-${entry.job_id}`,
+            result: entry.result,
+            created_at: entry.started_at,
+            duration_seconds: entry.audio_duration_seconds ?? null,
+            language: entry.result.language ?? null,
+            speakers_count: entry.speakers ?? null,
+            speaker_names: entry.speaker_names ?? {},
+            status: entry.status ?? "done",
+          });
+        } catch {
+          // Per-entry failure (duplicate ID, malformed result) — skip.
+        }
+      }
+      try {
+        localStorage.removeItem(LEGACY_KEY);
+      } catch {
+        // Private mode etc. — ignore.
+      }
+      // Refresh cache from backend so we reflect what landed.
+      try {
+        const refreshed = await listMeetings({ limit: 100 });
+        cache = refreshed.meetings.map(fromBackend);
+      } catch {
+        // Keep whatever cache state we have.
+      }
+    }
   }
 }
 
-/** Prepend a new entry. Caps at MAX_ENTRIES, oldest dropped first. */
-export function recordHistory(entry: HistoryEntry): HistoryEntry[] {
-  const existing = loadHistory().filter((e) => e.job_id !== entry.job_id);
-  const next = [entry, ...existing].slice(0, MAX_ENTRIES);
-  saveHistory(next);
-  return next;
+/** Synchronous read from the in-memory cache. Caller is expected to
+ *  have awaited `prime()` already (idempotent re-prime is fine). */
+export function loadHistory(): HistoryEntry[] {
+  return [...cache];
 }
 
-/** Patch an entry in-place by job_id. No-op if the job_id is unknown. */
-export function updateHistory(
+/** Insert a brand-new entry. Persists to backend; updates the cache
+ *  on success. Failures throw so the caller can surface them. */
+export async function recordHistory(
+  entry: HistoryEntry,
+): Promise<HistoryEntry[]> {
+  if (!entry.result) {
+    // Legacy contract supported "record without result yet" (status
+    // updated later). Backend rejects empty results, so we now defer
+    // the row creation until the analysis completes (handled by the
+    // worker's auto-persist on success).
+    cache = [entry, ...cache.filter((e) => e.job_id !== entry.job_id)];
+    return [...cache];
+  }
+  try {
+    await createMeeting({
+      id: entry.job_id,
+      filename: entry.filename,
+      result: entry.result,
+      created_at: entry.started_at,
+      duration_seconds: entry.audio_duration_seconds,
+      language: entry.result.language ?? null,
+      speakers_count: entry.speakers ?? null,
+      speaker_names: entry.speaker_names ?? {},
+      status: entry.status ?? "done",
+    });
+  } catch (e) {
+    // The worker auto-persists too (see app/api/meeting.py
+    // _persist_completed_job) so a 409 here just means the row
+    // already exists — that's the happy path, not an error.
+    const msg = (e as Error).message || "";
+    if (!msg.includes("409")) throw e;
+  }
+  cache = [entry, ...cache.filter((e) => e.job_id !== entry.job_id)];
+  return [...cache];
+}
+
+/** Patch an existing entry. Only `speaker_names` is server-writable;
+ *  other fields are local-cache-only (used by the live job-tracking
+ *  flow before backend persist lands). */
+export async function updateHistory(
   jobId: string,
   patch: Partial<HistoryEntry>,
-): HistoryEntry[] {
-  const next = loadHistory().map((e) =>
-    e.job_id === jobId ? { ...e, ...patch } : e,
-  );
-  saveHistory(next);
-  return next;
+): Promise<HistoryEntry[]> {
+  cache = cache.map((e) => (e.job_id === jobId ? { ...e, ...patch } : e));
+  if (patch.speaker_names !== undefined) {
+    try {
+      await patchMeetingSpeakerNames(jobId, patch.speaker_names);
+    } catch {
+      // Best-effort: failure to persist rename doesn't break the UI.
+      // Local cache still carries the renamed labels; next reload
+      // will re-fetch from backend without the rename.
+    }
+  }
+  return [...cache];
 }
 
-/** Remove an entry — used when GET returns 404 (server-side TTL evicted). */
-export function removeHistory(jobId: string): HistoryEntry[] {
-  const next = loadHistory().filter((e) => e.job_id !== jobId);
-  saveHistory(next);
-  return next;
+/** Remove an entry. Backend DELETE + cache removal. */
+export async function removeHistory(jobId: string): Promise<HistoryEntry[]> {
+  try {
+    await deleteMeeting(jobId);
+  } catch {
+    // Even on failure, drop from cache — the entry is unloadable.
+  }
+  cache = cache.filter((e) => e.job_id !== jobId);
+  return [...cache];
 }
 
 export function clearHistory(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // Ignore.
-  }
+  cache = [];
+}
+
+/** Test-only: force-set the cache to a known state. Not exported in
+ *  production builds (no tree-shake guard, but no caller uses it). */
+export function _setCacheForTests(entries: HistoryEntry[]): void {
+  cache = entries;
 }

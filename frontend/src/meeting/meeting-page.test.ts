@@ -487,13 +487,21 @@ describe("createMeetingPage — upload flow", () => {
       },
     ];
     const fetchFn = vi.fn(async (...args: unknown[]) => {
-      // Route by URL so the AI Enhance /actions call (fired at page
-      // mount) doesn't eat one of the meeting-flow responses.
+      // Route by URL so out-of-band calls fired at page mount don't
+      // eat one of the meeting-flow responses:
+      //   - /actions      → ActionsBar.load() on mount
+      //   - /v1/meetings  → prime() pulls history sidebar
       const url = args[0] as string;
       if (url === "/actions") {
         return {
           ok: true,
           json: async () => ({ actions: [], categories: [] }),
+        } as unknown as Response;
+      }
+      if (url.startsWith("/v1/meetings")) {
+        return {
+          ok: true,
+          json: async () => ({ meetings: [], next_before_ms: null }),
         } as unknown as Response;
       }
       return responses.shift() as unknown as Response;

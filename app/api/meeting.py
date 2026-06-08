@@ -194,6 +194,7 @@ async def _run_meeting_job(
     enable_word_timestamps: bool,
     fast: bool = False,
     backend: WhisperBackend | None = None,
+    filename: str | None = None,
 ) -> None:
     """Background entrypoint — runs the pipeline and updates the job record.
 
@@ -272,6 +273,20 @@ async def _run_meeting_job(
             store.mark_cancelled(job_id)
         else:
             store.mark_done(job_id, result)
+            # Auto-persist to /v1/meetings DB so the PWA history
+            # sidebar survives JobStore TTL eviction (default 1h)
+            # AND server restarts. Best-effort: failures here are
+            # logged but never break the live polling response.
+            from app.api.meeting_history import _persist_completed_job
+
+            _persist_completed_job(
+                job_id=job_id,
+                filename=filename or f"meeting-{job_id}",
+                result_obj=_serialise_result(result),
+                duration_seconds=result.duration_seconds,
+                language=result.language,
+                speakers_count=len(result.speakers),
+            )
     except asyncio.CancelledError:
         store.mark_cancelled(job_id)
     except Exception as exc:  # noqa: BLE001 — surface every failure as job.error
@@ -312,6 +327,14 @@ async def post_meeting(
             "macOS, ct2+CUDA on Linux) instead of WhisperX's CT2 batched "
             "ASR. ~3x faster on Apple Silicon; word timestamps still "
             "available via enable_word_timestamps."
+        ),
+    ),
+    filename: str | None = Query(
+        None,
+        description=(
+            "Original filename of the uploaded audio. Persisted to the "
+            "meeting history (/v1/meetings) so users see the file they "
+            "uploaded in the sidebar, not a synthesised label."
         ),
     ),
 ) -> dict[str, Any]:
@@ -375,6 +398,7 @@ async def post_meeting(
         enable_word_timestamps=enable_word_timestamps,
         fast=fast,
         backend=backend,
+        filename=filename,
     )
     return {
         "job_id": job.job_id,
