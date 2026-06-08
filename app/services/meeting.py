@@ -533,7 +533,7 @@ def _report(cb: ProgressCallback | None, stage: str, progress: float) -> None:
         cb(stage, progress)
 
 
-def _load_wav_for_pyannote(path: str) -> dict[str, Any]:
+def _load_wav_for_pyannote(path: Any) -> dict[str, Any]:
     """Decode a 16-bit PCM WAV into pyannote's pre-loaded dict format.
 
     Returns `{"waveform": torch.Tensor (1, n_samples), "sample_rate": int}`.
@@ -544,13 +544,22 @@ def _load_wav_for_pyannote(path: str) -> dict[str, Any]:
     which guarantees 16-bit signed PCM mono at 16 kHz — so `wave` stdlib
     is enough, no extra dependency. If the input ever drifts from that
     contract (e.g. stereo), we down-mix to mono on the fly.
+
+    Accepts both `str` and `pathlib.Path` because the upload path in
+    `app/api/meeting.py` carries `Path` objects but earlier downstream
+    callers (whisperx, pyannote) silently accepted either. Python's
+    stdlib `wave.open` is stricter — `isinstance(f, str)` check means a
+    raw `Path` gets treated as a file-like object and crashes with
+    `AttributeError: 'PosixPath' object has no attribute 'read'`. Cast
+    here to honour the broader contract the rest of the codebase
+    assumes.
     """
     import wave
 
     import numpy as np
     import torch
 
-    with wave.open(path, "rb") as wf:
+    with wave.open(str(path), "rb") as wf:
         sample_rate = wf.getframerate()
         n_channels = wf.getnchannels()
         sample_width = wf.getsampwidth()

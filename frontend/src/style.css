@@ -1531,13 +1531,20 @@ body { min-height: 100vh; }
 .step:not(:last-child) .step-marker::after {
   content: "";
   position: absolute;
-  top: 50%;
+  /* The ::after is on `.step-marker`, but `.step-marker` has no
+     `position: relative`, so `position: absolute` resolves against the
+     nearest positioned ancestor — `.step` (a flex-column with marker +
+     label + hint + bar). That means `top: 50%` would land at the
+     vertical middle of the FULL step (right at the label), not at the
+     middle of the marker. Use a fixed value tied to half the marker
+     height (28px / 2 = 14px) so the connector always sits at the
+     marker's centerline regardless of how tall the label area grows. */
+  top: 14px;
   left: calc(50% + 18px);
   right: calc(-50% + 18px);
   height: 2px;
   background: var(--border);
   z-index: -1;
-  transform: translateY(-50%);
   transition: background 0.2s ease;
 }
 .step[data-state="complete"]:not(:last-child) .step-marker::after {

@@ -384,13 +384,16 @@ describe("createMeetingPage — fast mode", () => {
       value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
       configurable: true,
     });
-    const fetchFn = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        job_id: "fast-1",
-        status_url: "/transcribe/meeting/fast-1",
-      }),
-    }));
+    const fetchFn = vi.fn(
+      async (..._args: unknown[]) =>
+        ({
+          ok: true,
+          json: async () => ({
+            job_id: "fast-1",
+            status_url: "/transcribe/meeting/fast-1",
+          }),
+        }) as unknown as Response,
+    );
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchFn as unknown as typeof fetch;
     try {

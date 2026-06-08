@@ -113,6 +113,21 @@ async def test_analyzer_runs_pipeline_on_fixture(monkeypatch):
     assert result.segments[0].speaker != result.segments[1].speaker
 
 
+def test_load_wav_for_pyannote_accepts_path_objects():
+    """`_load_wav_for_pyannote` SHALL accept both `str` and `Path`. The
+    upload path in `app/api/meeting.py` carries `Path` objects through
+    `audio_converter.convert_to_wav`, so a str-only contract crashes
+    the diarize stage with `'PosixPath' object has no attribute 'read'`
+    inside Python's stdlib `wave.open` (the regression that surfaced
+    after the torchcodec workaround was merged)."""
+    from app.services.meeting import _load_wav_for_pyannote
+
+    # Path object — the real upload path uses pathlib.Path everywhere.
+    out_path = _load_wav_for_pyannote(FIXTURE_WAV)
+    assert isinstance(out_path, dict)
+    assert out_path["sample_rate"] == 16000
+
+
 def test_load_wav_for_pyannote_returns_dict_shape():
     """`_load_wav_for_pyannote` SHALL return the dict format pyannote
     expects when bypassing torchcodec: `{"waveform": Tensor (1, N),
