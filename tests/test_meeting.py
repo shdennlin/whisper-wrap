@@ -179,6 +179,9 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
     monkeypatch.setattr(registry, "resolve_ct2_variant_info", fake_resolve_info)
     # MeetingAnalyzer.from_config does `from app.services.registry import …`
     # at call time, so patching the attribute on the module suffices.
+    # Pretend we're on Linux so the macOS int8_float16→int8 downgrade
+    # doesn't trigger here — that path is exercised by its own test below.
+    monkeypatch.setattr("sys.platform", "linux")
 
     monkeypatch.setenv("MEETING_MODEL_NAME", "some-other-model")
     monkeypatch.setenv("HF_TOKEN", "abc")
@@ -193,6 +196,57 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
     # The compute_type from the registry SHALL flow through; without this
     # WhisperX would default to float32 on CPU (~4x slower).
     assert analyzer.compute_type == "int8_float16"
+
+
+def test_analyzer_downgrades_int8_float16_on_macos_cpu(monkeypatch):
+    """Apple Silicon CPU has no float16 SIMD path, so CTranslate2 rejects
+    int8_float16 with `ValueError: target device or backend do not support`.
+    `from_config` SHALL transparently downgrade to int8 (which IS supported
+    on CPU and gives the same ~3x speedup over float32) when running on
+    darwin so the meeting endpoint just works."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8_float16",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "breeze-asr-25")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.compute_type == "int8"
+
+
+def test_analyzer_keeps_int8_on_macos(monkeypatch):
+    """The downgrade SHALL only trigger when the registry asks for the
+    unsupported int8_float16. Plain int8 SHALL pass through untouched."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "any-model")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.compute_type == "int8"
 
 
 @pytest.mark.asyncio

@@ -104,21 +104,35 @@ class MeetingAnalyzer:
 
         Resolves the CT2 ASR model directory AND its registry-declared
         compute_type so WhisperX runs at the quantisation the variant was
-        compiled for (e.g. int8_float16). Without this, WhisperX falls back
-        to float32 on CPU — 3-5x slower for the ASR stage on Apple Silicon.
+        compiled for (e.g. int8_float16 on CUDA). Without this, WhisperX
+        falls back to float32 — 3-5x slower than the int8 path on CPU.
+
+        Platform adjustment: registry variants target their primary backend
+        (typically CUDA), but the meeting endpoint also runs on macOS / CPU
+        where int8_float16 is not supported (CTranslate2 raises ValueError
+        because CPU lacks float16 SIMD). On CPU we map int8_float16 →
+        int8, which is supported and gives the same ~3x speedup over
+        float32 without needing a separate registry entry.
         """
+        import sys
+
         from app.services.registry import (
             DEFAULT_MODELS_ROOT,
             resolve_ct2_variant_info,
         )
 
         variant = resolve_ct2_variant_info(config.MEETING_MODEL_NAME)
+        compute_type = variant.get("compute_type") or "default"
+        # Apple Silicon CPU doesn't have the float16 SIMD path CTranslate2
+        # needs for int8_float16. int8 is the supported equivalent.
+        if compute_type == "int8_float16" and sys.platform == "darwin":
+            compute_type = "int8"
         return cls(
             ct2_model_dir=str(DEFAULT_MODELS_ROOT / variant["local_dir"]),
             hf_token=config.HF_TOKEN or "",
             diarization_pipeline=config.MEETING_DIARIZATION_PIPELINE,
             align_model=config.MEETING_ALIGN_MODEL,
-            compute_type=variant.get("compute_type") or "default",
+            compute_type=compute_type,
         )
 
     async def _load_pipeline(self) -> None:
