@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 from app.services.meeting import MeetingAnalyzer
+
+# Lifecycle test uses the real fixture path because `_run_diarize` now
+# pre-decodes the WAV via `wave.open()` (torchcodec workaround), so a
+# made-up `/tmp/anything.wav` would fail with FileNotFoundError before
+# the actual lifecycle assertions run.
+FIXTURE_WAV = Path(__file__).parent / "fixtures" / "meeting" / "two_speaker_30s.wav"
 
 
 def _fresh_analyzer() -> MeetingAnalyzer:
@@ -111,14 +118,14 @@ async def test_first_analyze_loads_models_second_call_reuses_them(monkeypatch):
     assert asr_load_calls == 0, "constructor must not load ASR model"
     assert pipeline_load_calls == 0, "constructor must not load diarization pipeline"
 
-    await analyzer.analyze("/tmp/anything.wav", enable_word_timestamps=False)
+    await analyzer.analyze(str(FIXTURE_WAV), enable_word_timestamps=False)
     assert asr_load_calls == 1, "first analyze() must load ASR model exactly once"
     assert pipeline_load_calls == 1, (
         "first analyze() must load diarization pipeline exactly once"
     )
     assert analyzer.loaded is True
 
-    await analyzer.analyze("/tmp/anything.wav", enable_word_timestamps=False)
+    await analyzer.analyze(str(FIXTURE_WAV), enable_word_timestamps=False)
     assert asr_load_calls == 1, "second analyze() must reuse the ASR model"
     assert pipeline_load_calls == 1, (
         "second analyze() must reuse the diarization pipeline"

@@ -113,6 +113,67 @@ async def test_analyzer_runs_pipeline_on_fixture(monkeypatch):
     assert result.segments[0].speaker != result.segments[1].speaker
 
 
+def test_load_wav_for_pyannote_returns_dict_shape():
+    """`_load_wav_for_pyannote` SHALL return the dict format pyannote
+    expects when bypassing torchcodec: `{"waveform": Tensor (1, N),
+    "sample_rate": 16000}`. This contract is what unblocks the diarize
+    stage when torchcodec's macOS dylib fails to load (the original
+    `AudioDecoder is not defined` crash).
+    """
+    from app.services.meeting import _load_wav_for_pyannote
+
+    out = _load_wav_for_pyannote(str(FIXTURE_WAV))
+
+    assert isinstance(out, dict)
+    assert set(out.keys()) == {"waveform", "sample_rate"}
+    assert out["sample_rate"] == 16000
+    # Shape contract: (n_channels, n_samples) — mono = 1 channel.
+    assert out["waveform"].dim() == 2
+    assert out["waveform"].shape[0] == 1
+    # 40-second fixture → ~640000 samples at 16 kHz. Allow generous
+    # bounds so a fixture re-encode doesn't break the test.
+    assert 100_000 < out["waveform"].shape[1] < 1_000_000
+    # Should be normalised to [-1.0, 1.0] (16-bit PCM divided by 32768).
+    assert out["waveform"].abs().max().item() <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_diarize_passes_pre_decoded_dict_to_pyannote(monkeypatch):
+    """`_run_diarize` SHALL pre-decode the WAV and pass it as a dict
+    (`{"waveform": Tensor, "sample_rate": int}`) instead of the raw path
+    string. This is the workaround for the torchcodec dylib bug on
+    macOS — without it, pyannote crashes with `NameError: AudioDecoder
+    is not defined` deep inside `get_audio_metadata`.
+    """
+    analyzer = _make_analyzer()
+
+    received_args: dict = {}
+
+    def fake_pipeline_call(audio_input, **kwargs):
+        received_args["audio_input"] = audio_input
+        received_args["kwargs"] = kwargs
+        return object()
+
+    analyzer._diarize = fake_pipeline_call
+
+    await analyzer._run_diarize(
+        str(FIXTURE_WAV),
+        num_speakers=2,
+        min_speakers=None,
+        max_speakers=None,
+    )
+
+    audio_input = received_args["audio_input"]
+    assert isinstance(audio_input, dict), (
+        "diarize SHALL be called with the pre-decoded dict, not a path "
+        "string (torchcodec workaround)"
+    )
+    assert audio_input["sample_rate"] == 16000
+    assert audio_input["waveform"].shape[0] == 1
+    # num_speakers SHALL be forwarded as a pipeline kwarg.
+    assert received_args["kwargs"].get("num_speakers") == 2
+
+
 @pytest.mark.asyncio
 async def test_analyze_with_external_asr_skips_asr(monkeypatch):
     """Fast path: `analyze_with_external_asr` SHALL run align+diarize+merge

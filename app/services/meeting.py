@@ -468,7 +468,17 @@ class MeetingAnalyzer:
             kwargs["min_speakers"] = min_speakers
         if max_speakers is not None:
             kwargs["max_speakers"] = max_speakers
-        return await asyncio.to_thread(self._diarize, audio_path, **kwargs)
+        # Pyannote 3.x uses `torchcodec` for built-in audio decoding when
+        # given a path string, but torchcodec's macOS dylib has LC_RPATH
+        # issues against PyTorch 2.8 wheels — it fails to load
+        # libavutil.dylib, which surfaces as
+        # `NameError: name 'AudioDecoder' is not defined` deep inside
+        # pyannote's `get_audio_metadata()`. The documented workaround
+        # is to pre-decode and pass `{"waveform": Tensor, "sample_rate":
+        # int}` directly. We do that here so the diarize stage works
+        # regardless of whether torchcodec resolves its dylibs at runtime.
+        audio_input = await asyncio.to_thread(_load_wav_for_pyannote, audio_path)
+        return await asyncio.to_thread(self._diarize, audio_input, **kwargs)
 
     def _merge(
         self,
@@ -521,6 +531,48 @@ class MeetingAnalyzer:
 def _report(cb: ProgressCallback | None, stage: str, progress: float) -> None:
     if cb is not None:
         cb(stage, progress)
+
+
+def _load_wav_for_pyannote(path: str) -> dict[str, Any]:
+    """Decode a 16-bit PCM WAV into pyannote's pre-loaded dict format.
+
+    Returns `{"waveform": torch.Tensor (1, n_samples), "sample_rate": int}`.
+    Used by `_run_diarize` to bypass `torchcodec`, which has known dylib
+    loading bugs on macOS + PyTorch 2.8.
+
+    The audio file is always produced by `audio_converter.convert_to_wav`,
+    which guarantees 16-bit signed PCM mono at 16 kHz — so `wave` stdlib
+    is enough, no extra dependency. If the input ever drifts from that
+    contract (e.g. stereo), we down-mix to mono on the fly.
+    """
+    import wave
+
+    import numpy as np
+    import torch
+
+    with wave.open(path, "rb") as wf:
+        sample_rate = wf.getframerate()
+        n_channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        n_frames = wf.getnframes()
+        raw = wf.readframes(n_frames)
+
+    if sample_width != 2:
+        raise RuntimeError(
+            f"diarize input WAV must be 16-bit PCM, got sample_width={sample_width}"
+        )
+
+    audio_int16 = np.frombuffer(raw, dtype=np.int16)
+    if n_channels > 1:
+        # Defensive down-mix in case converter contract changes later.
+        audio_int16 = audio_int16.reshape(-1, n_channels).mean(axis=1).astype(
+            np.int16
+        )
+    audio_float32 = audio_int16.astype(np.float32) / 32768.0
+    # pyannote expects shape (n_channels, n_samples) — we unsqueeze to add
+    # the channel dim (mono → 1 channel).
+    waveform = torch.from_numpy(audio_float32).unsqueeze(0)
+    return {"waveform": waveform, "sample_rate": sample_rate}
 
 
 def _resolve_torch_device(configured: str) -> str:
