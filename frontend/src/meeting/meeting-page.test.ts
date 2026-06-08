@@ -125,18 +125,25 @@ describe("createMeetingPage — rendering", () => {
       clicks.push((this as HTMLAnchorElement).download);
     };
     try {
+      // The single TXT button was split into two explicit variants
+      // (Chat vs Script) so users can grab either format without
+      // having to flip the view-mode toggle first.
       const srtBtn = document.querySelector<HTMLButtonElement>(
         '[data-export="srt"]',
       )!;
       const vttBtn = document.querySelector<HTMLButtonElement>(
         '[data-export="vtt"]',
       )!;
-      const txtBtn = document.querySelector<HTMLButtonElement>(
-        '[data-export="txt"]',
+      const txtChatBtn = document.querySelector<HTMLButtonElement>(
+        '[data-export="txt-chat"]',
+      )!;
+      const txtScriptBtn = document.querySelector<HTMLButtonElement>(
+        '[data-export="txt-script"]',
       )!;
       srtBtn.click();
       vttBtn.click();
-      txtBtn.click();
+      txtChatBtn.click();
+      txtScriptBtn.click();
       const jsonBtn = document.querySelector<HTMLButtonElement>(
         '[data-export="json"]',
       )!;
@@ -147,11 +154,13 @@ describe("createMeetingPage — rendering", () => {
     expect(clicks).toEqual([
       "meeting.srt",
       "meeting.vtt",
-      "meeting.txt",
+      "meeting-chat.txt",
+      "meeting-script.txt",
       "meeting.json",
     ]);
-    // createObjectURL was called once per export blob (4 total).
-    expect(createObjectURL).toHaveBeenCalledTimes(4);
+    // createObjectURL was called once per export blob (5 total now
+    // that TXT has two variants).
+    expect(createObjectURL).toHaveBeenCalledTimes(5);
   });
 });
 

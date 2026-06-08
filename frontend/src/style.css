@@ -1606,10 +1606,26 @@ body { min-height: 100vh; }
 .transcript-header {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem;
   margin-bottom: 0.4rem;
 }
 .transcript-header[hidden] { display: none; }
+.transcript-header .meeting-new-analysis {
+  padding: 0.32rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.transcript-header .meeting-new-analysis:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
 .transcript-view-toggle {
   display: inline-flex;
   border: 1px solid var(--border);

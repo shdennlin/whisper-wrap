@@ -11,8 +11,10 @@
  * fields are tolerated, version changes are detected via the wrapping shape.
  */
 
+import type { MeetingResult } from "./types";
+
 const STORAGE_KEY = "whisper-wrap.meeting-history.v1";
-const MAX_ENTRIES = 5;
+const MAX_ENTRIES = 20;
 
 export interface HistoryEntry {
   job_id: string;
@@ -27,6 +29,16 @@ export interface HistoryEntry {
    *  means use the raw pyannote labels. Persisted so reloading a past
    *  analysis from the sidebar still shows "Alice" not "SPEAKER_00". */
   speaker_names?: Record<string, string>;
+  /** Full MeetingResult, persisted so the user can re-open a past
+   *  analysis even AFTER the backend has evicted the job from its
+   *  in-memory store (default TTL: 1 hour). Without this the sidebar
+   *  item would just 404 once an hour passed, which is bad UX for what
+   *  is otherwise a permanent history list.
+   *
+   *  Storage cost: ~50-200KB per result for typical meetings; with
+   *  MAX_ENTRIES=20 we cap at ~4MB worst case, well under the
+   *  ~5-10MB localStorage budget. */
+  result?: MeetingResult;
 }
 
 export function loadHistory(): HistoryEntry[] {

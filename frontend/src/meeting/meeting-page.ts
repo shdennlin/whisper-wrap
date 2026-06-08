@@ -345,10 +345,18 @@ export function createMeetingPage(
 
   // Transcript header — segmented control toggles Detail / Chat view.
   // Header sits above the scroll container so the toggle stays in
-  // place when the user scrolls long transcripts.
+  // place when the user scrolls long transcripts. Also hosts the
+  // "New analysis" button so it stays discoverable when the user is
+  // viewing a past result (previously buried at the end of the
+  // exports row, easy to miss).
   const transcriptHeader = document.createElement("div");
   transcriptHeader.className = "transcript-header";
   transcriptHeader.hidden = true;
+  const newAnalysisBtn = document.createElement("button");
+  newAnalysisBtn.type = "button";
+  newAnalysisBtn.className = "meeting-new-analysis btn-secondary";
+  newAnalysisBtn.textContent = t("meeting.reset");
+  transcriptHeader.append(newAnalysisBtn);
   const viewToggle = document.createElement("div");
   viewToggle.className = "transcript-view-toggle";
   viewToggle.setAttribute("role", "group");
@@ -379,35 +387,41 @@ export function createMeetingPage(
   const exportsEl = document.createElement("footer");
   exportsEl.className = "meeting-exports";
   exportsEl.hidden = true;
+  // Export buttons. TXT has two variants because users want both:
+  //   - Chat (`[MM:SS] SPEAKER: text` per line) for pasting into LLMs
+  //     / chat logs / quick scan.
+  //   - Script (`SPEAKER:\n<text>` paragraph blocks) for reading like
+  //     an interview transcript / pasting into doc.
+  // Single-button "swap by view-mode" was too hidden — users couldn't
+  // discover the alternative format without flipping the view.
   const exportLabels: Record<string, string> = {
     srt: t("meeting.exports.srt"),
     vtt: t("meeting.exports.vtt"),
-    txt: t("meeting.exports.txt"),
+    "txt-chat": t("meeting.exports.txtChat"),
+    "txt-script": t("meeting.exports.txtScript"),
     json: t("meeting.exports.json"),
   };
-  for (const fmt of ["srt", "vtt", "txt", "json"] as const) {
+  for (const fmt of ["srt", "vtt", "txt-chat", "txt-script", "json"] as const) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.dataset.export = fmt;
     btn.textContent = exportLabels[fmt];
     exportsEl.appendChild(btn);
   }
-  const resetBtn = document.createElement("button");
-  resetBtn.type = "button";
-  resetBtn.className = "meeting-reset btn-secondary";
-  resetBtn.textContent = t("meeting.reset");
-  exportsEl.appendChild(resetBtn);
+  // Reset moved to the transcript header (`newAnalysisBtn`) so it's
+  // discoverable from the top of the result; the export row no longer
+  // carries a Reset twin.
 
   // AI Enhance section — chips above, answer pane below. Reuses the
   // existing global ActionsBar component verbatim; the per-Meeting
   // wiring just supplies a `getTranscript()` that returns the
-  // chat-format prompt.
+  // chat-format prompt. NOTE: ActionsBar renders its own
+  // `<h3>AI Enhance</h3>` heading internally (see actions-bar.ts:319),
+  // so we don't add a sibling heading here — that produced a
+  // duplicate "AI Enhance / AI Enhance" stacked label.
   const aiSection = document.createElement("section");
   aiSection.className = "meeting-ai";
   aiSection.hidden = true;
-  const aiTitle = document.createElement("h3");
-  aiTitle.className = "meeting-ai-title";
-  aiTitle.textContent = t("meeting.actions.title");
   const aiActionsHost = document.createElement("div");
   aiActionsHost.className = "meeting-ai-actions";
   const aiAnswerHost = document.createElement("section");
@@ -416,7 +430,7 @@ export function createMeetingPage(
   const aiAnswerBody = document.createElement("div");
   aiAnswerBody.className = "answer-body";
   aiAnswerHost.appendChild(aiAnswerBody);
-  aiSection.append(aiTitle, aiActionsHost, aiAnswerHost);
+  aiSection.append(aiActionsHost, aiAnswerHost);
 
   mainCol.append(
     header,
@@ -779,6 +793,11 @@ export function createMeetingPage(
       updateHistory(handle.job_id, {
         status: "done",
         speakers: final.result.speakers.length,
+        // Persist the full result so the user can re-open this entry
+        // even after the backend's 1-hour TTL evicts the in-memory
+        // job. Without this, sidebar items 404 the moment a fresh
+        // session starts.
+        result: final.result,
       });
       renderSidebar();
     } catch (e) {
@@ -939,19 +958,24 @@ export function createMeetingPage(
       );
     });
   exportsEl
-    .querySelector<HTMLButtonElement>('[data-export="txt"]')!
+    .querySelector<HTMLButtonElement>('[data-export="txt-chat"]')!
     .addEventListener("click", () => {
       if (!lastResult) return;
-      // Mirror the active view-mode in the TXT shape: Chat view → chat
-      // log with `[MM:SS] SPEAKER: text` per line; Detail view → the
-      // script-style paragraph format (SPEAKER:\n<text>). The exporter
-      // works off renamed segments so the user's display names land in
-      // the downloaded file too.
-      const text =
-        viewMode === "chat"
-          ? exportSpeakerTxtChat(renamedSegments(lastResult))
-          : exportSpeakerTxt(renamedSegments(lastResult));
-      downloadBlob("meeting.txt", text, "text/plain");
+      downloadBlob(
+        "meeting-chat.txt",
+        exportSpeakerTxtChat(renamedSegments(lastResult)),
+        "text/plain",
+      );
+    });
+  exportsEl
+    .querySelector<HTMLButtonElement>('[data-export="txt-script"]')!
+    .addEventListener("click", () => {
+      if (!lastResult) return;
+      downloadBlob(
+        "meeting-script.txt",
+        exportSpeakerTxt(renamedSegments(lastResult)),
+        "text/plain",
+      );
     });
   exportsEl
     .querySelector<HTMLButtonElement>('[data-export="json"]')!
@@ -1000,11 +1024,28 @@ export function createMeetingPage(
     uploadForm.hidden = false;
     fileInput.value = "";
   }
-  resetBtn.addEventListener("click", resetPage);
+  newAnalysisBtn.addEventListener("click", resetPage);
+
+  // Backend MAX_FILE_SIZE_MB=100 → 100 MB max upload. Pre-validate
+  // client-side so the user sees the limit immediately instead of
+  // waiting through ffmpeg + libmagic for the server to return 413.
+  const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+  function checkFileSize(file: File): boolean {
+    if (file.size <= MAX_UPLOAD_BYTES) return true;
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+    showError(t("meeting.error.tooLarge", { size: sizeMB, limit: "100" }));
+    // Clear the input so the same file can be re-picked after the user
+    // shrinks it externally (without this, the OS-side picker treats
+    // "same file as last" as a no-op and `change` never re-fires).
+    fileInput.value = "";
+    return false;
+  }
 
   fileInput.addEventListener("change", () => {
     const file = fileInput.files?.[0];
     if (!file) return;
+    if (!checkFileSize(file)) return;
     showConfirm(file);
   });
 
@@ -1019,7 +1060,7 @@ export function createMeetingPage(
     e.preventDefault();
     uploadLabel.classList.remove("is-dragging");
     const file = e.dataTransfer?.files?.[0];
-    if (file) showConfirm(file);
+    if (file && checkFileSize(file)) showConfirm(file);
   });
 
   // ------ Sidebar history --------------------------------------------------
@@ -1068,15 +1109,37 @@ export function createMeetingPage(
 
   async function loadFromHistory(entry: HistoryEntry): Promise<void> {
     clearError();
+    // Fast path: render the cached result directly. This is the common
+    // case after the first job (and is the ONLY working path once the
+    // backend's 1-hour TTL has evicted the in-memory job). No network
+    // call needed; the server is treated as a build-time producer of
+    // the result, not as the source of truth for the lifetime of the
+    // history entry.
+    if (entry.status === "done" && entry.result) {
+      speakerNames = { ...(entry.speaker_names ?? {}) };
+      activeJobId = entry.job_id;
+      audioEl.removeAttribute("src");
+      renderResult(entry.result, "");
+      uploadForm.hidden = true;
+      confirmCard.hidden = true;
+      completeAll();
+      return;
+    }
+    // Slow path: legacy entries (saved before the local-cache change)
+    // or in-flight jobs still need to round-trip the server.
     try {
       const status = await fetchJobStatus(`/transcribe/meeting/${entry.job_id}`);
       if (status.status === "done" && status.result) {
-        // Restore the saved speaker names so the transcript renders with
-        // the rename the user did last time.
         speakerNames = { ...(entry.speaker_names ?? {}) };
         activeJobId = entry.job_id;
         audioEl.removeAttribute("src");
         renderResult(status.result, "");
+        // Back-fill the cache so subsequent reloads hit the fast path.
+        updateHistory(entry.job_id, {
+          status: "done",
+          speakers: status.result.speakers.length,
+          result: status.result,
+        });
         uploadForm.hidden = true;
         confirmCard.hidden = true;
         completeAll();
