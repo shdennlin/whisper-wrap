@@ -1213,6 +1213,16 @@ body { min-height: 100vh; }
   }
 }
 
+.meeting-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.meeting-header-title {
+  flex: 1;
+  min-width: 0;
+}
 .meeting-header h1 {
   font-size: 1.4rem;
   margin: 0 0 0.25rem 0;
@@ -1224,6 +1234,24 @@ body { min-height: 100vh; }
   font-size: 0.9rem;
   line-height: 1.4;
 }
+.meeting-header .meeting-new-analysis {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.meeting-header .meeting-new-analysis:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.meeting-header .meeting-new-analysis[hidden] { display: none; }
 
 /* Yellow warning callout shown when the meeting endpoint isn't available
    (extras missing / HF_TOKEN unset / ct2 variant not downloaded). */
@@ -1606,26 +1634,14 @@ body { min-height: 100vh; }
 .transcript-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* Only the view toggle lives here now — "Analyze another file"
+     moved to the page header so it stays discoverable when scrolling
+     a long transcript. */
+  justify-content: flex-end;
   gap: 0.5rem;
   margin-bottom: 0.4rem;
 }
 .transcript-header[hidden] { display: none; }
-.transcript-header .meeting-new-analysis {
-  padding: 0.32rem 0.85rem;
-  font-size: 0.82rem;
-  font-weight: 500;
-  border-radius: 8px;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  transition: border-color 120ms ease, background 120ms ease;
-}
-.transcript-header .meeting-new-analysis:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-}
 .transcript-view-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -1921,6 +1937,20 @@ body { min-height: 100vh; }
   color: var(--red);
   border-color: var(--red);
   background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+/* Two-step confirm — after first click the button shows "Confirm?"
+   for 3 s. Solid red + always-visible so the user knows the next
+   click commits the delete. */
+.sidebar-item-delete.is-confirming,
+.sidebar-item-delete.is-confirming:hover {
+  opacity: 1;
+  width: auto;
+  padding: 0 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-color: var(--red);
+  background: var(--red);
+  color: white;
 }
 .sidebar-item-name {
   font-size: 0.82rem;

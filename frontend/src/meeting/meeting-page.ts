@@ -162,12 +162,24 @@ export function createMeetingPage(
 
   const header = document.createElement("header");
   header.className = "meeting-header";
+  const headerTitleCol = document.createElement("div");
+  headerTitleCol.className = "meeting-header-title";
   const h1 = document.createElement("h1");
   h1.textContent = t("meeting.title");
   const subtitle = document.createElement("p");
   subtitle.className = "meeting-subtitle";
   subtitle.textContent = t("meeting.subtitle");
-  header.append(h1, subtitle);
+  headerTitleCol.append(h1, subtitle);
+  // "Analyze another file" lives at the top-right of the page header
+  // so it's always discoverable, including when the user is browsing
+  // a past analysis from the sidebar. Hidden until a result actually
+  // exists (otherwise it would point at nothing to clear).
+  const newAnalysisBtn = document.createElement("button");
+  newAnalysisBtn.type = "button";
+  newAnalysisBtn.className = "meeting-new-analysis btn-secondary";
+  newAnalysisBtn.textContent = t("meeting.reset");
+  newAnalysisBtn.hidden = true;
+  header.append(headerTitleCol, newAnalysisBtn);
 
   const unavailableEl = document.createElement("div");
   unavailableEl.className = "meeting-unavailable";
@@ -350,18 +362,10 @@ export function createMeetingPage(
 
   // Transcript header — segmented control toggles Detail / Chat view.
   // Header sits above the scroll container so the toggle stays in
-  // place when the user scrolls long transcripts. Also hosts the
-  // "New analysis" button so it stays discoverable when the user is
-  // viewing a past result (previously buried at the end of the
-  // exports row, easy to miss).
+  // place when the user scrolls long transcripts.
   const transcriptHeader = document.createElement("div");
   transcriptHeader.className = "transcript-header";
   transcriptHeader.hidden = true;
-  const newAnalysisBtn = document.createElement("button");
-  newAnalysisBtn.type = "button";
-  newAnalysisBtn.className = "meeting-new-analysis btn-secondary";
-  newAnalysisBtn.textContent = t("meeting.reset");
-  transcriptHeader.append(newAnalysisBtn);
   const viewToggle = document.createElement("div");
   viewToggle.className = "transcript-view-toggle";
   viewToggle.setAttribute("role", "group");
@@ -878,6 +882,9 @@ export function createMeetingPage(
     transcriptScroll.hidden = !hasContent;
     exportsEl.hidden = !hasContent;
     aiSection.hidden = !hasContent;
+    // "Analyze another file" only makes sense when there's something
+    // to clear; show it together with the result.
+    newAnalysisBtn.hidden = !hasContent;
     updateViewToggleState();
     completeAll();
   }
@@ -1036,7 +1043,11 @@ export function createMeetingPage(
     audioDurationSeconds = null;
     speakerNames = {};
     transcriptEl.replaceChildren();
+    transcriptHeader.hidden = true;
+    transcriptScroll.hidden = true;
     exportsEl.hidden = true;
+    aiSection.hidden = true;
+    newAnalysisBtn.hidden = true;
     audioEl.removeAttribute("src");
     audioEl.load();
     resetStepper();
@@ -1128,17 +1139,43 @@ export function createMeetingPage(
     // Delete button (×) — backend DELETE + cache removal. Hover-visible
     // so the sidebar stays clean in idle state. Click stops propagation
     // so the row itself doesn't trigger loadFromHistory.
+    //
+    // Two-step confirm pattern (mirrors `.discard-btn` on Live/Batch
+    // recordings, see ui/mode-card.ts:114). First click flips the
+    // button into a "Confirm?" state for 3 seconds; second click in
+    // that window actually deletes. Click elsewhere or wait → reverts.
+    // No modal dialog — modals are heavy for a single sidebar item,
+    // but the destructive action still requires explicit intent.
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "sidebar-item-delete";
     deleteBtn.textContent = "×";
     deleteBtn.title = t("meeting.sidebar.deleteTooltip");
     deleteBtn.setAttribute("aria-label", t("meeting.sidebar.deleteTooltip"));
+
+    let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetConfirm = () => {
+      if (confirmTimer !== null) {
+        clearTimeout(confirmTimer);
+        confirmTimer = null;
+      }
+      deleteBtn.classList.remove("is-confirming");
+      deleteBtn.textContent = "×";
+      deleteBtn.title = t("meeting.sidebar.deleteTooltip");
+    };
+
     deleteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      // No confirm dialog — the action is undo-light (re-upload is cheap)
-      // and a modal interrupt would feel heavy for a single sidebar
-      // entry. If users delete by accident often, add a confirm later.
+      if (confirmTimer === null) {
+        // First click — arm the confirm state.
+        deleteBtn.classList.add("is-confirming");
+        deleteBtn.textContent = t("meeting.sidebar.deleteConfirm");
+        deleteBtn.title = t("meeting.sidebar.deleteConfirmTitle");
+        confirmTimer = setTimeout(resetConfirm, 3000);
+        return;
+      }
+      // Second click within the window — proceed with delete.
+      resetConfirm();
       try {
         await removeHistory(entry.job_id);
       } finally {
