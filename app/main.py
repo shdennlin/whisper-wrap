@@ -167,25 +167,42 @@ async def lifespan(app: FastAPI):
     # by-grep painful when something fails 12 hours into a long meeting run.
     # ISO-ish "YYYY-MM-DD HH:MM:SS,mmm" matches what whisperx/pyannote
     # already emit so the visual columns line up across libraries.
-    _log_format = "%(asctime)s %(levelname)-7s %(name)s | %(message)s"
+    # Reuse uvicorn's DefaultFormatter / AccessFormatter so the colourised
+    # levelprefix (INFO=green, WARNING=yellow, ERROR=red) carries through;
+    # both auto-detect TTY via use_colors=None so piped/journald output stays
+    # plain ASCII.
+    from uvicorn.logging import AccessFormatter, DefaultFormatter
+
+    _log_datefmt = "%Y-%m-%d %H:%M:%S"
+    _app_fmt = "%(asctime)s %(levelprefix)s %(name)s | %(message)s"
+    _access_fmt = (
+        '%(asctime)s %(levelprefix)s %(client_addr)s - '
+        '"%(request_line)s" %(status_code)s'
+    )
+    _root_handler = logging.StreamHandler()
+    _root_handler.setFormatter(DefaultFormatter(fmt=_app_fmt, datefmt=_log_datefmt))
     logging.basicConfig(
         level=config.LOG_LEVEL,
-        format=_log_format,
-        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[_root_handler],
         force=True,  # override any handler other libs installed at import time
     )
     # uvicorn manages its own loggers (uvicorn, uvicorn.access, uvicorn.error)
     # with bare default handlers — install our formatter on each so the access
     # log ("GET /... 200 OK") also gets a timestamp. propagate=False prevents
     # double-emit through the root logger.
-    _uvicorn_formatter = logging.Formatter(fmt=_log_format, datefmt="%Y-%m-%d %H:%M:%S")
-    for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for _name in ("uvicorn", "uvicorn.error"):
         _u = logging.getLogger(_name)
         _u.handlers.clear()
         _h = logging.StreamHandler()
-        _h.setFormatter(_uvicorn_formatter)
+        _h.setFormatter(DefaultFormatter(fmt=_app_fmt, datefmt=_log_datefmt))
         _u.addHandler(_h)
         _u.propagate = False
+    _access = logging.getLogger("uvicorn.access")
+    _access.handlers.clear()
+    _h = logging.StreamHandler()
+    _h.setFormatter(AccessFormatter(fmt=_access_fmt, datefmt=_log_datefmt))
+    _access.addHandler(_h)
+    _access.propagate = False
     logger.info("Starting whisper-wrap API server")
     config.ensure_temp_dir()
 
