@@ -1600,20 +1600,73 @@ body { min-height: 100vh; }
 
 /* Transcript: vertical stack of speaker-coloured cards. Each segment is a
    button so the whole card is the click-to-seek target. */
+/* Transcript header — view-mode toggle sits above the scroll
+   container so it stays in place when the user scrolls a long
+   meeting. Segmented control: Chat | Detail. */
+.transcript-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 0.4rem;
+}
+.transcript-header[hidden] { display: none; }
+.transcript-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.transcript-view-toggle .view-toggle-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0.32rem 0.85rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.transcript-view-toggle .view-toggle-btn:hover {
+  color: var(--fg);
+}
+.transcript-view-toggle .view-toggle-btn[data-active="true"] {
+  background: var(--accent);
+  color: white;
+}
+
+/* Bounded scroll container — keeps the rest of the page reachable
+   even for 2h meetings (which produce hundreds of segments). 60vh is
+   tall enough to feel substantive but leaves room above for header
+   and below for exports + AI panel without dropping anything off the
+   fold on a 13" laptop. */
+.meeting-transcript-scroll {
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem;
+  background: var(--bg);
+  scroll-behavior: smooth;
+}
+.meeting-transcript-scroll[hidden] { display: none; }
+
 .meeting-transcript {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.3rem;
 }
 .transcript-segment {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.65rem 0.85rem;
+  gap: 0.35rem 0.6rem;
   align-items: start;
-  padding: 0.7rem 0.85rem;
+  padding: 0.45rem 0.7rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   border-left-width: 4px; /* Set inline via JS to speaker colour. */
   font: inherit;
   text-align: left;
@@ -1631,8 +1684,8 @@ body { min-height: 100vh; }
 .segment-meta {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.18rem 0.55rem;
+  gap: 0.35rem;
+  padding: 0.12rem 0.45rem;
   background: color-mix(in srgb, currentColor 8%, transparent);
   border-radius: 9999px;
   font-size: 0.72rem;
@@ -1662,10 +1715,88 @@ body { min-height: 100vh; }
 .segment-meta-edit svg { width: 12px; height: 12px; }
 .segment-text {
   font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--fg);
+  word-break: break-word;
+}
+
+/* Chat-mode bubbles — one per collapsed turn (consecutive same-
+   speaker segments merged). Visually distinguished from Detail by:
+   thinner left border (3px vs 4px), no card background, head row
+   above text, speaker name takes its color from the speaker palette.
+   Hover ✏️ reuses the .segment-meta-edit class so the pencil pattern
+   stays in one place. */
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.35rem 0.55rem 0.4rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-left: 3px solid var(--turn-speaker-color, var(--border));
+  border-radius: 4px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition: background 0.12s ease;
+}
+.chat-turn:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.chat-turn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.chat-turn-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+.chat-turn-name {
+  font-weight: 600;
+  color: var(--turn-speaker-color);
+  letter-spacing: 0.01em;
+}
+.chat-turn-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
+.chat-turn-text {
+  font-size: 0.92rem;
   line-height: 1.5;
   color: var(--fg);
   word-break: break-word;
 }
+.chat-turn:hover .segment-meta-edit,
+.chat-turn:focus-within .segment-meta-edit {
+  opacity: 0.7;
+}
+
+/* Meeting Mode AI Enhance panel — chip bar above, answer pane below.
+   The answer-pane / answer-body / is-loading classes are reused from
+   the main page (defined elsewhere in this file); we only add the
+   Meeting-specific section spacing here. */
+.meeting-ai {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.meeting-ai[hidden] { display: none; }
+.meeting-ai-title {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.meeting-ai-actions {
+  margin-bottom: 0.75rem;
+}
+.meeting-ai-answer { margin-top: 0.5rem; }
+.meeting-ai-answer[hidden] { display: none; }
 
 /* Export button group: filled primary "download" buttons. */
 .meeting-exports {

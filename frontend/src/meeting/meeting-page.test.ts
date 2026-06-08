@@ -18,6 +18,11 @@ const SAMPLE_RESULT: MeetingResult = {
 
 beforeEach(() => {
   document.body.replaceChildren();
+  // Reset the persisted view-mode so every test starts from a known
+  // state. The page default is now "chat" (collapsed bubbles);
+  // legacy tests that look for `.transcript-segment` either flip to
+  // "detail" via the toggle or call switchToDetail() before asserting.
+  window.localStorage.removeItem("whisper-wrap.meeting-view-mode.v1");
 });
 
 function mountAvailable() {
@@ -29,10 +34,20 @@ function mountAvailable() {
   return page;
 }
 
+function switchToDetail(): void {
+  const btn = document.querySelector<HTMLButtonElement>(
+    '.view-toggle-btn[data-view="detail"]',
+  )!;
+  btn.click();
+}
+
 describe("createMeetingPage — rendering", () => {
   it("renders one .transcript-segment per result segment with speaker classes", () => {
     const page = mountAvailable();
     page.renderResult(SAMPLE_RESULT, "blob:fake");
+    // Tests in this block target the per-segment Detail view; flip the
+    // view-mode toggle before asserting. (Page default is now Chat.)
+    switchToDetail();
 
     const segs = document.querySelectorAll<HTMLElement>(".transcript-segment");
     expect(segs).toHaveLength(3);
@@ -58,6 +73,7 @@ describe("createMeetingPage — rendering", () => {
     });
     document.body.appendChild(a.element);
     a.renderResult(SAMPLE_RESULT, "blob:fake");
+    switchToDetail();
     const aColors = Array.from(
       document.querySelectorAll<HTMLElement>(".transcript-segment"),
     ).map((el) => el.style.borderLeftColor);
@@ -69,6 +85,7 @@ describe("createMeetingPage — rendering", () => {
     });
     document.body.appendChild(b.element);
     b.renderResult(SAMPLE_RESULT, "blob:fake");
+    switchToDetail();
     const bColors = Array.from(
       document.querySelectorAll<HTMLElement>(".transcript-segment"),
     ).map((el) => el.style.borderLeftColor);
@@ -79,6 +96,7 @@ describe("createMeetingPage — rendering", () => {
   it("clicking a segment seeks the audio player to its start time", () => {
     const page = mountAvailable();
     page.renderResult(SAMPLE_RESULT, "blob:fake");
+    switchToDetail();
 
     const audio = document.querySelector<HTMLAudioElement>(".meeting-audio")!;
     audio.play = vi.fn(() => Promise.resolve());
@@ -147,6 +165,10 @@ describe("createMeetingPage — speaker rename", () => {
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
+    // Detail view: one .transcript-segment per segment so chip count
+    // matches segment count (3). Chat view would collapse consecutive
+    // segments — covered by transcript-renderer.test.ts.
+    switchToDetail();
 
     // SPEAKER_00 occurs in segments 0 + 2; rename via the edit icon on
     // segment 0 SHALL update both occurrences.
@@ -174,6 +196,7 @@ describe("createMeetingPage — speaker rename", () => {
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
+    switchToDetail();
 
     const edit0 = document.querySelector<HTMLElement>(
       ".transcript-segment .segment-meta-edit",
@@ -211,6 +234,7 @@ describe("createMeetingPage — speaker rename", () => {
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
+    switchToDetail();
 
     // Rename SPEAKER_00 → Charlie via the icon on the first segment.
     document
@@ -406,8 +430,14 @@ describe("createMeetingPage — fast mode", () => {
       // Drain one tick so the fetch resolves.
       await new Promise((r) => setTimeout(r, 5));
       expect(fetchFn).toHaveBeenCalled();
-      const submitUrl = fetchFn.mock.calls[0][0] as string;
-      expect(submitUrl).toContain("fast=true");
+      // The page now mounts an ActionsBar on construction, which fires
+      // a `GET /actions` BEFORE the user uploads. Pick the meeting
+      // submit call by URL prefix instead of assuming it's call #0.
+      const submitCall = fetchFn.mock.calls.find((c) =>
+        typeof c[0] === "string" && c[0].startsWith("/transcribe/meeting"),
+      );
+      expect(submitCall).toBeDefined();
+      expect(submitCall![0] as string).toContain("fast=true");
     } finally {
       globalThis.fetch = originalFetch;
       Object.defineProperty(navigator, "userAgent", {
@@ -447,10 +477,18 @@ describe("createMeetingPage — upload flow", () => {
         }),
       },
     ];
-    const fetchFn = vi.fn(
-      async (..._args: unknown[]) =>
-        responses.shift() as unknown as Response,
-    );
+    const fetchFn = vi.fn(async (...args: unknown[]) => {
+      // Route by URL so the AI Enhance /actions call (fired at page
+      // mount) doesn't eat one of the meeting-flow responses.
+      const url = args[0] as string;
+      if (url === "/actions") {
+        return {
+          ok: true,
+          json: async () => ({ actions: [], categories: [] }),
+        } as unknown as Response;
+      }
+      return responses.shift() as unknown as Response;
+    });
     // submitMeeting / pollUntilDone use the global fetch directly; for an
     // end-to-end page test we stub it here. The page's `fetchFn` opt is only
     // used by `fetchStatus`'s default impl, which we override below.
@@ -482,20 +520,33 @@ describe("createMeetingPage — upload flow", () => {
     ).find((b) => b.textContent?.includes("Start"))!;
     startBtn.click();
 
-    // Wait for the polling chain to settle.
+    // Wait for the polling chain to settle. Page default view is Chat
+    // (collapsed turns) — use `.chat-turn` as the readiness signal so
+    // we don't race the renderer's mode dispatch.
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 5));
-      if (document.querySelectorAll(".transcript-segment").length > 0) break;
+      if (document.querySelectorAll(".chat-turn").length > 0) break;
     }
 
     try {
-      expect(document.querySelectorAll(".transcript-segment")).toHaveLength(3);
-      expect(fetchFn).toHaveBeenCalledTimes(3);
+      // SAMPLE_RESULT has SPEAKER_00 / SPEAKER_01 / SPEAKER_00 — chat
+      // mode collapses consecutive same-speaker segments into one turn,
+      // but here every consecutive pair has a speaker change, so 3
+      // turns survive unchanged.
+      expect(document.querySelectorAll(".chat-turn")).toHaveLength(3);
+      // The meeting flow itself emits exactly 3 calls: submit +
+      // 2 status polls. There's an additional /actions call from the
+      // AI Enhance mount, so we filter by URL prefix instead of
+      // asserting exact total call count.
+      const meetingCalls = fetchFn.mock.calls.filter((c) =>
+        typeof c[0] === "string" && (c[0] as string).startsWith("/transcribe/meeting"),
+      );
+      expect(meetingCalls).toHaveLength(3);
       // Submit URL first, then two polls of the status URL.
       expect(
-        (fetchFn.mock.calls[0][0] as string).startsWith("/transcribe/meeting"),
+        (meetingCalls[0][0] as string).startsWith("/transcribe/meeting"),
       ).toBe(true);
-      expect(fetchFn.mock.calls[1][0]).toBe("/transcribe/meeting/abc");
+      expect(meetingCalls[1][0]).toBe("/transcribe/meeting/abc");
     } finally {
       globalThis.fetch = originalFetch;
     }

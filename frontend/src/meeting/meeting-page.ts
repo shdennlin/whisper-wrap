@@ -14,8 +14,24 @@
 import { t, type StringKey } from "../i18n";
 import { formatDuration } from "../util/format-duration";
 import { exportSpeakerSrt } from "../export/speaker-srt";
-import { exportSpeakerTxt } from "../export/speaker-txt";
+import { exportSpeakerTxt, exportSpeakerTxtChat } from "../export/speaker-txt";
 import { exportSpeakerVtt } from "../export/speaker-vtt";
+import {
+  ActionsBar,
+  type ActionTemplate,
+  type ActionsResponse,
+  type Category,
+} from "../ui/actions-bar";
+import {
+  buildPromptText,
+  renderChatMode,
+  renderDetailMode,
+} from "./transcript-renderer";
+import {
+  loadMeetingViewMode,
+  saveMeetingViewMode,
+  type MeetingViewMode,
+} from "./view-mode-store";
 import {
   loadHistory,
   recordHistory,
@@ -77,9 +93,7 @@ const SPINNER_SVG =
   '<animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite"/>' +
   "</circle></svg>";
 
-const EDIT_ICON_SVG =
-  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
+// EDIT_ICON_SVG moved into ./transcript-renderer.ts where it's used.
 
 // --- Speaker / language options ----------------------------------------------
 
@@ -329,8 +343,38 @@ export function createMeetingPage(
   errorEl.className = "meeting-error";
   errorEl.hidden = true;
 
+  // Transcript header — segmented control toggles Detail / Chat view.
+  // Header sits above the scroll container so the toggle stays in
+  // place when the user scrolls long transcripts.
+  const transcriptHeader = document.createElement("div");
+  transcriptHeader.className = "transcript-header";
+  transcriptHeader.hidden = true;
+  const viewToggle = document.createElement("div");
+  viewToggle.className = "transcript-view-toggle";
+  viewToggle.setAttribute("role", "group");
+  viewToggle.setAttribute("aria-label", t("meeting.view.toggleAria"));
+  const viewChatBtn = document.createElement("button");
+  viewChatBtn.type = "button";
+  viewChatBtn.className = "view-toggle-btn";
+  viewChatBtn.dataset.view = "chat";
+  viewChatBtn.textContent = t("meeting.view.chat");
+  const viewDetailBtn = document.createElement("button");
+  viewDetailBtn.type = "button";
+  viewDetailBtn.className = "view-toggle-btn";
+  viewDetailBtn.dataset.view = "detail";
+  viewDetailBtn.textContent = t("meeting.view.detail");
+  viewToggle.append(viewChatBtn, viewDetailBtn);
+  transcriptHeader.append(viewToggle);
+
+  // Scroll wrapper bounds the transcript height so the AI panel and
+  // export controls stay reachable for long meetings. Inner host is
+  // what the renderer populates.
+  const transcriptScroll = document.createElement("div");
+  transcriptScroll.className = "meeting-transcript-scroll";
+  transcriptScroll.hidden = true;
   const transcriptEl = document.createElement("div");
   transcriptEl.className = "meeting-transcript";
+  transcriptScroll.appendChild(transcriptEl);
 
   const exportsEl = document.createElement("footer");
   exportsEl.className = "meeting-exports";
@@ -354,6 +398,26 @@ export function createMeetingPage(
   resetBtn.textContent = t("meeting.reset");
   exportsEl.appendChild(resetBtn);
 
+  // AI Enhance section — chips above, answer pane below. Reuses the
+  // existing global ActionsBar component verbatim; the per-Meeting
+  // wiring just supplies a `getTranscript()` that returns the
+  // chat-format prompt.
+  const aiSection = document.createElement("section");
+  aiSection.className = "meeting-ai";
+  aiSection.hidden = true;
+  const aiTitle = document.createElement("h3");
+  aiTitle.className = "meeting-ai-title";
+  aiTitle.textContent = t("meeting.actions.title");
+  const aiActionsHost = document.createElement("div");
+  aiActionsHost.className = "meeting-ai-actions";
+  const aiAnswerHost = document.createElement("section");
+  aiAnswerHost.className = "answer-pane meeting-ai-answer";
+  aiAnswerHost.hidden = true;
+  const aiAnswerBody = document.createElement("div");
+  aiAnswerBody.className = "answer-body";
+  aiAnswerHost.appendChild(aiAnswerBody);
+  aiSection.append(aiTitle, aiActionsHost, aiAnswerHost);
+
   mainCol.append(
     header,
     unavailableEl,
@@ -363,8 +427,10 @@ export function createMeetingPage(
     stepperEl,
     stopRow,
     errorEl,
-    transcriptEl,
+    transcriptHeader,
+    transcriptScroll,
     exportsEl,
+    aiSection,
   );
 
   const sideCol = document.createElement("aside");
@@ -419,6 +485,10 @@ export function createMeetingPage(
   // Speaker rename map: SPEAKER_xx → user-chosen name. Per-job, persisted
   // into history. Empty map renders original SPEAKER_xx labels.
   let speakerNames: Record<string, string> = {};
+  // Transcript view-mode (Detail | Chat). Persisted to localStorage so a
+  // user's preference survives reloads. Default is `chat` — see
+  // view-mode-store.ts for the rationale.
+  let viewMode: MeetingViewMode = loadMeetingViewMode();
 
   // ------ Helpers ----------------------------------------------------------
 
@@ -744,49 +814,55 @@ export function createMeetingPage(
     if (objectUrl) audioEl.src = objectUrl;
     const colors = speakerColorMap(result.speakers);
 
-    transcriptEl.replaceChildren();
-    for (const seg of result.segments) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = `transcript-segment speaker-${cssSafe(seg.speaker)}`;
-      item.dataset.speaker = seg.speaker;
-      item.dataset.start = String(seg.start);
-      const speakerColor = colors.get(seg.speaker) ?? "#999";
-      item.style.borderLeftColor = speakerColor;
-      item.style.color = speakerColor;
-
-      const metaEl = document.createElement("span");
-      metaEl.className = "segment-meta";
-      // Chip text uses display name (renamed or raw).
-      const chipText = document.createElement("span");
-      chipText.className = "segment-meta-name";
-      chipText.textContent = `${displaySpeakerName(seg.speaker)} · ${formatTime(seg.start)}`;
-      // Edit pencil shown on hover.
-      const editBtn = document.createElement("span");
-      editBtn.className = "segment-meta-edit";
-      editBtn.setAttribute("role", "button");
-      editBtn.setAttribute("aria-label", t("meeting.speaker.renameTooltip"));
-      editBtn.title = t("meeting.speaker.renameTooltip");
-      editBtn.innerHTML = EDIT_ICON_SVG;
-      editBtn.addEventListener("click", (e) => {
-        // Stop the click bubbling up to the seek-on-click handler.
-        e.stopPropagation();
-        renameSpeaker(seg.speaker);
-      });
-      metaEl.append(chipText, editBtn);
-
-      const textEl = document.createElement("span");
-      textEl.className = "segment-text";
-      textEl.textContent = seg.text;
-
-      item.append(metaEl, textEl);
-      item.addEventListener("click", () => seekTo(seg));
-      transcriptEl.appendChild(item);
+    // Dispatch to the active view's renderer. Both modes share the
+    // same opts contract so swapping is a one-line change for the
+    // caller. The rename callback re-enters renderResult after
+    // mutating speakerNames so the new label shows everywhere.
+    const renderOpts = {
+      speakerColors: colors,
+      displaySpeakerName,
+      formatTime,
+      cssSafe,
+      seekTo,
+      onRename: renameSpeaker,
+      renameTooltip: t("meeting.speaker.renameTooltip"),
+    };
+    if (viewMode === "chat") {
+      renderChatMode(transcriptEl, result, renderOpts);
+    } else {
+      renderDetailMode(transcriptEl, result, renderOpts);
     }
 
-    exportsEl.hidden = result.segments.length === 0;
+    const hasContent = result.segments.length > 0;
+    transcriptHeader.hidden = !hasContent;
+    transcriptScroll.hidden = !hasContent;
+    exportsEl.hidden = !hasContent;
+    aiSection.hidden = !hasContent;
+    updateViewToggleState();
     completeAll();
   }
+
+  function updateViewToggleState(): void {
+    viewChatBtn.dataset.active = viewMode === "chat" ? "true" : "false";
+    viewChatBtn.setAttribute("aria-pressed", String(viewMode === "chat"));
+    viewDetailBtn.dataset.active = viewMode === "detail" ? "true" : "false";
+    viewDetailBtn.setAttribute("aria-pressed", String(viewMode === "detail"));
+  }
+
+  function switchViewMode(next: MeetingViewMode): void {
+    if (next === viewMode) return;
+    viewMode = next;
+    saveMeetingViewMode(next);
+    if (lastResult) {
+      renderResult(lastResult, lastObjectUrl ?? "");
+    } else {
+      updateViewToggleState();
+    }
+  }
+
+  viewChatBtn.addEventListener("click", () => switchViewMode("chat"));
+  viewDetailBtn.addEventListener("click", () => switchViewMode("detail"));
+  updateViewToggleState();
 
   function renameSpeaker(rawSpeaker: string): void {
     const current = displaySpeakerName(rawSpeaker);
@@ -866,11 +942,16 @@ export function createMeetingPage(
     .querySelector<HTMLButtonElement>('[data-export="txt"]')!
     .addEventListener("click", () => {
       if (!lastResult) return;
-      downloadBlob(
-        "meeting.txt",
-        exportSpeakerTxt(renamedSegments(lastResult)),
-        "text/plain",
-      );
+      // Mirror the active view-mode in the TXT shape: Chat view → chat
+      // log with `[MM:SS] SPEAKER: text` per line; Detail view → the
+      // script-style paragraph format (SPEAKER:\n<text>). The exporter
+      // works off renamed segments so the user's display names land in
+      // the downloaded file too.
+      const text =
+        viewMode === "chat"
+          ? exportSpeakerTxtChat(renamedSegments(lastResult))
+          : exportSpeakerTxt(renamedSegments(lastResult));
+      downloadBlob("meeting.txt", text, "text/plain");
     });
   exportsEl
     .querySelector<HTMLButtonElement>('[data-export="json"]')!
@@ -1036,6 +1117,60 @@ export function createMeetingPage(
       }
     })
     .catch(() => {});
+
+  // ------ AI Enhance ------------------------------------------------------
+  // Mount an ActionsBar that talks to the same /actions + /ask endpoints
+  // as the main page. getTranscript() always emits the chat-format text
+  // (speaker: text) because LLMs handle that shape much better than a
+  // flat segment dump; the view-mode toggle is purely for human reading.
+  const meetingActions = new ActionsBar({
+    root: aiActionsHost,
+    fetchActions: async () => {
+      const r = await fetchFn("/actions");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = (await r.json()) as {
+        actions: ActionTemplate[];
+        categories?: Category[];
+      };
+      return {
+        actions: body.actions ?? [],
+        categories: body.categories ?? [],
+      } satisfies ActionsResponse;
+    },
+    postAsk: async (prompt) => {
+      // log=false: Meeting Mode runs are ephemeral (Out of scope per
+      // plan); not piped into the /v1/sessions history store. Each
+      // chip-click is a one-shot Gemini call.
+      const r = await fetchFn("/ask?log=false", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: prompt }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return (await r.json()) as { answer: string };
+    },
+    onAnswer: (run) => {
+      aiAnswerBody.textContent = run.answer;
+      aiAnswerHost.hidden = !run.answer;
+    },
+    onLoading: ({ running }) => {
+      aiAnswerHost.classList.toggle("is-loading", running);
+      if (running) {
+        aiAnswerHost.hidden = false;
+        aiAnswerBody.textContent = t("answer.processing");
+        aiAnswerHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    },
+    onWarn: (msg) => {
+      // Surface as inline text in the answer pane (no global toast on
+      // the meeting page yet — keep dependencies minimal).
+      aiAnswerHost.hidden = false;
+      aiAnswerBody.textContent = `⚠ ${msg}`;
+    },
+    getTranscript: () =>
+      lastResult ? buildPromptText(lastResult, displaySpeakerName) : "",
+  });
+  void meetingActions.load();
 
   return {
     element: root,
