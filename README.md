@@ -295,16 +295,35 @@ speaker-aware SRT/VTT/TXT export.
 
 ### Performance
 
-Meeting analysis runs the WhisperX pipeline, which requires a CT2 ASR
-variant; pyannote and wav2vec2 have no Core ML/ANE port. **The meeting
-path is CPU/CUDA-only on every platform.** The existing `/transcribe`
-endpoint continues to use Apple Neural Engine acceleration on macOS — only
-the meeting endpoint pays the CPU cost.
+Meeting analysis runs the WhisperX pipeline (CT2 ASR + wav2vec2 align +
+pyannote diarize). CTranslate2 has no Core ML/ANE backend, so **the ASR
+stage stays on CPU on macOS** — only `/transcribe` reaches the Apple
+Neural Engine. The other two stages are torch-native and DO accept MPS:
+align and diarize run on the Metal GPU when available, cutting their
+contribution by 4-8×.
 
 | Platform | 1-hour meeting wall-clock |
 | - | - |
-| macOS (Mac mini, CPU) | ~8-15 min |
+| macOS (Mac mini, ASR on CPU + align/diarize on MPS) | ~6-12 min |
+| macOS (everything on CPU — `MEETING_TORCH_DEVICE=cpu`) | ~10-20 min |
 | Linux + NVIDIA GPU | ~1-3 min |
+
+ASR dominates the macOS wall-clock (~70% of total time). To attack it
+further you either need CUDA, or you can keep ASR on `/transcribe`
+(ggml + ANE) and accept the loss of diarization — that path takes
+~3-6 min for a 1-hour file but only returns segment-level text.
+
+Two tunables (both in `.env`, both have sensible defaults — touch only
+when debugging perf):
+
+```env
+MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size; 16-64
+MEETING_TORCH_DEVICE=auto    # auto | mps | cuda | cpu (align + diarize)
+```
+
+`MEETING_TORCH_DEVICE=auto` picks MPS on macOS, CUDA on Linux, CPU
+elsewhere. Forcing an unavailable device logs a WARN and falls back to
+CPU — the endpoint stays available even with a wrong env var.
 
 The first request after server start incurs an additional ~20-40 s while
 the WhisperX and pyannote models load into memory; subsequent jobs reuse
@@ -346,6 +365,13 @@ GEMINI_MODEL=gemini-3.1-flash-lite
 # File handling
 MAX_FILE_SIZE_MB=100
 LOG_LEVEL=INFO
+
+# Meeting endpoint (only meaningful when /transcribe/meeting is used)
+# MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size; raise for RAM-rich hosts
+# MEETING_TORCH_DEVICE=auto    # auto | mps | cuda | cpu — align + diarize accelerator
+
+# CT2 worker threads (applies to /transcribe AND /transcribe/meeting on ct2 paths)
+# CPU_THREADS=8                # Apple Silicon M2 (4P+6E) typically benefits from 6-8
 
 # Transcription post-process filter
 # FILTER_EMPTY_ENABLED=true

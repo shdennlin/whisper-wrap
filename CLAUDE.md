@@ -166,6 +166,23 @@ continues unchanged. Key facts a future Claude session needs:
   ggml (Core ML) variant (for `/transcribe`) and the ct2 variant (for
   `/transcribe/meeting`). The 503 with reason `model <name> ct2 variant
   is not downloaded` surfaces this.
+- **Two devices, not one.** `MeetingAnalyzer` carries `self.device` (ct2
+  ASR — only `"cpu"` or `"cuda"`) AND `self.torch_device` (align +
+  diarize — also accepts `"mps"`). Decoupling them is what unlocks MPS
+  on Apple Silicon without giving up the ct2 quantisation path —
+  CTranslate2 has no MPS backend, but pyannote and wav2vec2 are
+  torch-native and DO accept MPS. Resolved by `_resolve_torch_device()`
+  reading `MEETING_TORCH_DEVICE` (default `"auto"`: tries MPS on macOS,
+  CUDA on Linux, else CPU). Forcing an unavailable device logs a WARN
+  and falls back to CPU instead of crashing.
+- **pyannote `.to(mps)` is best-effort.** Some pyannote 3.x internals
+  (PLDA scoring is the canonical example) have ops that fall back to
+  CPU on MPS. `_load_pipeline()` wraps the device move in try/except +
+  WARN so a partial-fallback never blocks the endpoint.
+- **`MEETING_BATCH_SIZE` (default 32)** flows through to
+  `whisperx.transcribe(audio, batch_size=...)`. Higher = better CPU
+  SIMD saturation on long files; cost is RAM (~150-250 MB per slot on
+  whisper-large).
 - **HF token gated at endpoint level.** `HF_TOKEN` missing or empty →
   503 on meeting endpoints only. Server starts normally. Same for the
   `[meeting]` optional dependency group (`uv sync --extra meeting`).
@@ -205,8 +222,12 @@ MODEL_NAME=breeze-asr-25     # registry key; variants resolved by platform
 # VAD_BACKEND=silero|rms     # unset = try silero, fall back to rms
 COMPUTE_TYPE=default         # ct2 only; on Apple Silicon CPU MUST be "default"
 DEVICE=auto                  # ct2 only
+# CPU_THREADS=8              # CT2 worker count; M2 (4P+6E) likes 6-8
 GEMINI_API_KEY=              # required for /ask
 GEMINI_MODEL=gemini-3.1-flash-lite
+# Meeting endpoint tunables (defaults are sane — touch only for perf debugging)
+# MEETING_BATCH_SIZE=32      # WhisperX ASR batch_size; 16-64; RAM ↔ speed
+# MEETING_TORCH_DEVICE=auto  # auto|mps|cuda|cpu — align+diarize accelerator
 ```
 
 v1-era env vars (`WHISPER_SERVER_*`, `WHISPER_AUTO_RESTART`, `WHISPER_BINARY_PATH`, `WHISPER_MAX_RETRIES`, `MODEL_PATH`) are silently ignored — v2 was never released externally so no migration shim was kept.
