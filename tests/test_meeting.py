@@ -165,11 +165,18 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
 
     captured: dict[str, str] = {}
 
-    def fake_resolve(name):
+    def fake_resolve_info(name):
         captured["name"] = name
-        return f"/resolved/by/registry/{name}-ct2"
+        # Mirror the registry shape: every CT2 variant SHALL have
+        # `local_dir` and SHOULD have `compute_type` (used to keep CPU
+        # inference at int8_float16 rather than the float32 default).
+        return {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8_float16",
+        }
 
-    monkeypatch.setattr(registry, "resolve_ct2_variant", fake_resolve)
+    monkeypatch.setattr(registry, "resolve_ct2_variant_info", fake_resolve_info)
     # MeetingAnalyzer.from_config does `from app.services.registry import …`
     # at call time, so patching the attribute on the module suffices.
 
@@ -180,9 +187,12 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
     analyzer = MeetingAnalyzer.from_config(cfg)
 
     assert captured["name"] == "some-other-model"
-    assert analyzer.ct2_model_dir == "/resolved/by/registry/some-other-model-ct2"
+    assert analyzer.ct2_model_dir.endswith("some-other-model-ct2")
     assert analyzer.hf_token == "abc"
     assert analyzer.diarization_pipeline_name == "pyannote/speaker-diarization-3.1"
+    # The compute_type from the registry SHALL flow through; without this
+    # WhisperX would default to float32 on CPU (~4x slower).
+    assert analyzer.compute_type == "int8_float16"
 
 
 @pytest.mark.asyncio

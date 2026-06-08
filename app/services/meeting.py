@@ -102,17 +102,23 @@ class MeetingAnalyzer:
     def from_config(cls, config: Any) -> MeetingAnalyzer:
         """Construct an analyzer from a populated `app.config.Config` instance.
 
-        Resolves the CT2 ASR model directory by delegating to the registry
-        helper so the meeting endpoint reuses the same on-disk layout the
-        rest of the server already knows about.
+        Resolves the CT2 ASR model directory AND its registry-declared
+        compute_type so WhisperX runs at the quantisation the variant was
+        compiled for (e.g. int8_float16). Without this, WhisperX falls back
+        to float32 on CPU — 3-5x slower for the ASR stage on Apple Silicon.
         """
-        from app.services.registry import resolve_ct2_variant
+        from app.services.registry import (
+            DEFAULT_MODELS_ROOT,
+            resolve_ct2_variant_info,
+        )
 
+        variant = resolve_ct2_variant_info(config.MEETING_MODEL_NAME)
         return cls(
-            ct2_model_dir=resolve_ct2_variant(config.MEETING_MODEL_NAME),
+            ct2_model_dir=str(DEFAULT_MODELS_ROOT / variant["local_dir"]),
             hf_token=config.HF_TOKEN or "",
             diarization_pipeline=config.MEETING_DIARIZATION_PIPELINE,
             align_model=config.MEETING_ALIGN_MODEL,
+            compute_type=variant.get("compute_type") or "default",
         )
 
     async def _load_pipeline(self) -> None:
