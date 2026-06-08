@@ -173,11 +173,23 @@ def patch_meeting(
     body: MeetingPatch,
     db: SASession = Depends(get_db),
 ) -> MeetingFull:
-    row = repo.update_speaker_names(
-        db, meeting_id, json.dumps(body.speaker_names)
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
+    if body.speaker_names is None and body.filename is None:
+        raise HTTPException(
+            status_code=400,
+            detail="patch body must include at least one of: speaker_names, filename",
+        )
+    row: MeetingAnalysisRow | None = None
+    if body.speaker_names is not None:
+        row = repo.update_speaker_names(
+            db, meeting_id, json.dumps(body.speaker_names)
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="meeting not found")
+    if body.filename is not None:
+        row = repo.update_filename(db, meeting_id, body.filename.strip())
+        if row is None:
+            raise HTTPException(status_code=404, detail="meeting not found")
+    assert row is not None
     db.commit()
     return _row_to_full(row)
 

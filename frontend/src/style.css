@@ -1253,6 +1253,46 @@ body { min-height: 100vh; }
 }
 .meeting-header .meeting-new-analysis[hidden] { display: none; }
 
+/* Meeting-note title row — shows the current entry's filename with a
+   hover ✏️ for rename. Sits below the page title/subtitle and only
+   when a result is loaded. */
+.meeting-note-title {
+  margin-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--fg);
+  min-width: 0;
+}
+.meeting-note-title[hidden] { display: none; }
+.meeting-note-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.meeting-note-title-edit {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.meeting-note-title:hover .meeting-note-title-edit,
+.meeting-note-title:focus-within .meeting-note-title-edit {
+  opacity: 0.7;
+}
+.meeting-note-title-edit:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* Yellow warning callout shown when the meeting endpoint isn't available
    (extras missing / HF_TOKEN unset / ct2 variant not downloaded). */
 .meeting-unavailable {

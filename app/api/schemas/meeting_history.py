@@ -40,13 +40,19 @@ class MeetingCreate(BaseModel):
 
 
 class MeetingPatch(BaseModel):
-    """PATCH /v1/meetings/{id} — only `speaker_names` is mutable.
+    """PATCH /v1/meetings/{id} — partial update.
 
-    Result content + metadata are write-once. Renames are the only
-    post-write user input on a finished analysis.
+    Two fields are user-editable post-completion:
+      - `speaker_names`: rename SPEAKER_xx → friendly label
+      - `filename`: user-chosen meeting title (defaults to original
+        upload filename; commonly renamed to something like "Q3 OKR
+        review" so the sidebar shows meaningful labels)
+
+    Result content + timestamps are write-once.
     """
 
-    speaker_names: dict[str, str]
+    speaker_names: dict[str, str] | None = None
+    filename: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class MeetingFull(BaseModel):

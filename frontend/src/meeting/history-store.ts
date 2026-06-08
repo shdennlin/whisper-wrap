@@ -22,6 +22,7 @@ import {
   createMeeting,
   deleteMeeting,
   listMeetings,
+  patchMeetingFilename,
   patchMeetingSpeakerNames,
   type MeetingFull,
 } from "./meeting-history-api";
@@ -196,9 +197,9 @@ export async function recordHistory(
   return [...cache];
 }
 
-/** Patch an existing entry. Only `speaker_names` is server-writable;
- *  other fields are local-cache-only (used by the live job-tracking
- *  flow before backend persist lands). */
+/** Patch an existing entry. Server-writable fields: `speaker_names`,
+ *  `filename`. Other fields are local-cache-only (used by the live
+ *  job-tracking flow before backend persist lands). */
 export async function updateHistory(
   jobId: string,
   patch: Partial<HistoryEntry>,
@@ -209,8 +210,15 @@ export async function updateHistory(
       await patchMeetingSpeakerNames(jobId, patch.speaker_names);
     } catch {
       // Best-effort: failure to persist rename doesn't break the UI.
-      // Local cache still carries the renamed labels; next reload
-      // will re-fetch from backend without the rename.
+    }
+  }
+  if (patch.filename !== undefined) {
+    try {
+      await patchMeetingFilename(jobId, patch.filename);
+    } catch {
+      // Best-effort: same rationale as speaker_names — local cache
+      // already reflects the rename; the next reload will re-fetch
+      // from backend without it if the PATCH failed.
     }
   }
   return [...cache];

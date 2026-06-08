@@ -91,6 +91,20 @@ export async function patchMeetingSpeakerNames(
   return ok<MeetingFull>(r);
 }
 
+/** Rename a meeting (its display title in the sidebar + page header).
+ *  Backend strips whitespace and rejects empty. */
+export async function patchMeetingFilename(
+  id: string,
+  filename: string,
+): Promise<MeetingFull> {
+  const r = await fetch(`/v1/meetings/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ filename }),
+  });
+  return ok<MeetingFull>(r);
+}
+
 export async function deleteMeeting(id: string): Promise<void> {
   const r = await fetch(`/v1/meetings/${encodeURIComponent(id)}`, {
     method: "DELETE",

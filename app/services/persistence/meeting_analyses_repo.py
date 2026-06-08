@@ -91,6 +91,24 @@ def update_speaker_names(
     return row
 
 
+def update_filename(
+    db: SASession, id: str, filename: str
+) -> MeetingAnalysisRow | None:
+    """Patch the displayed filename for an analysis. Returns None if
+    the id is unknown so the API can map to 404.
+
+    Used when the user renames the meeting title (e.g. from the raw
+    upload name `Taiwan AI Academy ... .m4a` to a friendly label like
+    `2026-06 OKR review`).
+    """
+    row = db.get(MeetingAnalysisRow, id)
+    if row is None:
+        return None
+    row.filename = filename
+    db.flush()
+    return row
+
+
 def delete_meeting_analysis(db: SASession, id: str) -> bool:
     """Idempotent delete — returns True if a row was removed, False
     if the id was unknown."""

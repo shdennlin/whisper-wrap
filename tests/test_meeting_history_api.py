@@ -111,6 +111,40 @@ def test_patch_unknown_returns_404(client):
     assert r.status_code == 404
 
 
+def test_patch_filename(client):
+    """PATCH `filename` SHALL rename the meeting title without touching
+    the result content or any other field. Used by the page-header
+    rename ✏️ in the PWA."""
+    client.post("/v1/meetings", json=_sample_meeting())
+    r = client.patch(
+        "/v1/meetings/m1",
+        json={"filename": "Q3 OKR review"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["filename"] == "Q3 OKR review"
+    # Result + speaker_names untouched.
+    assert body["result"]["segments"][0]["text"] == "Hello."
+    assert body["speaker_names"] == {}
+
+
+def test_patch_empty_body_returns_400(client):
+    """A PATCH with neither field SHALL be rejected so the endpoint
+    never silently no-ops."""
+    client.post("/v1/meetings", json=_sample_meeting())
+    r = client.patch("/v1/meetings/m1", json={})
+    assert r.status_code == 400
+
+
+def test_patch_filename_strips_whitespace(client):
+    client.post("/v1/meetings", json=_sample_meeting())
+    r = client.patch(
+        "/v1/meetings/m1", json={"filename": "  My Title  "}
+    )
+    assert r.status_code == 200
+    assert r.json()["filename"] == "My Title"
+
+
 def test_delete_idempotent(client):
     client.post("/v1/meetings", json=_sample_meeting())
     r = client.delete("/v1/meetings/m1")

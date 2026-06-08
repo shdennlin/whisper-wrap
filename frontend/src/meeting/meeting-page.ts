@@ -169,7 +169,25 @@ export function createMeetingPage(
   const subtitle = document.createElement("p");
   subtitle.className = "meeting-subtitle";
   subtitle.textContent = t("meeting.subtitle");
-  headerTitleCol.append(h1, subtitle);
+
+  // Meeting-note title row: shows the current entry's filename with a
+  // hover ✏️ to rename. Empty/hidden when no result is loaded so the
+  // page header doesn't show a phantom title. Same rename-via-prompt
+  // pattern as the speaker chip (see renderDetailMode → onRename).
+  const titleRow = document.createElement("div");
+  titleRow.className = "meeting-note-title";
+  titleRow.hidden = true;
+  const titleText = document.createElement("span");
+  titleText.className = "meeting-note-title-text";
+  const titleEdit = document.createElement("button");
+  titleEdit.type = "button";
+  titleEdit.className = "meeting-note-title-edit";
+  titleEdit.title = t("meeting.title.renameTooltip");
+  titleEdit.setAttribute("aria-label", t("meeting.title.renameTooltip"));
+  titleEdit.textContent = "✏️";
+  titleRow.append(titleText, titleEdit);
+
+  headerTitleCol.append(h1, subtitle, titleRow);
   // "Analyze another file" lives at the top-right of the page header
   // so it's always discoverable, including when the user is browsing
   // a past analysis from the sidebar. Hidden until a result actually
@@ -502,6 +520,9 @@ export function createMeetingPage(
   let selectedFile: File | null = null;
   let audioDurationSeconds: number | null = null;
   let activeJobId: string | null = null;
+  // Currently displayed meeting filename (for the header title +
+  // rename ✏️). Empty when no result is loaded.
+  let activeFilename: string = "";
   let abortController: AbortController | null = null;
   const stageStartedAt = new Map<StageKey, number>();
   let tickHandle: ReturnType<typeof setInterval> | null = null;
@@ -751,6 +772,7 @@ export function createMeetingPage(
         return;
       }
       activeJobId = handle.job_id;
+      activeFilename = file.name;
       void recordHistory({
         job_id: handle.job_id,
         filename: file.name,
@@ -885,6 +907,10 @@ export function createMeetingPage(
     // "Analyze another file" only makes sense when there's something
     // to clear; show it together with the result.
     newAnalysisBtn.hidden = !hasContent;
+    // Reflect the current filename in the header title row (with the
+    // hover ✏️ rename affordance).
+    titleRow.hidden = !hasContent;
+    titleText.textContent = activeFilename || "";
     updateViewToggleState();
     completeAll();
   }
@@ -1040,6 +1066,7 @@ export function createMeetingPage(
     lastObjectUrl = null;
     selectedFile = null;
     activeJobId = null;
+    activeFilename = "";
     audioDurationSeconds = null;
     speakerNames = {};
     transcriptEl.replaceChildren();
@@ -1048,6 +1075,7 @@ export function createMeetingPage(
     exportsEl.hidden = true;
     aiSection.hidden = true;
     newAnalysisBtn.hidden = true;
+    titleRow.hidden = true;
     audioEl.removeAttribute("src");
     audioEl.load();
     resetStepper();
@@ -1057,6 +1085,24 @@ export function createMeetingPage(
     fileInput.value = "";
   }
   newAnalysisBtn.addEventListener("click", resetPage);
+
+  // ✏️ rename the currently-loaded meeting's title. PromptFn fallback
+  // is the same pattern as `renameSpeaker` so vitest can stub it.
+  titleEdit.addEventListener("click", () => {
+    if (!activeJobId) return;
+    const current = activeFilename;
+    const next = promptFn(t("meeting.title.renamePrompt"), current);
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (trimmed === "" || trimmed === current) return;
+    activeFilename = trimmed;
+    titleText.textContent = trimmed;
+    // Persist into cache + backend. Fire-and-forget; updateHistory
+    // mutates the cache synchronously so the sidebar re-renders with
+    // the new name immediately.
+    void updateHistory(activeJobId, { filename: trimmed });
+    renderSidebar();
+  });
 
   // Backend MAX_FILE_SIZE_MB=100 → 100 MB max upload. Pre-validate
   // client-side so the user sees the limit immediately instead of
@@ -1202,6 +1248,7 @@ export function createMeetingPage(
     if (entry.status === "done" && entry.result) {
       speakerNames = { ...(entry.speaker_names ?? {}) };
       activeJobId = entry.job_id;
+      activeFilename = entry.filename;
       // If the server has the original audio, point the player at the
       // streaming endpoint so the user can replay + click-to-seek into
       // a past meeting. Otherwise clear the src so the player shows
@@ -1224,6 +1271,7 @@ export function createMeetingPage(
       if (status.status === "done" && status.result) {
         speakerNames = { ...(entry.speaker_names ?? {}) };
         activeJobId = entry.job_id;
+        activeFilename = entry.filename;
         audioEl.removeAttribute("src");
         renderResult(status.result, "");
         // Back-fill the cache so subsequent reloads hit the fast path.
