@@ -339,3 +339,117 @@ def test_other_endpoints_unaffected_when_meeting_unavailable(stubbed_app, monkey
         status_resp = client.get("/status")
         assert status_resp.status_code == 200
         assert status_resp.json()["meeting"]["available"] is False
+
+
+# --- cancellation (DELETE /transcribe/meeting/{job_id}) ---
+
+
+def test_delete_unknown_job_returns_404(stubbed_app, meeting_available):
+    """DELETE on a job_id that the store has never seen SHALL 404."""
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, lambda *a, **kw: None)
+        resp = client.delete("/transcribe/meeting/00000000000000000000000000")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "job_not_found"
+
+
+def test_delete_finished_job_returns_409(stubbed_app, meeting_available):
+    """Once a job is in terminal state, DELETE SHALL 409 (not cancellable)."""
+
+    async def fast_analyze(audio_path, **kwargs):
+        return _fake_meeting_result()
+
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, fast_analyze)
+        post = _post_meeting_audio(client)
+        job_id = post.json()["job_id"]
+        # Wait for completion by polling status (TestClient runs background
+        # tasks during the next request).
+        poll = client.get(f"/transcribe/meeting/{job_id}")
+        assert poll.json()["status"] == "done"
+        resp = client.delete(f"/transcribe/meeting/{job_id}")
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "job_not_cancellable"
+    assert "done" in resp.json()["detail"]["reason"]
+
+
+def test_delete_pending_job_marks_cancel_requested(
+    stubbed_app, meeting_available, monkeypatch
+):
+    """DELETE on a not-yet-finished job SHALL 202 and set cancel_requested.
+
+    We stub BackgroundTasks.add_task to a no-op so the worker never runs;
+    that leaves the job in 'pending' state, perfect for testing the cancel
+    flag without racing the pipeline.
+    """
+    from fastapi import BackgroundTasks
+
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, *a, **kw: None)
+
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, lambda *a, **kw: None)
+        post = _post_meeting_audio(client)
+        job_id = post.json()["job_id"]
+
+        resp = client.delete(f"/transcribe/meeting/{job_id}")
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["job_id"] == job_id
+        assert body["status"] == "cancel_requested"
+
+        # The job record now carries cancel_requested=True. Verify directly
+        # via the store so we don't depend on how the worker would surface it.
+        job = stubbed_app.state.meeting_jobs.get(job_id)
+        assert job is not None
+        assert job.cancel_requested is True
+
+
+def test_pre_cancelled_job_skips_analyzer(
+    stubbed_app, meeting_available, monkeypatch
+):
+    """A job marked cancel_requested before the worker runs SHALL transition
+    to 'cancelled' without ever invoking analyzer.analyze().
+
+    We no-op BackgroundTasks so the worker doesn't auto-run on POST, then
+    directly invoke _run_meeting_job after setting the cancel flag. This is
+    more deterministic than racing the real background task scheduler."""
+    import asyncio as _asyncio
+
+    from fastapi import BackgroundTasks
+
+    from app.api.meeting import _run_meeting_job
+
+    monkeypatch.setattr(BackgroundTasks, "add_task", lambda self, *a, **kw: None)
+
+    analyze_calls: list[dict] = []
+
+    async def recording_analyze(audio_path, **kwargs):
+        analyze_calls.append({"audio_path": audio_path, **kwargs})
+        return _fake_meeting_result()
+
+    with TestClient(stubbed_app) as client:
+        _install_fake_analyzer(stubbed_app, recording_analyze)
+        post = _post_meeting_audio(client)
+        job_id = post.json()["job_id"]
+        store = stubbed_app.state.meeting_jobs
+        # Set cancel flag BEFORE running the worker, then invoke directly.
+        store.mark_cancel_requested(job_id)
+        _asyncio.run(
+            _run_meeting_job(
+                analyzer=stubbed_app.state.meeting_analyzer,
+                store=store,
+                job_id=job_id,
+                audio_path=Path("/tmp/nonexistent.wav"),
+                language=None,
+                num_speakers=None,
+                min_speakers=None,
+                max_speakers=None,
+                enable_word_timestamps=True,
+            )
+        )
+
+    assert analyze_calls == [], "pre-cancelled job must skip analyze() entirely"
+    job = store.get(job_id)
+    assert job is not None
+    assert job.status == "cancelled"
+    assert job.stage == "cancelled"

@@ -62,11 +62,37 @@ export async function pollUntilDone(
   statusUrl: string,
   onProgress: (status: JobStatusResponse) => void,
   intervalMs = 2000,
+  signal?: AbortSignal,
 ): Promise<JobStatusResponse> {
   while (true) {
+    if (signal?.aborted) {
+      // Caller asked us to stop; surface a sentinel status so the caller
+      // can decide what to do (typically: ignore and reset UI).
+      const aborted: JobStatusResponse = {
+        status: "cancelled",
+        progress: 0,
+        stage: "cancelled",
+        result: null,
+      };
+      return aborted;
+    }
     const status = await fetchJobStatus(statusUrl);
     onProgress(status);
-    if (status.status === "done" || status.status === "error") return status;
+    if (
+      status.status === "done" ||
+      status.status === "error" ||
+      status.status === "cancelled"
+    )
+      return status;
     await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
+export async function cancelMeeting(jobId: string): Promise<void> {
+  // Fire-and-forget: any error is non-fatal. The UI has already reset.
+  try {
+    await fetch(`/transcribe/meeting/${jobId}`, { method: "DELETE" });
+  } catch {
+    // Network error during cancel — best-effort, silent.
   }
 }

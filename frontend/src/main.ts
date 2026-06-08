@@ -181,7 +181,55 @@ settingsToggle.append(settingsIcon, settingsLabel);
 // AI model badge previously lived here (next to the backend indicator). It now
 // sits next to the "AI Enhance" section heading inside ActionsBar — see
 // actionsBar.setModel() below.
-header.append(title, indicatorHost, historyToggle, themeToggle, settingsToggle);
+// View tabs: segmented control to switch between recording shell (#) and
+// Meeting Mode (#/meeting). Click navigates via the hash; the route handler
+// already in this file repaints active state when the hash changes.
+const viewTabs = document.createElement("div");
+viewTabs.className = "view-tabs";
+viewTabs.setAttribute("role", "tablist");
+type ViewTab = { name: "shell" | "meeting"; label: string; icon: string };
+const VIEW_TABS: ViewTab[] = [
+  { name: "shell", label: "Live", icon: "●" },
+  { name: "meeting", label: "Meeting", icon: "▦" },
+];
+const viewTabButtons = new Map<"shell" | "meeting", HTMLButtonElement>();
+for (const tab of VIEW_TABS) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.setAttribute("role", "tab");
+  btn.dataset.view = tab.name;
+  const iconSpan = document.createElement("span");
+  iconSpan.className = "view-tab-icon";
+  iconSpan.setAttribute("aria-hidden", "true");
+  iconSpan.textContent = tab.icon;
+  const textSpan = document.createElement("span");
+  textSpan.className = "view-tab-text";
+  textSpan.textContent = tab.label;
+  btn.append(iconSpan, textSpan);
+  btn.addEventListener("click", () => {
+    window.location.hash = tab.name === "meeting" ? "#/meeting" : "";
+  });
+  viewTabs.appendChild(btn);
+  viewTabButtons.set(tab.name, btn);
+}
+function paintViewTabs(active: "shell" | "meeting"): void {
+  for (const [name, btn] of viewTabButtons.entries()) {
+    if (name === active) {
+      btn.setAttribute("aria-current", "page");
+    } else {
+      btn.removeAttribute("aria-current");
+    }
+  }
+}
+
+header.append(
+  title,
+  viewTabs,
+  indicatorHost,
+  historyToggle,
+  themeToggle,
+  settingsToggle,
+);
 
 // Recording-shell container groups <main> + <aside> so the route switcher can
 // toggle the whole shell with one `hidden` flag without leaking the toggle to
@@ -586,9 +634,11 @@ function deactivateMeetingRoute(): void {
 onRouteChange((route) => {
   if (route.name === "meeting") {
     currentRoute = { name: "shell" };
+    paintViewTabs("meeting");
     void activateMeetingRoute();
     return;
   }
+  paintViewTabs("shell");
   deactivateMeetingRoute();
   currentRoute =
     route.name === "history"

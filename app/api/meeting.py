@@ -8,6 +8,7 @@ preconditions (HF_TOKEN, optional `[meeting]` extras, CT2 variant on disk).
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 from dataclasses import asdict
@@ -196,11 +197,24 @@ async def _run_meeting_job(
     Wraps every failure in a typed error code so the GET endpoint can surface
     a stable `error.code` to the client.
     """
+    # Honour cancellation requested before the worker even started running.
+    pre_job = store.get(job_id)
+    if pre_job is not None and pre_job.cancel_requested:
+        store.mark_cancelled(job_id)
+        file_manager.cleanup_file(audio_path)
+        return
+
     store.mark_running(job_id, stage="asr")
     try:
 
         def progress(stage: str, progress: float) -> None:
+            # Each progress checkpoint is a natural inspection point — if the
+            # client called DELETE between stages, raise CancelledError so the
+            # outer except path can short-circuit without running diarize.
             store.update_progress(job_id, stage=stage, progress=progress)
+            curr = store.get(job_id)
+            if curr is not None and curr.cancel_requested:
+                raise asyncio.CancelledError("meeting job cancelled by client")
 
         result = await analyzer.analyze(
             audio_path,
@@ -211,7 +225,15 @@ async def _run_meeting_job(
             enable_word_timestamps=enable_word_timestamps,
             progress_callback=progress,
         )
-        store.mark_done(job_id, result)
+        # Late-cancel: client called DELETE after the pipeline ran but before
+        # we recorded the result. Honour the cancel and discard the result.
+        curr = store.get(job_id)
+        if curr is not None and curr.cancel_requested:
+            store.mark_cancelled(job_id)
+        else:
+            store.mark_done(job_id, result)
+    except asyncio.CancelledError:
+        store.mark_cancelled(job_id)
     except Exception as exc:  # noqa: BLE001 — surface every failure as job.error
         stage = store.get(job_id).stage if store.get(job_id) else "unknown"
         code_map = {
@@ -318,3 +340,34 @@ async def get_meeting_status(job_id: str, request: Request) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail={"error": "job_not_found"})
     return _job_to_json(job)
+
+
+@router.delete("/transcribe/meeting/{job_id}", status_code=202)
+async def cancel_meeting_job(job_id: str, request: Request) -> dict[str, Any]:
+    """Request cancellation of a running meeting job.
+
+    Returns HTTP 202 (request accepted) — actual transition to `cancelled`
+    happens in the worker between pipeline stages. The current PyTorch call
+    cannot be interrupted mid-flight; expect cancellation to land within
+    one stage boundary.
+
+    404 if the job_id is unknown; 409 if the job has already finished.
+    """
+    store = _get_store(request)
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail={"error": "job_not_found"})
+    if job.status in ("done", "error", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "job_not_cancellable",
+                "reason": f"job is in terminal state '{job.status}'",
+            },
+        )
+    store.mark_cancel_requested(job_id)
+    return {
+        "job_id": job_id,
+        "status": "cancel_requested",
+        "note": "actual cancellation may take up to one pipeline stage to take effect",
+    }

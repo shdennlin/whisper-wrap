@@ -208,6 +208,12 @@ describe("createMeetingPage — upload flow", () => {
       writable: false,
     });
     fileInput.dispatchEvent(new Event("change"));
+    // New confirm-card flow: file pick shows the confirm card with Start +
+    // Change buttons; we click Start to kick off the upload.
+    const startBtn = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".confirm-actions button"),
+    ).find((b) => b.textContent?.includes("Start"))!;
+    startBtn.click();
 
     // Wait for the polling chain to settle.
     for (let i = 0; i < 50; i++) {

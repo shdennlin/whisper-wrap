@@ -26,7 +26,12 @@ export interface MeetingResult {
   segments: Segment[];
 }
 
-export type JobStatus = "pending" | "running" | "done" | "error";
+export type JobStatus =
+  | "pending"
+  | "running"
+  | "done"
+  | "error"
+  | "cancelled";
 
 export interface JobError {
   code: string;

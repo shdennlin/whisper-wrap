@@ -65,6 +65,12 @@ class Job:
     result: MeetingResult | None = None
     error: JobError | None = None
     created_at: float = field(default_factory=time.time)
+    # Cancel flag — set by mark_cancel_requested(); the meeting worker
+    # inspects this between pipeline stages and bails out as soon as
+    # control returns to its async loop. Best-effort: PyTorch sync code
+    # inside `asyncio.to_thread` cannot be interrupted mid-call, so the
+    # current stage runs to completion regardless.
+    cancel_requested: bool = False
 
 
 class JobStore:
@@ -128,6 +134,33 @@ class JobStore:
         job = self._jobs[job_id]
         job.status = "error"
         job.error = JobError(code=code, message=message)
+
+    def mark_cancel_requested(self, job_id: str) -> bool:
+        """Flag a job for cancellation. Returns True if the job existed and
+        was in a state where cancellation makes sense (pending/running).
+
+        Best-effort: the worker observes this flag between stages. If the
+        worker is mid-PyTorch-call (inside `asyncio.to_thread`), the current
+        stage will finish before cancellation takes effect.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return False
+        if job.status in ("done", "error", "cancelled"):
+            return False
+        job.cancel_requested = True
+        return True
+
+    def mark_cancelled(self, job_id: str) -> None:
+        """Transition a job to terminal 'cancelled' state. Idempotent —
+        safe to call from the worker even if the job has already moved on."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        if job.status in ("done", "error"):
+            return
+        job.status = "cancelled"
+        job.stage = "cancelled"
 
     def prune(self) -> None:
         """Evict jobs older than `ttl_seconds`, then by capacity (oldest first)."""
