@@ -143,7 +143,7 @@ class MeetingAnalyzer:
         self._diarize = await asyncio.to_thread(
             Pipeline.from_pretrained,
             self.diarization_pipeline_name,
-            use_auth_token=self.hf_token,
+            token=self.hf_token,
         )
         self._loaded = True
 

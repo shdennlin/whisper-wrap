@@ -92,7 +92,7 @@ async def test_first_analyze_loads_models_second_call_reuses_them(monkeypatch):
 
     class _FakePipeline:
         @classmethod
-        def from_pretrained(cls, _name, use_auth_token=None):
+        def from_pretrained(cls, _name, token=None):
             nonlocal pipeline_load_calls
             pipeline_load_calls += 1
             return cls()

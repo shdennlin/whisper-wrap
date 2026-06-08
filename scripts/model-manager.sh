@@ -444,27 +444,48 @@ prefetch_diarization_models() {
     fi
     local pipeline="${MEETING_DIARIZATION_PIPELINE:-pyannote/speaker-diarization-3.1}"
     local segmentation="pyannote/segmentation-3.0"
+    # community-1 is a transitive gated dependency of speaker-diarization-3.x:
+    # the pipeline loads its PLDA backend from it at construction time. Listing
+    # it here so users hit the "accept ToS" guidance at install time, not at
+    # the first /transcribe/meeting call.
+    local community="pyannote/speaker-diarization-community-1"
     echo
     echo "Pre-fetching pyannote diarization models into HF cache..."
     HF_TOKEN="$hf_token" \
     DIARIZATION_PIPELINE="$pipeline" \
     SEGMENTATION_MODEL="$segmentation" \
+    COMMUNITY_MODEL="$community" \
     "$PYTHON_BIN" - <<'PYEOF'
 import os
 import sys
 
 try:
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import GatedRepoError
 except ImportError as e:
     print(f"ERROR: huggingface_hub is not importable: {e}", file=sys.stderr)
     print("       Install the meeting extras: uv sync --extra meeting", file=sys.stderr)
     sys.exit(2)
 
 token = os.environ["HF_TOKEN"]
-repos = [os.environ["DIARIZATION_PIPELINE"], os.environ["SEGMENTATION_MODEL"]]
+repos = [
+    os.environ["DIARIZATION_PIPELINE"],
+    os.environ["SEGMENTATION_MODEL"],
+    os.environ["COMMUNITY_MODEL"],
+]
+failed = []
 for repo in repos:
     print(f"  fetching {repo} ...")
-    snapshot_download(repo_id=repo, token=token)
+    try:
+        snapshot_download(repo_id=repo, token=token)
+    except GatedRepoError:
+        failed.append(repo)
+        print(f"  ✗ {repo} is gated — visit https://huggingface.co/{repo} and click 'Agree'", file=sys.stderr)
+if failed:
+    print("", file=sys.stderr)
+    print("ERROR: some gated repos need ToS acceptance. After clicking 'Agree'", file=sys.stderr)
+    print("       on each URL above, re-run this command.", file=sys.stderr)
+    sys.exit(3)
 print("OK: pyannote models pre-fetched into HF cache.")
 PYEOF
 }

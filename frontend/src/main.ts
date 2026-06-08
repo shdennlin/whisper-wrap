@@ -561,7 +561,10 @@ function ensureMeetingHost(): HTMLElement {
   meetingHost = document.createElement("div");
   meetingHost.id = "meeting-view-host";
   meetingHost.hidden = true;
-  document.body.appendChild(meetingHost);
+  // Append inside #app (not body) so the host participates in the
+  // flex/min-height column. Appending to body would put it BELOW the
+  // 100vh #app shell and require the user to scroll past a blank screen.
+  root!.appendChild(meetingHost);
   return meetingHost;
 }
 

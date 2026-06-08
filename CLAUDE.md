@@ -180,8 +180,17 @@ continues unchanged. Key facts a future Claude session needs:
   Speaker-coloured transcript with click-to-seek, speaker-aware
   SRT/VTT/TXT export (`frontend/src/export/speaker-{srt,vtt,txt}.ts`).
 - **Pre-stage models** with `DIARIZE=1 make download-model MODEL=<name>` —
-  fetches both the model variants AND the pyannote diarization +
-  segmentation snapshots into the HF cache.
+  fetches the pyannote `speaker-diarization-3.1`, `segmentation-3.0`, AND
+  `speaker-diarization-community-1` snapshots into the HF cache. The third
+  is a transitive PLDA backend the 3.1 pipeline loads at construction
+  time — missed in Phase 3, surfaced by smoke test, now in the prefetch
+  list. On macOS also pass `ALL=1` so the WhisperX-required CT2 variant
+  comes down alongside the ggml/Core ML one.
+- **All three pyannote repos are gated** — `HF_TOKEN` alone is not enough;
+  the user must click "Agree and access repository" on each model page on
+  huggingface.co before download succeeds. Errors at this stage surface as
+  `GatedRepoError` from the prefetch script (mapped to a friendly message
+  naming the offending URL).
 
 ## Configuration
 

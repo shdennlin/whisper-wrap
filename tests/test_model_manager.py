@@ -609,6 +609,12 @@ def _make_fake_hf_hub(tmp_path: Path) -> Path:
             """
         ).lstrip("\n")
     )
+    # The real huggingface_hub exposes GatedRepoError under .errors; the
+    # prefetch script catches it to map 403s to a friendlier ToS-acceptance
+    # message. The fake stub just needs the symbol to be importable.
+    (pkg_dir / "errors.py").write_text(
+        "class GatedRepoError(Exception):\n    pass\n"
+    )
     return pkg_root
 
 
@@ -648,6 +654,7 @@ def test_download_with_diarization_flag_prefetches_pyannote(tmp_path):
     repos = hf_log.read_text().strip().splitlines()
     assert "pyannote/speaker-diarization-3.1" in repos
     assert "pyannote/segmentation-3.0" in repos
+    assert "pyannote/speaker-diarization-community-1" in repos
 
 
 def test_download_with_diarization_requires_hf_token(tmp_path):

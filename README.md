@@ -240,23 +240,35 @@ if any of them is missing:
    uv sync --extra meeting
    ```
 
-2. **Accept the pyannote user agreements** on Hugging Face for both gated
-   models — diarization will silently 401 otherwise:
+2. **Accept the pyannote user agreements** on Hugging Face for all three
+   gated repos — diarization 403s otherwise:
 
    - https://huggingface.co/pyannote/speaker-diarization-3.1
    - https://huggingface.co/pyannote/segmentation-3.0
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
+
+   The third is a transitive PLDA backend that the 3.1 pipeline downloads
+   at construction time — easy to miss until the first job fails.
 
 3. **Set `HF_TOKEN`** in your `.env` with a token that has read access to
    the accepted models. Without it, `/transcribe/meeting` returns
    `503 {"error": "meeting_unavailable", "reason": "HF_TOKEN is not configured"}`
    and `/status.meeting.hf_token_configured` is `false`.
 
-Pre-stage the pyannote model weights for air-gapped or first-run-latency
-reasons:
+Pre-stage the pyannote model weights AND the CT2 ASR variant for air-gapped
+or first-run-latency reasons:
 
 ```bash
+# Linux (ct2 is already the platform default):
 DIARIZE=1 make download-model MODEL=breeze-asr-25
+
+# macOS — also pass ALL=1 so the WhisperX-required CT2 variant comes down
+# alongside the ggml variant that /transcribe uses for ANE acceleration:
+ALL=1 DIARIZE=1 make download-model MODEL=breeze-asr-25
 ```
+
+If the prefetch fails with `GatedRepoError`, click "Agree" on the
+specific URL the error names and re-run the command — it's idempotent.
 
 ### Usage
 
