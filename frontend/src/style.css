@@ -405,6 +405,163 @@ body { min-height: 100vh; }
   animation: record-spin 0.9s linear infinite;
 }
 
+/* ---- Batch file-upload affordance + confirm view ---- */
+.mode-card .upload-btn {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.3));
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.mode-card .upload-btn:hover {
+  opacity: 1;
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.1);
+}
+.mode-card { position: relative; }
+.mode-card[data-state="recording"] .upload-btn,
+.mode-card[data-state="paused"] .upload-btn,
+.mode-card[data-state="processing"] .upload-btn,
+.mode-card[data-state="confirming"] .upload-btn { display: none; }
+
+.mode-card.drag-over {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.12);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.mode-card[data-state="confirming"] {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.06);
+  cursor: default;
+}
+/* Hide the normal info+controls in confirming state so the confirm-view
+   gets the full row — otherwise the "Batch" label and the meta+actions
+   block compete for horizontal space and the layout breaks. */
+.mode-card[data-state="confirming"] .info,
+.mode-card[data-state="confirming"] .controls { display: none; }
+/* Same hide rule when an upload is mid-flight: the confirm view stays
+   visible (so the user sees filename + duration of what's being processed)
+   and the .info "Batch / Processing…" duplicate is hidden via :has(). */
+.mode-card[data-state="processing"]:has(.confirm-view:not([hidden])) .info,
+.mode-card[data-state="processing"]:has(.confirm-view:not([hidden])) .controls {
+  display: none;
+}
+.mode-card[data-state="confirming"] .icon {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.mode-card .confirm-view[hidden] { display: none; }
+.mode-card .confirm-view {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border-top: none;
+}
+.mode-card .confirm-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.mode-card .confirm-filename {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mode-card .confirm-sep {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.mode-card .confirm-duration {
+  font-size: 0.85rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.mode-card .confirm-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+.mode-card .confirm-actions .btn-primary,
+.mode-card .confirm-actions .btn-secondary {
+  padding: 0.45rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  transition: border-color 120ms ease, background 120ms ease,
+    color 120ms ease, filter 120ms ease;
+}
+.mode-card .confirm-actions .btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.mode-card .confirm-actions .btn-primary:hover {
+  filter: brightness(1.1);
+}
+.mode-card .confirm-actions .btn-secondary:hover {
+  border-color: var(--muted);
+  background: rgba(148, 163, 184, 0.1);
+}
+.mode-card .confirm-actions button:disabled,
+.mode-card .confirm-actions button:disabled:hover {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: none;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--muted);
+}
+.mode-card .confirm-actions .btn-primary:disabled,
+.mode-card .confirm-actions .btn-primary:disabled:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  opacity: 0.55;
+}
+
+/* Narrow viewport: stack actions under the filename so neither truncates
+   awkwardly. The icon stays on the left; meta + actions stack vertically. */
+@media (max-width: 600px) {
+  .mode-card .confirm-view {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .mode-card .confirm-actions { justify-content: flex-end; }
+}
+
 /* ---- WebSocket state indicator (shown only during Live recording) ---- */
 .ws-indicator-host[hidden] { display: none; }
 

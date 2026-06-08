@@ -12,6 +12,7 @@
  */
 
 import { t, type StringKey } from "../i18n";
+import { formatDuration } from "../util/format-duration";
 import { exportSpeakerSrt } from "../export/speaker-srt";
 import { exportSpeakerTxt } from "../export/speaker-txt";
 import { exportSpeakerVtt } from "../export/speaker-vtt";
@@ -1026,18 +1027,6 @@ function formatTime(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60);
   const s = Math.floor(totalSeconds % 60);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-function formatDuration(totalSeconds: number): string {
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  if (totalSeconds < 3600) {
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    return s > 0 ? `${m}m ${s}s` : `${m}m`;
-  }
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 function formatRelativeTime(thenMs: number, nowMs: number): string {

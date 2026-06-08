@@ -54,6 +54,7 @@ import { HistoryPanel } from "./ui/history-panel";
 import { HistoryView, type ActionChoice } from "./ui/history-view";
 import { HistoryResizer } from "./ui/history-resizer";
 import { ModeCard } from "./ui/mode-card";
+import { formatDuration } from "./util/format-duration";
 import { BackendIndicator } from "./ui/backend-indicator";
 import {
   HistoryStore,
@@ -662,6 +663,11 @@ const batchCard = new ModeCard({
   onStop: () => stopRecording().catch(reportError),
   onPauseResume: () => togglePause().catch(reportError),
   onDiscard: () => discardRecording().catch(reportError),
+  acceptUploads: true,
+  onFilePicked: (file) => void onBatchFilePicked(file).catch(reportError),
+  onUnsupportedFile: () => toast(t("modeCard.unsupportedFile")),
+  onConfirmStart: () => void onBatchConfirmStart().catch(reportError),
+  onConfirmChange: () => onBatchConfirmChange(),
 });
 const liveCard = new ModeCard({
   mode: "live",
@@ -1080,6 +1086,87 @@ async function processBatchRecording(
       errorMessage: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+// ---- Batch file-upload flow ------------------------------------------------
+// Lets users transcribe a pre-recorded audio file via the same /transcribe
+// pipeline as mic-recorded clips. File → confirm card → reuse
+// processBatchRecording → history + persistence + retry-on-failure.
+interface PendingBatchFile {
+  file: File;
+  durationMs: number;
+}
+let pendingBatchFile: PendingBatchFile | null = null;
+
+/** Probe an audio file's duration via an off-DOM <audio> element. */
+function readAudioDurationMs(file: File): Promise<number> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const audio = document.createElement("audio");
+    audio.preload = "metadata";
+    const cleanup = () => {
+      audio.removeEventListener("loadedmetadata", onMeta);
+      audio.removeEventListener("error", onError);
+      URL.revokeObjectURL(url);
+    };
+    const onMeta = () => {
+      const ms = Number.isFinite(audio.duration)
+        ? Math.round(audio.duration * 1000)
+        : 0;
+      cleanup();
+      resolve(ms);
+    };
+    const onError = () => {
+      cleanup();
+      resolve(0);
+    };
+    audio.addEventListener("loadedmetadata", onMeta);
+    audio.addEventListener("error", onError);
+    audio.src = url;
+  });
+}
+
+async function onBatchFilePicked(file: File): Promise<void> {
+  currentMode = "batch";
+  saveCaptureMode("batch");
+  hideRetryPrompt();
+  const durationMs = await readAudioDurationMs(file);
+  pendingBatchFile = { file, durationMs };
+  const durationLabel = durationMs > 0
+    ? formatDuration(Math.round(durationMs / 1000))
+    : "—";
+  batchCard.showConfirming(file.name, durationLabel);
+  liveCard.setDisabled(true, t("modeCard.batchUploadPending"));
+}
+
+function onBatchConfirmChange(): void {
+  // Re-open the picker WITHOUT clearing pendingBatchFile or resetting the
+  // card. If the user cancels the OS picker (ESC / close), the confirm
+  // card stays with the previous file. The pending file is only replaced
+  // when `change` fires with a new selection — wired through
+  // onBatchFilePicked which calls showConfirming() again.
+  batchCard.openFilePicker();
+}
+
+async function onBatchConfirmStart(): Promise<void> {
+  if (!pendingBatchFile) return;
+  const { file, durationMs } = pendingBatchFile;
+  pendingBatchFile = null;
+  transcript.clear();
+  // Reset the answer pane the same way startRecording does, so the desktop
+  // layout doesn't hold a stale Q&A response next to a fresh transcript.
+  currentAnswerText = "";
+  answerBody.textContent = t("app.answerPlaceholder");
+  answerCopyBtn.disabled = true;
+  answerHost.hidden = isTouchDevice();
+  recordingStartedAt = Date.now();
+  batchCard.showProcessing();
+  liveCard.setDisabled(true, t("modeCard.processingInProgress"));
+  await processBatchRecording(
+    file,
+    file.type || "application/octet-stream",
+    durationMs,
+  );
 }
 
 /**
