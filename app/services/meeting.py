@@ -478,7 +478,19 @@ class MeetingAnalyzer:
         # int}` directly. We do that here so the diarize stage works
         # regardless of whether torchcodec resolves its dylibs at runtime.
         audio_input = await asyncio.to_thread(_load_wav_for_pyannote, audio_path)
-        return await asyncio.to_thread(self._diarize, audio_input, **kwargs)
+        output = await asyncio.to_thread(self._diarize, audio_input, **kwargs)
+        # Pyannote 3.x speaker-diarization-3.1 pipeline returns a
+        # `DiarizeOutput` (or directly an `Annotation` for community-1).
+        # WhisperX's `assign_word_speakers` downstream expects a pandas
+        # DataFrame with columns [segment, label, speaker, start, end] —
+        # that conversion normally lives inside
+        # `whisperx.DiarizationPipeline.__call__`, which we bypass to get
+        # MPS support and avoid the torchcodec audio-decoding path.
+        # Replicate the conversion here so the rest of WhisperX's API
+        # works unchanged. The lambda extractor handles both shapes:
+        # `DiarizeOutput` has `.speaker_diarization`; raw `Annotation`
+        # already IS the diarization.
+        return await asyncio.to_thread(_pyannote_output_to_df, output)
 
     def _merge(
         self,
@@ -531,6 +543,38 @@ class MeetingAnalyzer:
 def _report(cb: ProgressCallback | None, stage: str, progress: float) -> None:
     if cb is not None:
         cb(stage, progress)
+
+
+def _pyannote_output_to_df(output: Any) -> Any:
+    """Convert pyannote's diarize output into the pandas DataFrame shape
+    that `whisperx.assign_word_speakers` expects.
+
+    Replicates the conversion that lives inside WhisperX's wrapper
+    `DiarizationPipeline.__call__`, which we bypass so we can call
+    pyannote directly with the pre-decoded waveform dict (the
+    torchcodec workaround) and route to MPS.
+
+    Handles two output shapes:
+      - `DiarizeOutput` (pyannote 3.1 speaker-diarization-3.1) —
+        carries `.speaker_diarization` (an `Annotation`).
+      - `Annotation` itself (community-1 or older pipelines).
+
+    The downstream consumer
+    (`whisperx.diarize.assign_word_speakers`) uses `len()` on the
+    DataFrame as an empty-check, so returning anything that isn't a
+    DataFrame crashes with `TypeError: object of type 'DiarizeOutput'
+    has no len()`.
+    """
+    import pandas as pd
+
+    diarization = getattr(output, "speaker_diarization", output)
+    df = pd.DataFrame(
+        diarization.itertracks(yield_label=True),
+        columns=["segment", "label", "speaker"],
+    )
+    df["start"] = df["segment"].apply(lambda x: x.start)
+    df["end"] = df["segment"].apply(lambda x: x.end)
+    return df
 
 
 def _load_wav_for_pyannote(path: Any) -> dict[str, Any]:

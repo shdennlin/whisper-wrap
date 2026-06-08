@@ -97,6 +97,16 @@ async def test_first_analyze_loads_models_second_call_reuses_them(monkeypatch):
     fake_wx.assign_word_speakers = fake_assign_word_speakers
     monkeypatch.setitem(sys.modules, "whisperx", fake_wx)
 
+    class _FakeDiarization:
+        # _pyannote_output_to_df calls .itertracks(yield_label=True) on
+        # `output.speaker_diarization`; return an empty iterator so the
+        # downstream DataFrame is well-formed but carries no segments.
+        def itertracks(self, yield_label=False):
+            return iter([])
+
+    class _FakeDiarizeOutput:
+        speaker_diarization = _FakeDiarization()
+
     class _FakePipeline:
         @classmethod
         def from_pretrained(cls, _name, token=None):
@@ -105,7 +115,7 @@ async def test_first_analyze_loads_models_second_call_reuses_them(monkeypatch):
             return cls()
 
         def __call__(self, _audio_path, **_kwargs):
-            return object()
+            return _FakeDiarizeOutput()
 
     fake_pa_audio = types.ModuleType("pyannote.audio")
     fake_pa_audio.Pipeline = _FakePipeline

@@ -113,6 +113,49 @@ async def test_analyzer_runs_pipeline_on_fixture(monkeypatch):
     assert result.segments[0].speaker != result.segments[1].speaker
 
 
+def test_pyannote_output_converted_to_dataframe():
+    """`_pyannote_output_to_df` SHALL produce the DataFrame shape that
+    WhisperX's `assign_word_speakers` consumes. Without it, the merge
+    stage crashes with `TypeError: object of type 'DiarizeOutput' has
+    no len()` — the regression that surfaced once Fast mode reached
+    the merge stage (no path had previously gotten that far on a real
+    long file)."""
+    import pandas as pd
+
+    from app.services.meeting import _pyannote_output_to_df
+
+    # Stand-in for a pyannote Annotation: only needs `itertracks`. The
+    # tuple shape `(segment, label, speaker)` matches what pyannote
+    # actually yields when `yield_label=True`.
+    class _Segment:
+        def __init__(self, start: float, end: float) -> None:
+            self.start = start
+            self.end = end
+
+    class _FakeAnnotation:
+        def itertracks(self, yield_label: bool = False):
+            assert yield_label is True
+            yield (_Segment(0.0, 1.5), "track_0", "SPEAKER_00")
+            yield (_Segment(1.5, 3.2), "track_1", "SPEAKER_01")
+
+    # Path 1: DiarizeOutput-style wrapper with `.speaker_diarization`.
+    class _DiarizeOutput:
+        speaker_diarization = _FakeAnnotation()
+
+    df = _pyannote_output_to_df(_DiarizeOutput())
+    assert isinstance(df, pd.DataFrame)
+    assert list(df.columns) == ["segment", "label", "speaker", "start", "end"]
+    assert len(df) == 2
+    assert df["speaker"].tolist() == ["SPEAKER_00", "SPEAKER_01"]
+    assert df["start"].tolist() == [0.0, 1.5]
+    assert df["end"].tolist() == [1.5, 3.2]
+
+    # Path 2: bare Annotation (community-1 / older pipelines).
+    df2 = _pyannote_output_to_df(_FakeAnnotation())
+    assert isinstance(df2, pd.DataFrame)
+    assert len(df2) == 2
+
+
 def test_load_wav_for_pyannote_accepts_path_objects():
     """`_load_wav_for_pyannote` SHALL accept both `str` and `Path`. The
     upload path in `app/api/meeting.py` carries `Path` objects through
@@ -167,7 +210,19 @@ async def test_diarize_passes_pre_decoded_dict_to_pyannote(monkeypatch):
     def fake_pipeline_call(audio_input, **kwargs):
         received_args["audio_input"] = audio_input
         received_args["kwargs"] = kwargs
-        return object()
+        # Return a stand-in DiarizeOutput so _pyannote_output_to_df can
+        # extract `.speaker_diarization` without exploding. The conversion
+        # is exercised separately by
+        # `test_pyannote_output_converted_to_dataframe`; here we only
+        # care about what was passed IN to the pipeline.
+        class _EmptyDiarization:
+            def itertracks(self, yield_label=False):
+                return iter([])
+
+        class _Out:
+            speaker_diarization = _EmptyDiarization()
+
+        return _Out()
 
     analyzer._diarize = fake_pipeline_call
 
