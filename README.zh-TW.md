@@ -63,6 +63,8 @@ curl -X POST http://localhost:8000/transcribe \
 - **`/listen` WebSocket**：即時字幕 — 輸入 16 kHz mono `pcm_s16le` 音框，輸出帶 timestamp 的 `partial`/`final` 事件。v2.1 新增 partial-consensus filter（簡化版 LocalAgreement-2），讓 `partial` 文字不再於每次推論間反覆抖動。v2.2 將原本的 RMS-energy VAD 換成 [silero-vad](https://github.com/snakers4/silero-vad)（neural，並保留 RMS fallback），讓 utterance 端點偵測在環境噪音與小聲說話下都更穩定。
 - **豐富的 `/status`**：載入的模型細節、runtime device、compute type、Gemini 設定、uptime — 對於一眼分辨 Mac mini 與 GPU 部署非常實用。
 - **支援 variants 的模型 registry**（v2.1）：`registry/models.yaml` 提供 `breeze-asr-25`，同時包含 `ct2` 與 `ggml` 兩種 variant（`q6_k` quantisation + 內附的 `.mlmodelc` Core ML encoder），另有 `large-v3-turbo` 作為多語 fallback。`make download-model MODEL=<name>` 只會抓取本機平台會載入的 variant；加 `ALL=1` 才會抓全部。
+- **Meeting Mode**（v2.5）：長音檔上傳 → 透過 WhisperX + pyannote 產生帶 speaker 標記、word-level timestamp 的逐字稿。可選的 `?fast=true` 會改用 `/transcribe` 的 ggml+ANE backend 做 ASR（跳過 WhisperX 的 CT2），在 macOS 上把 wall-clock 砍掉 **約 3×**，同時保留 diarization。結果會持久化到以 SQLite 為底的 `/v1/meetings` API，並可選擇連同原始音檔一起儲存，讓 PWA 的歷史側欄在重啟後依然存在、且能跨裝置存取。
+- **PWA Batch 檔案上傳**：在 Batch 卡片上拖放或挑選現有音檔，不必重新錄音 — 走同一套 `/transcribe` pipeline，不需要第二個 endpoint。
 - **iOS Shortcuts 開箱即用**：附帶的捷徑可一鍵語音轉寫。
 
 ## 🏗️ 架構
@@ -143,10 +145,15 @@ open-webui 的 Docker 設定請參閱 [`docs/INSTALLATION.zh-TW.md`](docs/INSTAL
 
 whisper-wrap 內附一個用 Vite 建置、可安裝的 Progressive Web App，掛載在 `/app/`。它會擷取瀏覽器麥克風、把 16 kHz PCM 串流送到 `WS /listen`、即時把 partial 轉成 final 字幕渲染出來、把最近 20 個 session 保存在 `localStorage`，並且讓你能透過 `POST /ask` 對 transcript 執行預先定義好的 Action 範本（定義於 `registry/actions.yaml`，透過 `GET /actions` 對外）。
 
+Batch 擷取卡片同時也接受**檔案上傳** — 點 📁 或把音檔拖進去，就能轉寫既有的錄音，而不必重新錄一段。走同一套 `/transcribe` pipeline，不需要第二個 endpoint。
+
+另有一個獨立的 **Meeting Mode** 頁面，位於 `/app/#/meeting`（長音檔 diarization 工作流程、chat/detail 檢視切換與 AI Enhance，詳見下方 [Meeting Mode](#-meeting-mode) 章節）。
+
 | Method | Path | 說明 |
 | ------ | ---- | --- |
-| GET    | `/app/`    | PWA 即時字幕 client（用瀏覽器開啟、可加入主畫面安裝） |
-| GET    | `/actions` | Action 範本 registry（由 PWA 的 chip bar 使用） |
+| GET    | `/app/`          | PWA 即時字幕 client（Live、Batch、Meeting 三種模式） |
+| GET    | `/app/#/meeting` | Meeting Mode 頁面（diarization、AI Enhance、歷史側欄） |
+| GET    | `/actions`       | Action 範本 registry（由 chip bar 使用） |
 
 ```bash
 make build-frontend     # 一次性：產生 app/static/app/
@@ -197,6 +204,149 @@ make set-model MODEL=breeze-asr-25
 # 從磁碟刪除某模型的所有變體目錄
 make delete-model MODEL=large-v3-turbo
 ```
+
+## 🎙️ Meeting Mode
+
+`POST /transcribe/meeting` 是一個需自行啟用（opt-in）的長音檔 endpoint，結合了
+Whisper ASR、用來取得 word-level timestamp 的 forced phoneme alignment，以及
+[pyannote.audio](https://github.com/pyannote/pyannote-audio) 的 speaker
+diarization（透過 [WhisperX](https://github.com/m-bain/whisperX)）。它會在第一次
+請求時 lazy load，且完全不影響其他 endpoint（`/transcribe`、`/listen`、`/ask`、
+`/v1/*`）。
+
+### 安裝
+
+三個前置條件 — 任一缺少時，endpoint 會回傳 HTTP 503 並附上清楚的 `reason`：
+
+1. **安裝可選的 extras**（約 1.5 GB：whisperx + pyannote.audio + torch）：
+
+   ```bash
+   uv sync --extra meeting
+   ```
+
+2. **在 Hugging Face 上同意 pyannote 的使用者授權**，三個 gated repo 都要 —
+   否則 diarization 會 403：
+
+   - https://huggingface.co/pyannote/speaker-diarization-3.1
+   - https://huggingface.co/pyannote/segmentation-3.0
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
+
+   第三個是 3.1 pipeline 在建構時會抓下來的 transitive PLDA backend — 很容易漏掉，
+   直到第一個 job 失敗才會發現。
+
+3. **在 `.env` 設定 `HF_TOKEN`**，token 需具備上述已同意模型的讀取權限。沒有它時，
+   `/transcribe/meeting` 會回傳
+   `503 {"error": "meeting_unavailable", "reason": "HF_TOKEN is not configured"}`，
+   且 `/status.meeting.hf_token_configured` 為 `false`。
+
+若想為了 air-gapped 環境或避免首次請求的延遲，預先下載 pyannote 權重「以及」CT2 ASR
+variant：
+
+```bash
+# Linux（ct2 本來就是平台預設）：
+DIARIZE=1 make download-model MODEL=breeze-asr-25
+
+# macOS — 額外加上 ALL=1，讓 WhisperX 必需的 CT2 variant 連同
+# /transcribe 用來做 ANE 加速的 ggml variant 一起下載：
+ALL=1 DIARIZE=1 make download-model MODEL=breeze-asr-25
+```
+
+如果預抓過程出現 `GatedRepoError`，到錯誤訊息指名的那個 URL 點「Agree」，再重跑指令即可
+— 這個指令是 idempotent 的。
+
+### 使用方式
+
+```bash
+# 上傳一場會議 → 回傳一個 job handle。
+# ?fast=true     改用 /transcribe 的平台預設 backend 做 ASR
+#                （macOS 上是 ggml+ANE、Linux 上是 ct2+CUDA），接著把
+#                segments 交給 WhisperX align + pyannote diarize 在 MPS 上跑。
+#                在 Apple Silicon 上約快 3×。除非你需要 WhisperX CT2 路徑的
+#                word-level alignment 精度，否則建議使用。
+# ?filename=...  會顯示為 PWA 歷史側欄裡的會議標題。
+curl -s -X POST "http://localhost:8000/transcribe/meeting?fast=true&filename=Q3-review.m4a" \
+  -H "Content-Type: audio/wav" \
+  --data-binary @meeting.wav
+# → {"job_id":"01JFA…","status_url":"/transcribe/meeting/01JFA…"}
+
+# 輪詢直到 status == "done"
+curl -s http://localhost:8000/transcribe/meeting/01JFA…
+# → {"status":"done","progress":1.0,"stage":"complete",
+#    "result":{"language":"zh","duration_seconds":1823.4,
+#              "speakers":["SPEAKER_00","SPEAKER_01"],
+#              "segments":[{"speaker":"SPEAKER_00",
+#                           "start":0.52,"end":4.18,
+#                           "text":"今天會議的主題是…","words":[…]},…]}}
+
+# 取消執行中的 job（best-effort，於 stage 邊界生效）。
+curl -s -X DELETE http://localhost:8000/transcribe/meeting/01JFA…
+```
+
+PWA 的 Meeting Mode 頁面（`/app/#/meeting`）把同一套工作流程包成：
+**chat / detail 檢視模式切換**、**hover ✏️ 重新命名 speaker**、
+**點擊跳轉（click-to-seek）音檔播放**、**AI Enhance**（重用主頁面的
+`registry/actions.yaml` chips — `Meeting notes` 會產生結構化摘要）、
+speaker-aware 的 **SRT / VTT / TXT (chat) / TXT (script) / JSON** 匯出、
+可編輯的**會議筆記標題**，以及一個持久化的歷史側欄。
+
+### 持久化歷史與跨裝置重播
+
+會議分析結果（若有上傳，連同原始音檔）會持久化到既有的 SQLite 歷史 DB，因此 PWA
+側欄能在記憶體 job-store TTL（預設 1 小時）過期、伺服器重啟、以及從同一台伺服器的
+另一裝置存取時都依然存在。
+
+| Method | Path | 說明 |
+| - | - | - |
+| GET | `/v1/meetings` | 分頁列表（`limit`、`before_ms`）。 |
+| GET | `/v1/meetings/{id}` | 單筆分析，含完整 result + speaker_names。 |
+| POST | `/v1/meetings` | 建立（由 worker 自動持久化 + PWA 舊版 localStorage 遷移使用）。 |
+| PATCH | `/v1/meetings/{id}` | 更新 `speaker_names` 與／或 `filename`。 |
+| DELETE | `/v1/meetings/{id}` | 移除該筆紀錄「並」一併刪除音檔 sidecar。 |
+| POST | `/v1/meetings/{id}/audio` | 以 sidecar 形式上傳原始音檔（multipart `file`）。 |
+| GET | `/v1/meetings/{id}/audio` | 把音檔串流回來（`X-Content-Type-Options: nosniff`；MIME allowlist）。 |
+
+### 效能
+
+會議分析會跑三個階段 — ASR + wav2vec2 align + pyannote diarize。CTranslate2 沒有
+Core ML/ANE backend，所以 slow-path 的 ASR 在 macOS 上只能留在 CPU；torch-native 的
+align + diarize 階段「可以」吃 MPS，在 Apple Silicon 上能把這兩個階段的耗時砍掉 4-8×。
+
+有兩條 ASR 路徑 — 在請求時透過 `?fast=true` 選擇：
+
+| 路徑 | ASR backend | macOS Apple Silicon | 失去什麼 |
+| - | - | - | - |
+| **Fast（`?fast=true`）** | ggml + Core ML + ANE（同 `/transcribe`） | 1 小時會議 **約 3-5 分鐘** | 沒有 — diarize + align 照常執行 |
+| Slow（`?fast=false`，預設） | WhisperX CT2 在 CPU 上 batched | 1 小時會議約 10-20 分鐘 | — |
+| Linux + NVIDIA GPU | WhisperX CT2 在 CUDA 上 | 1 小時會議約 1-3 分鐘 | — |
+
+在 macOS 上，Fast mode 是 PWA 的預設（可切換）。它在 Linux 上也能用 — 那邊會走
+`/transcribe` 本來就在用的路徑（有 CUDA 就 ct2+CUDA，否則 ct2+CPU，等同 slow path）。
+
+在 slow-path 的 macOS wall-clock 裡，ASR 佔大宗（約總時間的 70%）；fast mode 把這 70%
+壓縮成 `/transcribe` 處理同一段音檔所需的時間（M 系列透過 ANE 約 10× real-time），只留下
+約 2-5 分鐘的 align+diarize 尾段。
+
+兩個可調參數（都在 `.env`，都有合理預設 — 只在 debug 效能時才需要動）：
+
+```env
+MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size；16-64（僅 slow path）
+MEETING_TORCH_DEVICE=auto    # auto | mps | cuda | cpu（align + diarize）
+```
+
+`MEETING_TORCH_DEVICE=auto` 會在 macOS 選 MPS、Linux 選 CUDA、其他情況選 CPU。強制指定
+一個不可用的 device 時會寫一筆 WARN 並 fallback 到 CPU — 就算環境變數設錯，endpoint 仍可用。
+
+伺服器啟動後的第一個請求，會額外花約 20-40 秒把 WhisperX 與 pyannote 模型載入記憶體；
+後續的 job 會重用已在記憶體中的 pipeline。
+
+### 準確度說明
+
+- Diarization 品質在**語音重疊（overlapping speech）時會下降** — 大量交談重疊的段落可能
+  被收斂成單一 speaker，或把同一個 speaker 拆成多個標籤。
+- Pyannote 大約需要**每位 speaker 約 20 秒的語音**才能產生穩定的分離；很短的發話（單句）
+  常會被併入鄰近的 speaker。
+- 當事先就知道與會人數時，可在請求帶上 `num_speakers` 作為品質槓桿 — 它會約束 clustering
+  階段，對 2-4 人的會議通常能明顯改善分離效果。
 
 ## ⚙️ 設定
 

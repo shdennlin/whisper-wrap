@@ -405,6 +405,163 @@ body { min-height: 100vh; }
   animation: record-spin 0.9s linear infinite;
 }
 
+/* ---- Batch file-upload affordance + confirm view ---- */
+.mode-card .upload-btn {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.3));
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+.mode-card .upload-btn:hover {
+  opacity: 1;
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.1);
+}
+.mode-card { position: relative; }
+.mode-card[data-state="recording"] .upload-btn,
+.mode-card[data-state="paused"] .upload-btn,
+.mode-card[data-state="processing"] .upload-btn,
+.mode-card[data-state="confirming"] .upload-btn { display: none; }
+
+.mode-card.drag-over {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.12);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.mode-card[data-state="confirming"] {
+  border-color: var(--accent);
+  background: rgba(96, 165, 250, 0.06);
+  cursor: default;
+}
+/* Hide the normal info+controls in confirming state so the confirm-view
+   gets the full row — otherwise the "Batch" label and the meta+actions
+   block compete for horizontal space and the layout breaks. */
+.mode-card[data-state="confirming"] .info,
+.mode-card[data-state="confirming"] .controls { display: none; }
+/* Same hide rule when an upload is mid-flight: the confirm view stays
+   visible (so the user sees filename + duration of what's being processed)
+   and the .info "Batch / Processing…" duplicate is hidden via :has(). */
+.mode-card[data-state="processing"]:has(.confirm-view:not([hidden])) .info,
+.mode-card[data-state="processing"]:has(.confirm-view:not([hidden])) .controls {
+  display: none;
+}
+.mode-card[data-state="confirming"] .icon {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.mode-card .confirm-view[hidden] { display: none; }
+.mode-card .confirm-view {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border-top: none;
+}
+.mode-card .confirm-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.mode-card .confirm-filename {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.mode-card .confirm-sep {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.mode-card .confirm-duration {
+  font-size: 0.85rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.mode-card .confirm-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+.mode-card .confirm-actions .btn-primary,
+.mode-card .confirm-actions .btn-secondary {
+  padding: 0.45rem 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  transition: border-color 120ms ease, background 120ms ease,
+    color 120ms ease, filter 120ms ease;
+}
+.mode-card .confirm-actions .btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.mode-card .confirm-actions .btn-primary:hover {
+  filter: brightness(1.1);
+}
+.mode-card .confirm-actions .btn-secondary:hover {
+  border-color: var(--muted);
+  background: rgba(148, 163, 184, 0.1);
+}
+.mode-card .confirm-actions button:disabled,
+.mode-card .confirm-actions button:disabled:hover {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: none;
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--muted);
+}
+.mode-card .confirm-actions .btn-primary:disabled,
+.mode-card .confirm-actions .btn-primary:disabled:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  opacity: 0.55;
+}
+
+/* Narrow viewport: stack actions under the filename so neither truncates
+   awkwardly. The icon stays on the left; meta + actions stack vertically. */
+@media (max-width: 600px) {
+  .mode-card .confirm-view {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .mode-card .confirm-actions { justify-content: flex-end; }
+}
+
 /* ---- WebSocket state indicator (shown only during Live recording) ---- */
 .ws-indicator-host[hidden] { display: none; }
 
@@ -965,4 +1122,895 @@ body { min-height: 100vh; }
   align-self: flex-start; margin: 0.5rem; padding: 0.25rem 0.6rem;
   font-size: 0.85rem; border: 1px solid var(--border); border-radius: 4px;
   background: transparent; color: inherit; cursor: pointer;
+}
+
+/* ============================================================================
+   Meeting Mode — view-tabs (header) + page (#meeting-view-host)
+   ============================================================================ */
+
+/* Segmented control in the header. Switches between recording shell (#) and
+   meeting mode (#/meeting). Visual: pill-shaped button group sharing a
+   single rounded outline; the active tab paints with --accent. */
+.view-tabs {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 2px;
+  gap: 2px;
+}
+.view-tabs button {
+  /* Override the shared .app-header button shape so the segmented look
+     stays tight — no per-pill border, smaller padding, rounded ends only
+     when active. */
+  border: none !important;
+  background: transparent;
+  padding: 0.3rem 0.85rem !important;
+  border-radius: 9999px;
+  font-size: 0.8rem !important;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.view-tabs button:hover {
+  color: var(--fg) !important;
+  background: transparent !important;
+}
+.view-tabs button[aria-current="page"] {
+  background: var(--accent);
+  color: var(--surface) !important;
+}
+.view-tabs button[aria-current="page"]:hover {
+  background: var(--accent) !important;
+  color: var(--surface) !important;
+}
+.view-tab-icon {
+  margin-right: 0.3rem;
+}
+
+@media (max-width: 720px) {
+  /* Mobile: drop the label, keep the icon — saves header width without
+     hiding the tab system entirely. */
+  .view-tabs button .view-tab-text { display: none; }
+  .view-tab-icon { margin-right: 0; }
+}
+
+/* Meeting host: the page lives inside #app (not body) so it inherits the
+   flex column and min-height: 100vh. Hidden via [hidden] when off-route. */
+#meeting-view-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#meeting-view-host[hidden] { display: none; }
+
+.meeting-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1.25rem;
+  width: 100%;
+  margin: 0 auto;
+  max-width: 1280px;
+}
+
+.meeting-layout {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 1.25rem;
+  align-items: start;
+}
+.meeting-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  /* Stack sidebar below the main column on narrower viewports. */
+  .meeting-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.meeting-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.meeting-header-title {
+  flex: 1;
+  min-width: 0;
+}
+.meeting-header h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.25rem 0;
+  font-weight: 600;
+}
+.meeting-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.meeting-header .meeting-new-analysis {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.meeting-header .meeting-new-analysis:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.meeting-header .meeting-new-analysis[hidden] { display: none; }
+
+/* Meeting-note title row — shows the current entry's filename with a
+   hover ✏️ for rename. Sits below the page title/subtitle and only
+   when a result is loaded. */
+.meeting-note-title {
+  margin-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--fg);
+  min-width: 0;
+}
+.meeting-note-title[hidden] { display: none; }
+.meeting-note-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.meeting-note-title-edit {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.meeting-note-title:hover .meeting-note-title-edit,
+.meeting-note-title:focus-within .meeting-note-title-edit {
+  opacity: 0.7;
+}
+.meeting-note-title-edit:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Yellow warning callout shown when the meeting endpoint isn't available
+   (extras missing / HF_TOKEN unset / ct2 variant not downloaded). */
+.meeting-unavailable {
+  background: color-mix(in srgb, var(--yellow) 12%, var(--surface));
+  border: 1px solid var(--yellow);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: var(--fg);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+/* Drop-zone style upload card. The native <input type="file"> is visually
+   hidden but kept inside the <label> so click-to-pick still works and
+   accessibility tools still find it. Drag-and-drop adds .is-dragging. */
+.meeting-upload {
+  margin: 0;
+}
+.upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem 1rem;
+  background: var(--surface);
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  text-align: center;
+}
+.upload-zone:hover,
+.upload-zone.is-dragging {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.upload-zone.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.upload-zone input[type="file"] {
+  /* Visually hidden but still focusable + clickable through the wrapping
+     <label>. position:absolute + opacity:0 keeps it out of layout flow. */
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+.upload-icon {
+  width: 36px;
+  height: 36px;
+  color: var(--accent);
+}
+.upload-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.upload-hint {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.meeting-audio {
+  width: 100%;
+}
+.meeting-audio:not([src]) {
+  /* Hide the empty player until a file has been picked — an empty
+     <audio controls> with no src renders as a grey strip that adds visual
+     noise to the initial "upload prompt" state. */
+  display: none;
+}
+
+/* Confirm card shown after file pick. Two-column layout (info | actions)
+   that collapses to one column on narrow viewports. */
+.meeting-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.meeting-confirm[hidden] { display: none; }
+.confirm-info { min-width: 0; flex: 1; }
+.confirm-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+  word-break: break-all;
+}
+.confirm-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+.confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* Confirm options grid: speakers + language + word-ts toggle. Stacks on
+   narrow viewports, falls into a row on desktop. */
+.confirm-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.5rem 0.85rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.confirm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+}
+.confirm-field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  align-self: end;
+}
+.confirm-field-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.confirm-select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.confirm-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.meeting-confirm {
+  flex-direction: column;
+  align-items: stretch;
+}
+.meeting-confirm > .confirm-actions {
+  margin-top: 0.75rem;
+  justify-content: flex-end;
+}
+
+/* Primary / secondary / danger button shapes shared across confirm + reset +
+   stop. Stays consistent with the .app-header button family. */
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:disabled {
+  background: var(--border);
+  border-color: var(--border);
+  cursor: not-allowed;
+}
+.btn-secondary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn-danger {
+  border-color: var(--red);
+  color: var(--red);
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--red) 10%, var(--surface));
+}
+
+@media (max-width: 540px) {
+  .meeting-confirm { flex-direction: column; align-items: stretch; }
+  .confirm-actions { width: 100%; }
+  .confirm-actions button { flex: 1; }
+}
+
+/* Stop button row: shown only during pipeline run. */
+.meeting-stop-row {
+  display: flex;
+  justify-content: flex-end;
+}
+.meeting-stop-row[hidden] { display: none; }
+
+/* 4-step stepper: Upload → Transcribe → Align → Diarize.
+   States via [data-state] on each .step: pending (default), active (current),
+   complete (✓). Connectors paint between consecutive steps. */
+.meeting-stepper {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 0.5rem;
+  position: relative;
+}
+.meeting-stepper[hidden] { display: none; }
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  position: relative;
+  z-index: 1;
+}
+.step-marker {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  color: var(--muted);
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.step[data-state="active"] .step-marker {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+  /* Pulse to make "running, please wait" obvious. */
+  animation: stepper-pulse 1.6s ease-in-out infinite;
+}
+.step[data-state="complete"] .step-marker {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--surface);
+}
+@keyframes stepper-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  50%      { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+.step-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  font-weight: 500;
+}
+.step[data-state="active"] .step-label,
+.step[data-state="complete"] .step-label {
+  color: var(--fg);
+}
+.step-hint {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-align: center;
+  min-height: 1em;
+}
+/* Per-stage progress bar — narrow + only visible on active/complete steps. */
+.step-bar {
+  width: 70%;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 0.2rem 0 0 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.step[data-state="active"] .step-bar,
+.step[data-state="complete"] .step-bar { opacity: 1; }
+.step-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.step[data-state="complete"] .step-bar-fill { background: var(--green); }
+/* Spinner marker SVG inherits currentColor from the marker's color. */
+.step[data-state="active"] .step-marker svg { color: var(--surface); }
+/* Connectors: render as ::after on the marker, drawn to the next sibling's
+   marker. Painted green when both endpoints are complete; accent when the
+   current step is active; faint border otherwise. */
+.step:not(:last-child) .step-marker::after {
+  content: "";
+  position: absolute;
+  /* The ::after is on `.step-marker`, but `.step-marker` has no
+     `position: relative`, so `position: absolute` resolves against the
+     nearest positioned ancestor — `.step` (a flex-column with marker +
+     label + hint + bar). That means `top: 50%` would land at the
+     vertical middle of the FULL step (right at the label), not at the
+     middle of the marker. Use a fixed value tied to half the marker
+     height (28px / 2 = 14px) so the connector always sits at the
+     marker's centerline regardless of how tall the label area grows. */
+  top: 14px;
+  left: calc(50% + 18px);
+  right: calc(-50% + 18px);
+  height: 2px;
+  background: var(--border);
+  z-index: -1;
+  transition: background 0.2s ease;
+}
+.step[data-state="complete"]:not(:last-child) .step-marker::after {
+  background: var(--green);
+}
+.step[data-state="active"]:not(:last-child) .step-marker::after {
+  background: linear-gradient(to right,
+    var(--green) 0%,
+    var(--green) 50%,
+    var(--border) 50%,
+    var(--border) 100%);
+}
+
+@media (max-width: 540px) {
+  /* Mobile: stack vertically so labels fit. */
+  .meeting-stepper {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+  .step {
+    flex-direction: row;
+    justify-content: flex-start;
+    text-align: left;
+    gap: 0.75rem;
+  }
+  .step-label, .step-hint { text-align: left; }
+  .step:not(:last-child) .step-marker::after {
+    /* Vertical connector on mobile. */
+    top: calc(50% + 18px);
+    left: 50%;
+    right: auto;
+    bottom: calc(-50% + 18px);
+    width: 2px;
+    height: auto;
+    transform: translateX(-50%);
+  }
+  .step[data-state="active"]:not(:last-child) .step-marker::after {
+    background: linear-gradient(to bottom,
+      var(--green) 0%, var(--green) 50%,
+      var(--border) 50%, var(--border) 100%);
+  }
+}
+
+/* Red error callout for pipeline failures. */
+.meeting-error {
+  background: color-mix(in srgb, var(--red) 12%, var(--surface));
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: var(--fg);
+  font-size: 0.875rem;
+}
+
+/* Transcript: vertical stack of speaker-coloured cards. Each segment is a
+   button so the whole card is the click-to-seek target. */
+/* Transcript header — view-mode toggle sits above the scroll
+   container so it stays in place when the user scrolls a long
+   meeting. Segmented control: Chat | Detail. */
+.transcript-header {
+  display: flex;
+  align-items: center;
+  /* Only the view toggle lives here now — "Analyze another file"
+     moved to the page header so it stays discoverable when scrolling
+     a long transcript. */
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+.transcript-header[hidden] { display: none; }
+.transcript-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.transcript-view-toggle .view-toggle-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0.32rem 0.85rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.transcript-view-toggle .view-toggle-btn:hover {
+  color: var(--fg);
+}
+.transcript-view-toggle .view-toggle-btn[data-active="true"] {
+  background: var(--accent);
+  color: white;
+}
+
+/* Bounded scroll container — keeps the rest of the page reachable
+   even for 2h meetings (which produce hundreds of segments). 60vh is
+   tall enough to feel substantive but leaves room above for header
+   and below for exports + AI panel without dropping anything off the
+   fold on a 13" laptop. */
+.meeting-transcript-scroll {
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem;
+  background: var(--bg);
+  scroll-behavior: smooth;
+}
+.meeting-transcript-scroll[hidden] { display: none; }
+
+.meeting-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.transcript-segment {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.6rem;
+  align-items: start;
+  padding: 0.45rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  border-left-width: 4px; /* Set inline via JS to speaker colour. */
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.transcript-segment:hover {
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+.transcript-segment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.segment-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.12rem 0.45rem;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+/* Edit pencil icon — visible on hover/focus of the parent segment, lets
+   the user rename a speaker. Hidden by default so the chip stays clean. */
+.segment-meta-edit {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  cursor: pointer;
+  padding: 0.05rem;
+  border-radius: 50%;
+}
+.transcript-segment:hover .segment-meta-edit,
+.transcript-segment:focus-within .segment-meta-edit {
+  opacity: 0.7;
+}
+.segment-meta-edit:hover {
+  opacity: 1 !important;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.segment-meta-edit svg { width: 12px; height: 12px; }
+.segment-text {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--fg);
+  word-break: break-word;
+}
+
+/* Chat-mode bubbles — one per collapsed turn (consecutive same-
+   speaker segments merged). Visually distinguished from Detail by:
+   thinner left border (3px vs 4px), no card background, head row
+   above text, speaker name takes its color from the speaker palette.
+   Hover ✏️ reuses the .segment-meta-edit class so the pencil pattern
+   stays in one place. */
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.35rem 0.55rem 0.4rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-left: 3px solid var(--turn-speaker-color, var(--border));
+  border-radius: 4px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition: background 0.12s ease;
+}
+.chat-turn:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.chat-turn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.chat-turn-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+.chat-turn-name {
+  font-weight: 600;
+  color: var(--turn-speaker-color);
+  letter-spacing: 0.01em;
+}
+.chat-turn-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
+.chat-turn-text {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--fg);
+  word-break: break-word;
+}
+.chat-turn:hover .segment-meta-edit,
+.chat-turn:focus-within .segment-meta-edit {
+  opacity: 0.7;
+}
+
+/* Meeting Mode AI Enhance panel — chip bar above, answer pane below.
+   The answer-pane / answer-body / is-loading classes are reused from
+   the main page (defined elsewhere in this file); we only add the
+   Meeting-specific section spacing here. */
+.meeting-ai {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.meeting-ai[hidden] { display: none; }
+.meeting-ai-title {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.meeting-ai-actions {
+  margin-bottom: 0.75rem;
+}
+.meeting-ai-answer { margin-top: 0.5rem; }
+.meeting-ai-answer[hidden] { display: none; }
+
+/* Export button group: filled primary "download" buttons. */
+.meeting-exports {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.meeting-exports[hidden] { display: none; }
+.meeting-exports button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.meeting-exports button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Recent analyses sidebar (right column on desktop, stacked below main on
+   narrow viewports). localStorage-backed; entries clickable to re-fetch
+   server-side result. */
+.meeting-sidebar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  position: sticky;
+  top: 1rem;
+}
+.sidebar-header h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sidebar-empty {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0;
+}
+.sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.sidebar-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+.sidebar-item-btn {
+  flex: 1;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  min-width: 0; /* let the flex item shrink so ellipsis kicks in */
+}
+.sidebar-item-btn:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+/* × delete affordance — opaque on hover/focus, faint when idle so the
+   row stays clean. Sized to be tappable on mobile (32×32). */
+.sidebar-item-delete {
+  flex-shrink: 0;
+  width: 32px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease,
+    border-color 120ms ease;
+}
+.sidebar-item:hover .sidebar-item-delete,
+.sidebar-item:focus-within .sidebar-item-delete {
+  opacity: 0.6;
+}
+.sidebar-item-delete:hover {
+  opacity: 1;
+  color: var(--red);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+/* Two-step confirm — after first click the button shows "Confirm?"
+   for 3 s. Solid red + always-visible so the user knows the next
+   click commits the delete. */
+.sidebar-item-delete.is-confirming,
+.sidebar-item-delete.is-confirming:hover {
+  opacity: 1;
+  width: auto;
+  padding: 0 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-color: var(--red);
+  background: var(--red);
+  color: white;
+}
+.sidebar-item-name {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-item-meta {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+/* Visual status hints — small accent stripe on the left edge for non-done. */
+.sidebar-item[data-status="running"] .sidebar-item-btn { border-left: 3px solid var(--accent); }
+.sidebar-item[data-status="error"] .sidebar-item-btn { border-left: 3px solid var(--red); }
+.sidebar-item[data-status="cancelled"] .sidebar-item-btn { border-left: 3px solid var(--muted); }
+
+@media (max-width: 900px) {
+  /* Sidebar becomes a scrollable strip across the bottom on narrow viewports. */
+  .meeting-sidebar { position: static; }
 }

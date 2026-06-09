@@ -43,6 +43,15 @@ describe("parseHash", () => {
     expect(() => parseHash("#????///!!")).not.toThrow();
     expect(() => parseHash("not-a-hash")).not.toThrow();
   });
+
+  it("recognises #/meeting", () => {
+    expect(parseHash("#/meeting")).toEqual({ name: "meeting" });
+  });
+
+  it("rejects nested meeting paths back to shell", () => {
+    expect(parseHash("#/meeting/")).toEqual({ name: "shell" });
+    expect(parseHash("#/meeting/anything")).toEqual({ name: "shell" });
+  });
 });
 
 describe("onRouteChange", () => {

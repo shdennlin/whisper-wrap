@@ -36,7 +36,10 @@ Usage: $0 <command> [args]
 
 Commands:
   list                       List registry models with per-variant install status
-  download <name>            Download every variant declared on <name>
+  download <name> [--with-diarization]
+                             Download every variant declared on <name>. With
+                             --with-diarization, also pre-fetch pyannote
+                             diarization + segmentation models (requires HF_TOKEN).
   set <name>                 Set MODEL_NAME=<name> in .env (requires ≥1 installed variant)
   delete <name>              Delete every variant's local_dir (refuses if active)
   default                    Print the default model name from the registry
@@ -362,6 +365,18 @@ download_variant() {
 }
 
 cmd_download() {
+    # Parse positional + flags. `--with-diarization` triggers a pyannote
+    # pre-fetch into the HF cache after the model variants are installed.
+    local with_diarization=0
+    local positional=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --with-diarization) with_diarization=1; shift ;;
+            --) shift; break ;;
+            *) positional+=("$1"); shift ;;
+        esac
+    done
+    set -- "${positional[@]}"
     [ $# -ge 1 ] || die "download requires <name>"
     local target="$1"
 
@@ -407,6 +422,72 @@ cmd_download() {
         echo "    Other variants exist for this model. To fetch them too:"
         echo "      ALL=1 make download-model MODEL=$target"
     fi
+
+    if [ "$with_diarization" -eq 1 ]; then
+        prefetch_diarization_models
+    fi
+}
+
+# Pre-fetch the pyannote diarization + segmentation pipelines into the HF cache
+# so /transcribe/meeting can run without on-demand downloads. Requires HF_TOKEN.
+prefetch_diarization_models() {
+    local hf_token="${HF_TOKEN:-}"
+    if [ -z "$hf_token" ] && [ -f "$ENV_FILE" ]; then
+        hf_token=$(grep -E '^HF_TOKEN=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+    fi
+    if [ -z "$hf_token" ]; then
+        echo "" >&2
+        echo "ERROR: --with-diarization requires HF_TOKEN to be set in your environment" >&2
+        echo "       or in $ENV_FILE. See the README 'Meeting Mode — installation'" >&2
+        echo "       section for setup steps." >&2
+        return 1
+    fi
+    local pipeline="${MEETING_DIARIZATION_PIPELINE:-pyannote/speaker-diarization-3.1}"
+    local segmentation="pyannote/segmentation-3.0"
+    # community-1 is a transitive gated dependency of speaker-diarization-3.x:
+    # the pipeline loads its PLDA backend from it at construction time. Listing
+    # it here so users hit the "accept ToS" guidance at install time, not at
+    # the first /transcribe/meeting call.
+    local community="pyannote/speaker-diarization-community-1"
+    echo
+    echo "Pre-fetching pyannote diarization models into HF cache..."
+    HF_TOKEN="$hf_token" \
+    DIARIZATION_PIPELINE="$pipeline" \
+    SEGMENTATION_MODEL="$segmentation" \
+    COMMUNITY_MODEL="$community" \
+    "$PYTHON_BIN" - <<'PYEOF'
+import os
+import sys
+
+try:
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import GatedRepoError
+except ImportError as e:
+    print(f"ERROR: huggingface_hub is not importable: {e}", file=sys.stderr)
+    print("       Install the meeting extras: uv sync --extra meeting", file=sys.stderr)
+    sys.exit(2)
+
+token = os.environ["HF_TOKEN"]
+repos = [
+    os.environ["DIARIZATION_PIPELINE"],
+    os.environ["SEGMENTATION_MODEL"],
+    os.environ["COMMUNITY_MODEL"],
+]
+failed = []
+for repo in repos:
+    print(f"  fetching {repo} ...")
+    try:
+        snapshot_download(repo_id=repo, token=token)
+    except GatedRepoError:
+        failed.append(repo)
+        print(f"  ✗ {repo} is gated — visit https://huggingface.co/{repo} and click 'Agree'", file=sys.stderr)
+if failed:
+    print("", file=sys.stderr)
+    print("ERROR: some gated repos need ToS acceptance. After clicking 'Agree'", file=sys.stderr)
+    print("       on each URL above, re-run this command.", file=sys.stderr)
+    sys.exit(3)
+print("OK: pyannote models pre-fetched into HF cache.")
+PYEOF
 }
 
 # Resolve a single variant JSON using the same logic the lifespan uses:

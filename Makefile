@@ -140,8 +140,10 @@ models:
 # Default: fetch only the variant that matches the current platform.
 # Use `ALL=1 make download-model MODEL=<name>` to fetch every variant of the
 # model (handy for cross-platform / benchmark setups).
+# Use `DIARIZE=1 make download-model MODEL=<name>` to also pre-fetch the
+# pyannote diarization models for /transcribe/meeting (requires HF_TOKEN).
 download-model:
-	@WHISPER_WRAP_ALL_VARIANTS=$(if $(ALL),1,) bash $(SCRIPT) download $(MODEL)
+	@WHISPER_WRAP_ALL_VARIANTS=$(if $(ALL),1,) bash $(SCRIPT) download $(MODEL) $(if $(DIARIZE),--with-diarization,)
 
 set-model:
 	@bash $(SCRIPT) set $(MODEL)

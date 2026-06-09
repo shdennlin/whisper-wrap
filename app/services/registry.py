@@ -58,6 +58,13 @@ class RegistryError(RuntimeError):
     resolution finds no match."""
 
 
+class MeetingModelMissingError(RegistryError):
+    """Raised when the meeting analysis endpoint cannot resolve a CT2 variant for
+    the requested model — either the model name is not in the registry, or the
+    entry declares no `format: ct2` variant. The endpoint translates this to a
+    503 with the documented `meeting_unavailable` reason."""
+
+
 def load_registry(path: Path | str | None = None) -> dict[str, dict[str, Any]]:
     """Read and validate the variants-schema registry. Returns {name: entry}."""
     p = Path(path) if path else DEFAULT_REGISTRY_PATH
@@ -228,3 +235,36 @@ def resolve_model_dir(
         logger.warning("Falling back to ./models/%s — %s", name, e)
 
     return str(DEFAULT_MODELS_ROOT / name)
+
+
+def resolve_ct2_variant(model_name: str) -> str:
+    """Return the on-disk CT2 variant directory for the named model.
+
+    Used by the meeting analysis endpoint because WhisperX requires a CT2 ASR
+    model on every platform — even on macOS where the default backend is ggml.
+    The returned path may or may not exist on disk; presence is the caller's
+    responsibility to check.
+    """
+    variant = resolve_ct2_variant_info(model_name)
+    return str(DEFAULT_MODELS_ROOT / variant["local_dir"])
+
+
+def resolve_ct2_variant_info(model_name: str) -> dict:
+    """Return the full registry dict for the named model's CT2 variant.
+
+    Callers that need format-specific knobs (e.g. `compute_type`) consume
+    this richer view rather than the bare directory path that
+    `resolve_ct2_variant` provides. Without it, WhisperX defaults to
+    `float32` on CPU which runs ~4x slower than the registry's intended
+    `int8_float16`.
+    """
+    entries = load_registry()
+    entry = entries.get(model_name)
+    if entry is None:
+        raise MeetingModelMissingError(
+            f"model {model_name!r} is not declared in the registry"
+        )
+    ct2_variants = [v for v in entry["variants"] if v["format"] == "ct2"]
+    if not ct2_variants:
+        raise MeetingModelMissingError(f"model {model_name} has no ct2 variant")
+    return ct2_variants[0]

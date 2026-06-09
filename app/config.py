@@ -77,6 +77,35 @@ def _parse_int(raw: str | None, *, default: int, var_name: str = "") -> int:
     return value
 
 
+def _parse_int_or_none(raw: str | None, *, var_name: str = "") -> int | None:
+    """Parse a positive integer env string, returning None when unset.
+
+    Distinct from `_parse_int(default=...)`: "no value" stays as None so
+    downstream code can pass through to the library's own default (e.g.
+    CTranslate2's internal cpu_threads heuristic) instead of being forced
+    to invent a number.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid value for %s=%r; ignoring",
+            var_name or "(unknown)",
+            raw,
+        )
+        return None
+    if value <= 0:
+        logger.warning(
+            "Invalid value for %s=%r (must be positive); ignoring",
+            var_name or "(unknown)",
+            raw,
+        )
+        return None
+    return value
+
+
 class Config:
     """Application configuration loaded from environment variables at construction time."""
 
@@ -94,6 +123,14 @@ class Config:
         # map 1:1 to a CPU compute path.
         self.COMPUTE_TYPE: str = os.getenv("COMPUTE_TYPE", "default")
         self.DEVICE: str = os.getenv("DEVICE", "auto")
+        # CT2 worker thread count. None → CT2's default (4). Apple Silicon
+        # M2 (10 cores: 4P + 6E) typically benefits from bumping to 6-8 so
+        # the matmul kernels saturate P-cores; faster-whisper does NOT
+        # auto-detect. Applied to both /transcribe and /transcribe/meeting
+        # CT2 backends.
+        self.CPU_THREADS: int | None = _parse_int_or_none(
+            os.getenv("CPU_THREADS"), var_name="CPU_THREADS"
+        )
 
         # v2.1 backend override. When set ("ct2" | "ggml"), the lifespan SHALL pick
         # the matching variant of the active model. When unset, platform-based
@@ -110,6 +147,55 @@ class Config:
         self.GEMINI_API_KEY: str | None = os.environ.get("GEMINI_API_KEY")
         self.GEMINI_MODEL: str | None = os.environ.get("GEMINI_MODEL")
         self.GEMINI_SYSTEM_PROMPT: str | None = os.environ.get("GEMINI_SYSTEM_PROMPT")
+
+        # Meeting analysis (POST /transcribe/meeting). Gated at endpoint level —
+        # missing HF_TOKEN does NOT block lifespan. HF_TOKEN preserves unset (None)
+        # vs empty ("") so the endpoint can translate either to a 503 without
+        # losing the distinction. MEETING_MODEL_NAME falls back to MODEL_NAME when
+        # unset or empty.
+        self.HF_TOKEN: str | None = os.environ.get("HF_TOKEN")
+        self.MEETING_MODEL_NAME: str = (
+            os.environ.get("MEETING_MODEL_NAME") or self.MODEL_NAME
+        )
+        self.MEETING_JOB_TTL_SECONDS: int = _parse_int(
+            os.getenv("MEETING_JOB_TTL_SECONDS"),
+            default=3600,
+            var_name="MEETING_JOB_TTL_SECONDS",
+        )
+        self.MEETING_MAX_JOBS: int = _parse_int(
+            os.getenv("MEETING_MAX_JOBS"),
+            default=20,
+            var_name="MEETING_MAX_JOBS",
+        )
+        self.MEETING_DIARIZATION_PIPELINE: str = os.getenv(
+            "MEETING_DIARIZATION_PIPELINE", "pyannote/speaker-diarization-3.1"
+        )
+        # None lets WhisperX pick a per-language default at load time.
+        self.MEETING_ALIGN_MODEL: str | None = (
+            os.environ.get("MEETING_ALIGN_MODEL") or None
+        )
+        # WhisperX ASR batch size. Higher = better CPU SIMD utilisation on
+        # long files; trade-off is RAM (~150-250 MB per batch slot for
+        # whisper-large). Default 32 matches whisperx's documented sweet
+        # spot for batched inference and gives ~10-15% speedup over the
+        # built-in default of 16 on Apple Silicon CPU. Unset → 32.
+        self.MEETING_BATCH_SIZE: int = _parse_int(
+            os.getenv("MEETING_BATCH_SIZE"),
+            default=32,
+            var_name="MEETING_BATCH_SIZE",
+        )
+        # Torch device for the align (wav2vec2) + diarize (pyannote) stages
+        # of the meeting pipeline. CTranslate2 ASR stays on CPU regardless
+        # because ct2 has no MPS/Metal backend. Values:
+        #   "auto" — try MPS on macOS, CUDA on Linux, else CPU (default)
+        #   "mps"  — force Apple Metal Performance Shaders
+        #   "cuda" — force CUDA
+        #   "cpu"  — force CPU
+        # On Apple Silicon, MPS typically cuts the align + diarize stages
+        # by 4-8x for long-form audio.
+        self.MEETING_TORCH_DEVICE: str = (
+            os.environ.get("MEETING_TORCH_DEVICE") or "auto"
+        )
 
         # File handling
         self.MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
