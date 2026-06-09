@@ -73,10 +73,7 @@ secondary windows under the same icon. Server stays at `127.0.0.1:8000` —
 - **Repo structure**: monorepo (`apps/desktop/`) vs separate engine + GUI repos.
 - **Product naming**: "whisper-wrap" works for the engine but is too
   engineering-coded for a consumer app — pick a name closer to launch.
-- **License posture**: MIT covers code but does not prevent SaaS forks; if
-  a commercial desktop product ships, decide between staying MIT
-  (engine) + proprietary (app bundle), AGPL-3.0, FSL, or BSL. See the
-  separate license discussion log if/when it's recorded.
+- **License posture**: see dedicated section below.
 
 ### Validation gates (before committing engineering time)
 
@@ -87,6 +84,60 @@ secondary windows under the same icon. Server stays at `127.0.0.1:8000` —
    podcaster, a researcher, a privacy-conscious knowledge worker).
    Question the *current* pain ("how do you transcribe today?"), not
    the *proposed solution*. Kill the pivot if their pain doesn't map.
+
+### License posture (recorded direction)
+
+> *Not legal advice.* This section records the strategic conclusion of
+> the 2026-06-09 license discussion so future sessions reuse it instead
+> of re-deriving.
+
+**Current state**: engine is MIT. MIT explicitly permits commercial use,
+SaaS hosting, closed-source forks, and rebranding. This is by design — MIT
+cannot prevent any of these on its own.
+
+**Concern**: maintainer does not want a third party taking whisper-wrap and
+shipping it as a paid SaaS product.
+
+**Conclusion**: do NOT pre-emptively relicense the engine. The right
+posture for this project's stage is the **dual-track pattern**:
+
+| Layer | License | Why |
+| - | - | - |
+| `whisper-wrap` engine (this repo) | **Stay MIT** | Engine is not the moat. FastAPI + faster-whisper integration is reproducible in a week by any competent engineer. MIT keeps the contributor pool open and signals trust. |
+| Future desktop app (`apps/desktop/` or separate repo) | **Proprietary or FSL** | Real differentiation lives here: UX, code signing, auto-update, brand. A SaaS competitor would need to reproduce *all* of this, not just `pip install` the engine. |
+
+**Triggers for revisiting**: only relicense the engine if **all three**
+become true simultaneously:
+
+1. A commercial product has shipped.
+2. A real third-party SaaS competitor is using the engine.
+3. That competitor is measurably eroding the project's revenue.
+
+Premature relicensing (before product, before competitor, before revenue)
+costs goodwill and contributor trust without protecting anything real.
+MongoDB / Elastic / HashiCorp all relicensed only after all three triggers
+hit, and still took public backlash for it.
+
+**Defensive moves to take now (low cost, high option value)**:
+
+1. **Add DCO (Developer Certificate of Origin)** via the
+   [`probot/dco`](https://github.com/probot/dco) GitHub action.
+   Preserves the ability to relicense later by establishing a clean
+   contributor provenance chain. Without DCO/CLA, a future license
+   change requires consent from every past contributor — typically
+   impossible to obtain at scale.
+2. **Add a "Commercial licensing available" note to README** with a
+   contact email. Costs nothing; opens an inbound channel for
+   companies that want to integrate the engine into proprietary
+   products and would prefer a non-MIT arrangement.
+
+**License options considered but rejected for now**:
+
+| License | Why rejected at this stage |
+| - | - |
+| AGPL-3.0 | Would deter the contributors and users this project most needs to attract — many companies (notably Google) ban AGPL-licensed dependencies internally. The network clause is real protection but the contributor-pool cost is higher than the protection's current value. |
+| SSPL | Not OSI-approved. Debian and several distros refuse to package SSPL-licensed software. Reputational cost outweighs technical protection. |
+| BSL / FSL | Cleaner commercial protection than AGPL, but "source available" framing alienates pure-OSS users. Reconsider if a commercial desktop product launches and a SaaS competitor emerges. |
 
 ---
 
