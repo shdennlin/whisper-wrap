@@ -267,3 +267,95 @@ def test_status_includes_vad_block_rms(monkeypatch, stubbed_app):
     with TestClient(stubbed_app) as c:
         body = c.get("/status").json()
         assert body["vad"] == {"backend": "rms"}
+
+
+# ---------- /status.meeting block ----------
+
+
+def test_status_meeting_block_shape(stubbed_app, monkeypatch):
+    """`/status.meeting` SHALL expose all 7 documented fields with sensible defaults."""
+    # Force unavailable so we don't need the registry/extras to be real
+    monkeypatch.setattr(
+        "app.api.meeting.check_meeting_availability",
+        lambda cfg=None: (False, "HF_TOKEN is not configured"),
+    )
+    monkeypatch.setattr("app.api.meeting._extras_installed", lambda: False)
+    monkeypatch.setattr(
+        "app.api.meeting._resolve_ct2_dir_for_status", lambda cfg=None: None
+    )
+
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+
+    m = body["meeting"]
+    assert set(m.keys()) == {
+        "available",
+        "loaded",
+        "hf_token_configured",
+        "extras_installed",
+        "asr_model_dir",
+        "active_jobs",
+        "queued_jobs",
+    }
+    assert m["available"] is False
+    assert m["loaded"] is False
+    assert m["extras_installed"] is False
+    assert m["asr_model_dir"] is None
+    assert m["active_jobs"] == 0
+    assert m["queued_jobs"] == 0
+
+
+def test_status_meeting_hf_token_configured_reflects_env(stubbed_app, monkeypatch):
+    """hf_token_configured SHALL be true iff config.HF_TOKEN is non-empty."""
+    monkeypatch.setattr("app.config.config.HF_TOKEN", "hf_xxx")
+    monkeypatch.setattr(
+        "app.api.meeting.check_meeting_availability",
+        lambda cfg=None: (False, "model fake has no ct2 variant"),
+    )
+    monkeypatch.setattr("app.api.meeting._extras_installed", lambda: True)
+    monkeypatch.setattr(
+        "app.api.meeting._resolve_ct2_dir_for_status", lambda cfg=None: None
+    )
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+    assert body["meeting"]["hf_token_configured"] is True
+    assert body["meeting"]["extras_installed"] is True
+
+
+def test_status_meeting_available_true_when_all_preconditions_met(
+    stubbed_app, monkeypatch, tmp_path
+):
+    """meeting.available SHALL be true when extras + token + ct2 path all OK."""
+    fake_dir = tmp_path / "ct2"
+    fake_dir.mkdir()
+    monkeypatch.setattr("app.config.config.HF_TOKEN", "hf_xxx")
+    monkeypatch.setattr(
+        "app.api.meeting.check_meeting_availability",
+        lambda cfg=None: (True, None),
+    )
+    monkeypatch.setattr("app.api.meeting._extras_installed", lambda: True)
+    monkeypatch.setattr(
+        "app.api.meeting._resolve_ct2_dir_for_status", lambda cfg=None: str(fake_dir)
+    )
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+    m = body["meeting"]
+    assert m["available"] is True
+    assert m["asr_model_dir"] == str(fake_dir)
+
+
+# ---------- /status.backend regression ----------
+
+
+def test_backend_block_unchanged(stubbed_app):
+    """Adding /status.meeting SHALL NOT alter the /status.backend contract."""
+    with TestClient(stubbed_app) as c:
+        body = c.get("/status").json()
+    b = body["backend"]
+    # Pre-change contract: backend + format always present; compute_type for ct2.
+    assert b["backend"] == "ctranslate2"
+    assert b["format"] == "ct2"
+    assert b["compute_type"] == "default"
+    # ggml-only keys SHALL NOT leak into the ct2 path
+    assert "quant" not in b
+    assert "coreml_encoder_compiled" not in b

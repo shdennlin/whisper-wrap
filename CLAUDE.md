@@ -133,6 +133,8 @@ Full schemas in README.md and `docs/API.md`. Highlights only:
 | Endpoint | Notes |
 | - | - |
 | `POST /transcribe` | Content-Type dispatch: multipart, raw `audio/*`, `application/octet-stream`. Query: `language`, `prompt`. |
+| `POST /transcribe/meeting` | Long-form meeting analysis (speaker diarization + word timestamps). Async: returns 202 + `job_id`; client polls. Opt-in `[meeting]` extras + `HF_TOKEN` required (503 otherwise). |
+| `GET /transcribe/meeting/{job_id}` | Poll a meeting job. Status `pending` → `running` → `done`/`error`; eviction after `MEETING_JOB_TTL_SECONDS` (default 3600). |
 | `POST /ask` | Audio/text in, Gemini answer out. `?stream=true` → SSE `transcript` → `token*` → `done`/`error`. JSON body `{"text": "..."}` skips STT. |
 | `WS /listen` | 16 kHz mono `pcm_s16le` binary frames in; JSON `partial`/`final` events out. Disconnect mid-utterance discards in-flight buffer. |
 | `POST /v1/audio/transcriptions` | OpenAI-Whisper-compat. `model` is advisory (reserved aliases + active model silent; others log WARN). `response_format`: json/text/srt/verbose_json/vtt. `Authorization` header accepted but ignored. |
@@ -141,6 +143,71 @@ Full schemas in README.md and `docs/API.md`. Highlights only:
 | `GET /actions` | Prompt-action templates from `registry/actions.yaml`. PWA substitutes `{transcript}` client-side. |
 | `GET /app/` | Static PWA bundle (404 if `make build-frontend` hasn't run). |
 | `GET /status`, `GET /` | Health/discovery. Lifespan blocks startup until model is loaded, so `model.loaded=true` is always true. |
+
+## Meeting Mode (architecture)
+
+The meeting endpoint is **architecturally isolated** from the rest of the
+server — every existing endpoint (`/transcribe`, `/listen`, `/ask`, `/v1/*`)
+continues unchanged. Key facts a future Claude session needs:
+
+- **Separate endpoint, separate code path.** `app/api/meeting.py` mounts
+  `POST /transcribe/meeting` + `GET /transcribe/meeting/{id}`. It reuses
+  `app.api.transcribe`'s libmagic+ffmpeg upload helpers but never goes
+  through the `WhisperBackend` Protocol.
+- **`MeetingAnalyzer` is NOT a `WhisperBackend`.** Defined in
+  `app/services/meeting.py`. Owns three sub-models: faster-whisper CT2
+  ASR, wav2vec2 alignment, pyannote diarization. Constructed lazily
+  (`from_config()`) the first time the endpoint passes its 503 gate.
+- **Lazy load, never at lifespan startup.** `app.state.meeting_analyzer`
+  starts as `None`. Server boot does not import `whisperx`,
+  `pyannote.audio`, or `torch`. Pinned by `tests/test_meeting_lifecycle.py`.
+- **macOS dual-variant requirement.** WhisperX requires `format: ct2`
+  regardless of platform — so on macOS the user must download **both** the
+  ggml (Core ML) variant (for `/transcribe`) and the ct2 variant (for
+  `/transcribe/meeting`). The 503 with reason `model <name> ct2 variant
+  is not downloaded` surfaces this.
+- **Two devices, not one.** `MeetingAnalyzer` carries `self.device` (ct2
+  ASR — only `"cpu"` or `"cuda"`) AND `self.torch_device` (align +
+  diarize — also accepts `"mps"`). Decoupling them is what unlocks MPS
+  on Apple Silicon without giving up the ct2 quantisation path —
+  CTranslate2 has no MPS backend, but pyannote and wav2vec2 are
+  torch-native and DO accept MPS. Resolved by `_resolve_torch_device()`
+  reading `MEETING_TORCH_DEVICE` (default `"auto"`: tries MPS on macOS,
+  CUDA on Linux, else CPU). Forcing an unavailable device logs a WARN
+  and falls back to CPU instead of crashing.
+- **pyannote `.to(mps)` is best-effort.** Some pyannote 3.x internals
+  (PLDA scoring is the canonical example) have ops that fall back to
+  CPU on MPS. `_load_pipeline()` wraps the device move in try/except +
+  WARN so a partial-fallback never blocks the endpoint.
+- **`MEETING_BATCH_SIZE` (default 32)** flows through to
+  `whisperx.transcribe(audio, batch_size=...)`. Higher = better CPU
+  SIMD saturation on long files; cost is RAM (~150-250 MB per slot on
+  whisper-large).
+- **HF token gated at endpoint level.** `HF_TOKEN` missing or empty →
+  503 on meeting endpoints only. Server starts normally. Same for the
+  `[meeting]` optional dependency group (`uv sync --extra meeting`).
+- **In-memory job store** (`app/services/meeting_jobs.py`). ULID-style
+  sortable IDs, TTL+capacity eviction on every poll/accept, NOT persisted.
+  Jobs gone after restart — client must re-upload.
+- **Single-job concurrency.** `asyncio.Lock` inside the analyzer. Second
+  job submitted while first is running stays `pending`.
+- **FastAPI `BackgroundTasks`** runs the pipeline so the HTTP response
+  returns in <1s. Polling-based status updates.
+- **PWA Meeting Mode** at `/app/#/meeting` (`frontend/src/meeting/`).
+  Speaker-coloured transcript with click-to-seek, speaker-aware
+  SRT/VTT/TXT export (`frontend/src/export/speaker-{srt,vtt,txt}.ts`).
+- **Pre-stage models** with `DIARIZE=1 make download-model MODEL=<name>` —
+  fetches the pyannote `speaker-diarization-3.1`, `segmentation-3.0`, AND
+  `speaker-diarization-community-1` snapshots into the HF cache. The third
+  is a transitive PLDA backend the 3.1 pipeline loads at construction
+  time — missed in Phase 3, surfaced by smoke test, now in the prefetch
+  list. On macOS also pass `ALL=1` so the WhisperX-required CT2 variant
+  comes down alongside the ggml/Core ML one.
+- **All three pyannote repos are gated** — `HF_TOKEN` alone is not enough;
+  the user must click "Agree and access repository" on each model page on
+  huggingface.co before download succeeds. Errors at this stage surface as
+  `GatedRepoError` from the prefetch script (mapped to a friendly message
+  naming the offending URL).
 
 ## Configuration
 
@@ -155,8 +222,12 @@ MODEL_NAME=breeze-asr-25     # registry key; variants resolved by platform
 # VAD_BACKEND=silero|rms     # unset = try silero, fall back to rms
 COMPUTE_TYPE=default         # ct2 only; on Apple Silicon CPU MUST be "default"
 DEVICE=auto                  # ct2 only
+# CPU_THREADS=8              # CT2 worker count; M2 (4P+6E) likes 6-8
 GEMINI_API_KEY=              # required for /ask
 GEMINI_MODEL=gemini-3.1-flash-lite
+# Meeting endpoint tunables (defaults are sane — touch only for perf debugging)
+# MEETING_BATCH_SIZE=32      # WhisperX ASR batch_size; 16-64; RAM ↔ speed
+# MEETING_TORCH_DEVICE=auto  # auto|mps|cuda|cpu — align+diarize accelerator
 ```
 
 v1-era env vars (`WHISPER_SERVER_*`, `WHISPER_AUTO_RESTART`, `WHISPER_BINARY_PATH`, `WHISPER_MAX_RETRIES`, `MODEL_PATH`) are silently ignored — v2 was never released externally so no migration shim was kept.

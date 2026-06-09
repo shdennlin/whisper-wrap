@@ -63,6 +63,8 @@ Open `http://localhost:8000/app/` for the PWA, `http://localhost:8000/status` fo
 - **`/listen` WebSocket**: live captioning — 16 kHz mono `pcm_s16le` frames in, timestamped `partial`/`final` events out. v2.1 adds a partial-consensus filter (simplified LocalAgreement-2) so `partial` text no longer thrashes between inferences. v2.2 swaps the RMS-energy VAD for [silero-vad](https://github.com/snakers4/silero-vad) (neural; with RMS fallback) so utterance endpointing is robust against environmental noise and quiet speech.
 - **Rich `/status`**: loaded model details, runtime device, compute type, Gemini configuration, uptime — useful for distinguishing Mac mini vs GPU deployments at a glance.
 - **Variants-aware model registry** (v2.1): `registry/models.yaml` ships `breeze-asr-25` with both a `ct2` and a `ggml` variant (`q6_k` quantisation + bundled `.mlmodelc` Core ML encoder), plus `large-v3-turbo` as the multilingual fallback. `make download-model MODEL=<name>` fetches only the variant your platform will load; add `ALL=1` to fetch every variant.
+- **Meeting Mode** (v2.5): long-form upload → speaker-diarized transcript with word-level timestamps via WhisperX + pyannote. Optional `?fast=true` re-uses `/transcribe`'s ggml+ANE backend for ASR (skipping WhisperX's CT2), cutting macOS wall-clock by **~3×** while keeping diarization. Results persist to a SQLite-backed `/v1/meetings` API with optional audio sidecar storage so the PWA history sidebar survives restarts and works cross-device.
+- **PWA Batch file upload**: drop or pick an existing audio file on the Batch card instead of recording — same `/transcribe` pipeline, no second endpoint.
 - **iOS Shortcuts ready**: bundled shortcut for one-tap voice transcription.
 
 ## 🏗️ Architecture
@@ -154,10 +156,19 @@ last 20 sessions to `localStorage`, and lets you run pre-defined Action
 templates (defined in `registry/actions.yaml`, surfaced via `GET /actions`)
 against the transcript via `POST /ask`.
 
+The Batch capture card also accepts **file uploads** — click 📁 or drag
+an audio file onto it to transcribe an existing recording instead of
+recording a fresh one. Same `/transcribe` pipeline; no second endpoint.
+
+A separate **Meeting Mode** page lives at `/app/#/meeting` (see the
+[Meeting Mode](#-meeting-mode) section below for the long-form
+diarization workflow with chat/detail views and AI Enhance).
+
 | Method | Path | Description |
 | ------ | ---- | --- |
-| GET    | `/app/`    | PWA live-captioning client (open in browser, install to home screen) |
-| GET    | `/actions` | Action templates registry (consumed by the PWA's chip bar) |
+| GET    | `/app/`          | PWA live-captioning client (Live, Batch, Meeting modes) |
+| GET    | `/app/#/meeting` | Meeting Mode page (diarization, AI Enhance, history sidebar) |
+| GET    | `/actions`       | Action templates registry (consumed by the chip bar) |
 
 ```bash
 make build-frontend     # one-time: produces app/static/app/
@@ -219,6 +230,162 @@ make set-model MODEL=breeze-asr-25
 make delete-model MODEL=large-v3-turbo
 ```
 
+## 🎙️ Meeting Mode
+
+`POST /transcribe/meeting` is an opt-in long-form endpoint that combines
+Whisper ASR, forced phoneme alignment for word-level timestamps, and
+[pyannote.audio](https://github.com/pyannote/pyannote-audio) speaker
+diarization (via [WhisperX](https://github.com/m-bain/whisperX)). It is
+loaded lazily on first request and leaves every other endpoint
+(`/transcribe`, `/listen`, `/ask`, `/v1/*`) unchanged.
+
+### Installation
+
+Three prerequisites — the endpoint returns HTTP 503 with a clear `reason`
+if any of them is missing:
+
+1. **Install the optional extras** (~1.5 GB: whisperx + pyannote.audio +
+   torch):
+
+   ```bash
+   uv sync --extra meeting
+   ```
+
+2. **Accept the pyannote user agreements** on Hugging Face for all three
+   gated repos — diarization 403s otherwise:
+
+   - https://huggingface.co/pyannote/speaker-diarization-3.1
+   - https://huggingface.co/pyannote/segmentation-3.0
+   - https://huggingface.co/pyannote/speaker-diarization-community-1
+
+   The third is a transitive PLDA backend that the 3.1 pipeline downloads
+   at construction time — easy to miss until the first job fails.
+
+3. **Set `HF_TOKEN`** in your `.env` with a token that has read access to
+   the accepted models. Without it, `/transcribe/meeting` returns
+   `503 {"error": "meeting_unavailable", "reason": "HF_TOKEN is not configured"}`
+   and `/status.meeting.hf_token_configured` is `false`.
+
+Pre-stage the pyannote model weights AND the CT2 ASR variant for air-gapped
+or first-run-latency reasons:
+
+```bash
+# Linux (ct2 is already the platform default):
+DIARIZE=1 make download-model MODEL=breeze-asr-25
+
+# macOS — also pass ALL=1 so the WhisperX-required CT2 variant comes down
+# alongside the ggml variant that /transcribe uses for ANE acceleration:
+ALL=1 DIARIZE=1 make download-model MODEL=breeze-asr-25
+```
+
+If the prefetch fails with `GatedRepoError`, click "Agree" on the
+specific URL the error names and re-run the command — it's idempotent.
+
+### Usage
+
+```bash
+# Upload a meeting → returns a job handle.
+# ?fast=true     re-uses /transcribe's platform-default backend for ASR
+#                (ggml+ANE on macOS, ct2+CUDA on Linux), then routes the
+#                segments through WhisperX align + pyannote diarize on MPS.
+#                ~3× faster on Apple Silicon. Recommended unless you need
+#                word-level alignment precision from WhisperX's CT2 path.
+# ?filename=...  shown as the meeting title in the PWA history sidebar.
+curl -s -X POST "http://localhost:8000/transcribe/meeting?fast=true&filename=Q3-review.m4a" \
+  -H "Content-Type: audio/wav" \
+  --data-binary @meeting.wav
+# → {"job_id":"01JFA…","status_url":"/transcribe/meeting/01JFA…"}
+
+# Poll until status == "done"
+curl -s http://localhost:8000/transcribe/meeting/01JFA…
+# → {"status":"done","progress":1.0,"stage":"complete",
+#    "result":{"language":"zh","duration_seconds":1823.4,
+#              "speakers":["SPEAKER_00","SPEAKER_01"],
+#              "segments":[{"speaker":"SPEAKER_00",
+#                           "start":0.52,"end":4.18,
+#                           "text":"今天會議的主題是…","words":[…]},…]}}
+
+# Cancel a running job (best-effort, between stage boundaries).
+curl -s -X DELETE http://localhost:8000/transcribe/meeting/01JFA…
+```
+
+The PWA Meeting Mode page at `/app/#/meeting` wraps the same workflow with
+**chat / detail view-mode toggle**, **speaker rename via hover ✏️**,
+**click-to-seek audio playback**, **AI Enhance** (reuses the main page's
+`registry/actions.yaml` chips — `Meeting notes` produces structured
+summaries), speaker-aware **SRT / VTT / TXT (chat) / TXT (script) / JSON**
+exports, an editable **meeting note title**, and a persistent history
+sidebar.
+
+### Persisted history & cross-device replay
+
+Meeting analyses (and the original audio, if uploaded) persist to the
+existing SQLite history DB so the PWA sidebar survives the in-memory
+job-store TTL (default 1 h), server restarts, and access from another
+device on the same server.
+
+| Method | Path | Description |
+| - | - | - |
+| GET | `/v1/meetings` | Paginated list (`limit`, `before_ms`). |
+| GET | `/v1/meetings/{id}` | Single analysis with full result + speaker_names. |
+| POST | `/v1/meetings` | Create (used by worker auto-persist + PWA legacy-localStorage migration). |
+| PATCH | `/v1/meetings/{id}` | Patch `speaker_names` and/or `filename`. |
+| DELETE | `/v1/meetings/{id}` | Removes the row AND unlinks the audio sidecar file. |
+| POST | `/v1/meetings/{id}/audio` | Upload original audio as a sidecar (multipart `file`). |
+| GET | `/v1/meetings/{id}/audio` | Stream the audio back (`X-Content-Type-Options: nosniff`; MIME allowlisted). |
+
+### Performance
+
+Meeting analysis runs three stages — ASR + wav2vec2 align + pyannote
+diarize. CTranslate2 has no Core ML/ANE backend, so the slow-path ASR
+stays on CPU on macOS; the torch-native align + diarize stages DO
+accept MPS and cut their contribution by 4-8× on Apple Silicon.
+
+Two ASR paths are available — pick at request time via `?fast=true`:
+
+| Path | ASR backend | macOS Apple Silicon | Loses |
+| - | - | - | - |
+| **Fast (`?fast=true`)** | ggml + Core ML + ANE (same as `/transcribe`) | **~3-5 min** for a 1 h meeting | Nothing — diarize + align still run |
+| Slow (`?fast=false`, default) | WhisperX CT2 batched on CPU | ~10-20 min for a 1 h meeting | — |
+| Linux + NVIDIA GPU | WhisperX CT2 on CUDA | ~1-3 min for a 1 h meeting | — |
+
+Fast mode is the default in the PWA on macOS (toggleable). It works on
+Linux too — there it routes through whatever `/transcribe` already uses
+(ct2+CUDA if available, else ct2+CPU which matches the slow path).
+
+ASR dominates the slow-path macOS wall-clock (~70% of total time);
+fast mode collapses that 70% to whatever `/transcribe` takes for the
+same audio (~10× real-time on M-series via ANE) and leaves only the
+~2-5 min align+diarize tail.
+
+Two tunables (both in `.env`, both have sensible defaults — touch only
+when debugging perf):
+
+```env
+MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size; 16-64 (slow path only)
+MEETING_TORCH_DEVICE=auto    # auto | mps | cuda | cpu (align + diarize)
+```
+
+`MEETING_TORCH_DEVICE=auto` picks MPS on macOS, CUDA on Linux, CPU
+elsewhere. Forcing an unavailable device logs a WARN and falls back to
+CPU — the endpoint stays available even with a wrong env var.
+
+The first request after server start incurs an additional ~20-40 s while
+the WhisperX and pyannote models load into memory; subsequent jobs reuse
+the in-memory pipeline.
+
+### Accuracy notes
+
+- Diarization quality **degrades on overlapping speech** — heavily
+  cross-talked sections may collapse into a single speaker or split a
+  single speaker across labels.
+- Pyannote needs roughly **~20 seconds of speech per speaker** to produce
+  stable separation; very short turns (single sentences) often get merged
+  into a neighbouring speaker.
+- When the number of participants is known up-front, pass `num_speakers`
+  on the request as a quality lever — it constrains the clustering stage
+  and usually improves separation noticeably for 2-4 speaker meetings.
+
 ## ⚙️ Configuration
 
 Create a `.env` file for custom configuration (see `.env.example` for the full
@@ -243,6 +410,13 @@ GEMINI_MODEL=gemini-3.1-flash-lite
 # File handling
 MAX_FILE_SIZE_MB=100
 LOG_LEVEL=INFO
+
+# Meeting endpoint (only meaningful when /transcribe/meeting is used)
+# MEETING_BATCH_SIZE=32        # WhisperX ASR batch_size; raise for RAM-rich hosts
+# MEETING_TORCH_DEVICE=auto    # auto | mps | cuda | cpu — align + diarize accelerator
+
+# CT2 worker threads (applies to /transcribe AND /transcribe/meeting on ct2 paths)
+# CPU_THREADS=8                # Apple Silicon M2 (4P+6E) typically benefits from 6-8
 
 # Transcription post-process filter
 # FILTER_EMPTY_ENABLED=true
@@ -373,6 +547,44 @@ This project is built upon the excellent work of:
 - **[Google Gemini](https://ai.google.dev/)** — LLM backend for `/ask`
 
 v1 was built around `whisper.cpp` (kept in `CHANGELOG.md` as historical context); v2 transitions to faster-whisper / CTranslate2 for a single-process server.
+
+## 📜 Third-party Model Licenses
+
+whisper-wrap (this project) is MIT-licensed. The **model weights** it downloads at runtime have their own licenses set by their respective publishers. This project does not bundle or redistribute any weights — `make download-model` fetches them directly from Hugging Face onto your machine, so the licence agreement is between **you** and the model publisher.
+
+When in doubt, follow the upstream link for authoritative terms.
+
+### ASR (transcription) models
+
+| Model | License | Notes |
+| - | - | - |
+| [OpenAI Whisper](https://github.com/openai/whisper/blob/main/LICENSE) (tiny / base / small / medium / large-v2 / large-v3) | MIT | — |
+| [Systran faster-whisper CT2 conversions](https://huggingface.co/Systran) | MIT (inherits from Whisper) | Same weights, CTranslate2 format |
+| [Breeze ASR 25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25) | See model card | MediaTek Research — check upstream for current terms |
+
+### Meeting-mode models (opt-in)
+
+Downloaded only when you `uv sync --extra meeting` and set `HF_TOKEN`. **All three pyannote repos are gated** — you must click "Agree and access repository" on each Hugging Face page before download will succeed.
+
+| Model | License | Notes |
+| - | - | - |
+| [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) | MIT (gated) | Speaker diarization pipeline |
+| [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) | MIT (gated) | Voice activity + speech segmentation |
+| [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) | MIT (gated) | PLDA backend loaded transitively by 3.1 |
+| [torchaudio wav2vec2 alignment models](https://pytorch.org/audio/stable/pipelines.html) | Per-model (see PyTorch docs) | Used by WhisperX for word-level timestamps |
+
+### Other runtime components
+
+| Component | License |
+| - | - |
+| [silero-vad](https://github.com/snakers4/silero-vad) | MIT |
+| [CTranslate2](https://github.com/OpenNMT/CTranslate2) | MIT |
+| [whisperx](https://github.com/m-bain/whisperX) | BSD-2-Clause |
+| [pywhispercpp](https://github.com/absadiki/pywhispercpp) | MIT |
+
+### ⚠️ If you redistribute
+
+whisper-wrap's MIT license covers **the code in this repository only**. If you fork it and ship a desktop app, installer, or Docker image that **bundles model weights** (rather than downloading at runtime), you become the redistributor — and you must comply with each model's redistribution terms yourself. Gated pyannote models in particular do not permit silent redistribution.
 
 ## 📄 License
 

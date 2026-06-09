@@ -14,14 +14,17 @@
 
 export type ParsedRoute =
   | { name: "shell" }
-  | { name: "history"; sessionId: string | null };
+  | { name: "history"; sessionId: string | null }
+  | { name: "meeting" };
 
 const SHELL: ParsedRoute = { name: "shell" };
+const MEETING: ParsedRoute = { name: "meeting" };
 
 export function parseHash(hash: string): ParsedRoute {
   if (hash === "" || hash === "#") return SHELL;
-  // Strip the leading '#'; the rest must start with "/history" to be a history route.
+  // Strip the leading '#'; the rest must start with a known route prefix.
   const path = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (path === "/meeting") return MEETING;
   if (path === "/history") return { name: "history", sessionId: null };
   if (!path.startsWith("/history/")) return SHELL;
   const rest = path.slice("/history/".length);

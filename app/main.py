@@ -22,6 +22,8 @@ from app import __version__
 from app.api.actions import router as actions_router
 from app.api.ask import router as ask_router
 from app.api.listen import router as listen_router
+from app.api.meeting import router as meeting_router
+from app.api.meeting_history import router as meeting_history_router
 from app.api.openai_compat import router as openai_compat_router
 from app.api.sessions import router as sessions_router
 from app.api.status import router as status_router
@@ -48,6 +50,7 @@ def _build_backend(
     backend_format_override: str | None,
     compute_type: str,
     device: str,
+    cpu_threads: int | None = None,
 ) -> tuple[WhisperBackend, dict]:
     """Resolve the active variant and instantiate the matching backend.
 
@@ -63,6 +66,7 @@ def _build_backend(
                 model_dir=str(model_dir),
                 compute_type=compute_type,
                 device=device,
+                cpu_threads=cpu_threads,
             )
             return backend, {
                 "backend": "ctranslate2",
@@ -117,6 +121,7 @@ def _build_backend(
             model_dir=str(variant_dir),
             compute_type=compute_type,
             device=device,
+            cpu_threads=cpu_threads,
         )
         return backend, {
             "backend": "ctranslate2",
@@ -158,7 +163,47 @@ def _infer_quant(filename: str) -> str | None:
 async def lifespan(app: FastAPI):
     # Surface .env first so subsequent reads see the developer's overrides.
     load_env_file()
-    logging.basicConfig(level=config.LOG_LEVEL)
+    # Consistent timestamped format across our app + uvicorn + whisperx +
+    # pyannote. Default uvicorn format omits timestamps; that makes trace-
+    # by-grep painful when something fails 12 hours into a long meeting run.
+    # ISO-ish "YYYY-MM-DD HH:MM:SS,mmm" matches what whisperx/pyannote
+    # already emit so the visual columns line up across libraries.
+    # Reuse uvicorn's DefaultFormatter / AccessFormatter so the colourised
+    # levelprefix (INFO=green, WARNING=yellow, ERROR=red) carries through;
+    # both auto-detect TTY via use_colors=None so piped/journald output stays
+    # plain ASCII.
+    from uvicorn.logging import AccessFormatter, DefaultFormatter
+
+    _log_datefmt = "%Y-%m-%d %H:%M:%S"
+    _app_fmt = "%(asctime)s %(levelprefix)s %(name)s | %(message)s"
+    _access_fmt = (
+        '%(asctime)s %(levelprefix)s %(client_addr)s - '
+        '"%(request_line)s" %(status_code)s'
+    )
+    _root_handler = logging.StreamHandler()
+    _root_handler.setFormatter(DefaultFormatter(fmt=_app_fmt, datefmt=_log_datefmt))
+    logging.basicConfig(
+        level=config.LOG_LEVEL,
+        handlers=[_root_handler],
+        force=True,  # override any handler other libs installed at import time
+    )
+    # uvicorn manages its own loggers (uvicorn, uvicorn.access, uvicorn.error)
+    # with bare default handlers — install our formatter on each so the access
+    # log ("GET /... 200 OK") also gets a timestamp. propagate=False prevents
+    # double-emit through the root logger.
+    for _name in ("uvicorn", "uvicorn.error"):
+        _u = logging.getLogger(_name)
+        _u.handlers.clear()
+        _h = logging.StreamHandler()
+        _h.setFormatter(DefaultFormatter(fmt=_app_fmt, datefmt=_log_datefmt))
+        _u.addHandler(_h)
+        _u.propagate = False
+    _access = logging.getLogger("uvicorn.access")
+    _access.handlers.clear()
+    _h = logging.StreamHandler()
+    _h.setFormatter(AccessFormatter(fmt=_access_fmt, datefmt=_log_datefmt))
+    _access.addHandler(_h)
+    _access.propagate = False
     logger.info("Starting whisper-wrap API server")
     config.ensure_temp_dir()
 
@@ -187,6 +232,7 @@ async def lifespan(app: FastAPI):
         backend_format_override=config.BACKEND_FORMAT,
         compute_type=config.COMPUTE_TYPE,
         device=config.DEVICE,
+        cpu_threads=config.CPU_THREADS,
     )
     load_time_ms = int((time.perf_counter() - load_start) * 1000)
 
@@ -242,6 +288,18 @@ async def lifespan(app: FastAPI):
         load_time_ms,
     )
 
+    # Meeting analysis: lightweight job store always available; the analyzer
+    # itself is constructed lazily on the first request that passes the 503
+    # preconditions, so missing HF_TOKEN / missing CT2 variant never breaks
+    # server startup.
+    from app.services.meeting_jobs import JobStore
+
+    app.state.meeting_jobs = JobStore(
+        ttl_seconds=config.MEETING_JOB_TTL_SECONDS,
+        max_jobs=config.MEETING_MAX_JOBS,
+    )
+    app.state.meeting_analyzer = None
+
     yield
 
     logger.info("Shutting down whisper-wrap API server")
@@ -261,6 +319,8 @@ app.include_router(listen_router)
 app.include_router(openai_compat_router)
 app.include_router(actions_router)
 app.include_router(sessions_router)
+app.include_router(meeting_router)
+app.include_router(meeting_history_router)
 
 # v2.4: PWA static bundle mounted at /app/. The bundle is produced by
 # `make build-frontend`; if it's missing (developer hasn't run the frontend

@@ -21,6 +21,7 @@ from __future__ import annotations
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -108,4 +109,54 @@ class ActionRun(Base):
     __table_args__ = (
         Index("idx_action_runs_session", "session_id"),
         Index("idx_action_runs_action", "action_id"),
+    )
+
+
+class MeetingAnalysisRow(Base):
+    """Persisted Meeting Mode analysis results.
+
+    The in-memory `JobStore` is the source of truth WHILE a job runs
+    (for stage / progress / cancellation tracking); once a job lands
+    `done`, the result is copied into this table so the PWA history
+    sidebar survives JobStore TTL eviction (default 1 h) AND server
+    restarts AND cross-device access.
+
+    `id` reuses the ULID-style job_id from `meeting_jobs.py` so the
+    DB row stays traceable back to the originating worker. We only
+    persist successful results — failed/cancelled jobs don't enter
+    history (user can re-submit). `result_json` carries the full
+    serialised MeetingResult; SQLite has no native JSON column type
+    and our access pattern is read-whole-row so Text is fine.
+    """
+
+    __tablename__ = "meeting_analyses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    speakers_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # Mutable post-write via PATCH /v1/meetings/{id}; default empty
+    # object means "no renames, use raw SPEAKER_xx labels".
+    speaker_names_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{}"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="done"
+    )
+    # Audio file storage (optional, post-creation). The PWA uploads the
+    # original audio to /v1/meetings/{id}/audio after the analysis
+    # completes so that re-opening a past entry from the sidebar can
+    # replay audio + offer re-transcription. All three fields written
+    # together by `upload_audio`; null until then.
+    audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audio_mime_type: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    audio_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("idx_meeting_analyses_created", "created_at"),
     )

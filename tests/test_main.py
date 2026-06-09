@@ -120,3 +120,40 @@ def test_root_endpoint_returns_endpoint_catalogue(patched_lifespan):
         assert resp.status_code == 200
         body = resp.json()
         assert "endpoints" in body
+
+
+def test_meeting_router_mounted(patched_lifespan):
+    """The meeting routes SHALL be registered without triggering any model load.
+
+    The mounted endpoint returns 503 by default (no HF_TOKEN in test env), but
+    that's the point — the routes exist and the gate works without dragging in
+    whisperx/pyannote.
+    """
+    import sys
+
+    from app.main import app
+
+    route_paths = {getattr(r, "path", None) for r in app.routes}
+    assert "/transcribe/meeting" in route_paths
+    assert "/transcribe/meeting/{job_id}" in route_paths
+
+    with TestClient(app) as client:
+        # Any response other than 404 proves the router is mounted; we don't
+        # care about 200 vs 503 here — the 503 gate tests live in
+        # test_meeting_api.py.
+        resp = client.get("/transcribe/meeting/anything")
+        assert resp.status_code in {404, 503}
+
+    # Lifespan boot must not have imported heavy ML deps.
+    assert "whisperx" not in sys.modules
+    assert "pyannote.audio" not in sys.modules
+
+
+def test_lifespan_attaches_meeting_job_store(patched_lifespan):
+    """app.state.meeting_jobs SHALL be a JobStore; analyzer is None until first use."""
+    from app.main import app
+    from app.services.meeting_jobs import JobStore
+
+    with TestClient(app):
+        assert isinstance(app.state.meeting_jobs, JobStore)
+        assert app.state.meeting_analyzer is None

@@ -4,6 +4,90 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [2.1.0] — 2026-06-09
+
+**Meeting Mode release.** Adds long-form meeting analysis with speaker
+diarization on a dedicated, architecturally-isolated endpoint. The four
+existing endpoints (`/transcribe`, `/listen`, `/ask`, `/v1/*`) are
+unchanged. No migration required from 2.0.0.
+
+### Added
+
+- **`POST /transcribe/meeting`** + **`GET /transcribe/meeting/{job_id}`** —
+  async meeting analysis combining WhisperX (ASR), wav2vec2 (word-level
+  alignment), and pyannote 3.1 (speaker diarization). Per-segment
+  `speaker` labels, segment + word-level timestamps, `speakers` summary
+  array. Opt-in via `uv sync --extra meeting` + `HF_TOKEN` (`503
+  meeting_unavailable` if missing).
+- **PWA Meeting Mode** at `/app/#/meeting` — file upload, async progress
+  polling, speaker-coloured transcript, click-to-seek audio player,
+  speaker-aware SRT/VTT/TXT exports, editable note titles, sidebar
+  delete with two-step confirm.
+- **Meeting history persistence** — backend SQLite store + server-side
+  audio retention for cross-device replay. Sidebar shows past meetings
+  per device.
+- **Chat view + AI Enhance** integration for meeting transcripts.
+- **PWA batch file upload** for `/transcribe`.
+- **i18n in Meeting Mode** — language switcher, per-speaker rename UI,
+  per-job toggles for speaker labels / language / word timestamps.
+- **`GET /status`** now exposes a `meeting` block (loaded /
+  hf_token_configured / supported features).
+- **Model registry** — variants intended for meeting analysis must
+  declare a `ct2` variant (WhisperX requires CT2). On macOS that means
+  downloading BOTH ggml (for `/transcribe`) and ct2 (for
+  `/transcribe/meeting`).
+- **`make download-model DIARIZE=1`** — pre-stages pyannote
+  `speaker-diarization-3.1`, `segmentation-3.0`, AND
+  `speaker-diarization-community-1` (PLDA backend loaded transitively).
+- **Third-party model licenses** section in README documenting upstream
+  licenses for every model whisper-wrap can download.
+
+### Performance
+
+- **Fast mode** — ggml ASR + MPS align/diarize on Apple Silicon
+  delivers ~3× speedup over baseline.
+- **WhisperX `batch_size=32`** (tunable via `MEETING_BATCH_SIZE`) for
+  better CPU SIMD saturation on long files.
+- **`compute_type` propagation from registry** to WhisperX yields 3-5×
+  ASR speedup on quantised variants.
+- **`MEETING_TORCH_DEVICE`** decouples ct2 ASR device (cpu/cuda) from
+  torch align/diarize device (mps/cuda/cpu) — best-effort MPS on Apple
+  Silicon with CPU fallback.
+
+### Fixed
+
+- pyannote `DiarizeOutput` → `DataFrame` conversion before merge.
+- WAV loader now accepts `Path` objects; stepper connector alignment.
+- Pre-decode audio to bypass torchcodec dylib bug on certain hosts.
+- `int8_float16` → `int8` automatic fallback on macOS CPU (CTranslate2
+  limitation).
+- Restored colourised level prefix in uvicorn `DefaultFormatter`.
+- Four UX polish issues from real-world meeting feedback.
+
+### Security
+
+- Meeting job ID allowlist + audio MIME allowlist + `X-Content-Type-Options: nosniff`
+  header on audio replay endpoint.
+
+### Documentation
+
+- README Meeting Mode section (English + zh-TW).
+- API.md contracts for `POST /transcribe/meeting` and `GET /transcribe/meeting/{id}`.
+- CLAUDE.md Meeting Mode architecture subsection.
+- ROADMAP: desktop-app pivot strategic direction (post-v2.x).
+- ROADMAP: license posture decision (dual-track, stay MIT for now).
+
+### Known limitations (deferred to follow-ups)
+
+- `docs/API.zh-TW.md` does NOT yet cover the meeting endpoints — the
+  README zh-TW translation landed in this release but the API reference
+  zh-TW lagged. Tracked for a follow-up PR.
+- `docs/INSTALLATION.md` + `INSTALLATION.zh-TW.md` do not yet document
+  the meeting-extras install path; the README + API.md cover it.
+- No Meeting Mode screenshot in `docs/images/` yet — pending UI capture.
+
+---
+
 ## [2.0.0] — 2026-06-05
 
 **Breaking release.** Single in-process FastAPI server replaces the v1
