@@ -548,6 +548,44 @@ This project is built upon the excellent work of:
 
 v1 was built around `whisper.cpp` (kept in `CHANGELOG.md` as historical context); v2 transitions to faster-whisper / CTranslate2 for a single-process server.
 
+## 📜 Third-party Model Licenses
+
+whisper-wrap (this project) is MIT-licensed. The **model weights** it downloads at runtime have their own licenses set by their respective publishers. This project does not bundle or redistribute any weights — `make download-model` fetches them directly from Hugging Face onto your machine, so the licence agreement is between **you** and the model publisher.
+
+When in doubt, follow the upstream link for authoritative terms.
+
+### ASR (transcription) models
+
+| Model | License | Notes |
+| - | - | - |
+| [OpenAI Whisper](https://github.com/openai/whisper/blob/main/LICENSE) (tiny / base / small / medium / large-v2 / large-v3) | MIT | — |
+| [Systran faster-whisper CT2 conversions](https://huggingface.co/Systran) | MIT (inherits from Whisper) | Same weights, CTranslate2 format |
+| [Breeze ASR 25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25) | See model card | MediaTek Research — check upstream for current terms |
+
+### Meeting-mode models (opt-in)
+
+Downloaded only when you `uv sync --extra meeting` and set `HF_TOKEN`. **All three pyannote repos are gated** — you must click "Agree and access repository" on each Hugging Face page before download will succeed.
+
+| Model | License | Notes |
+| - | - | - |
+| [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) | MIT (gated) | Speaker diarization pipeline |
+| [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) | MIT (gated) | Voice activity + speech segmentation |
+| [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) | MIT (gated) | PLDA backend loaded transitively by 3.1 |
+| [torchaudio wav2vec2 alignment models](https://pytorch.org/audio/stable/pipelines.html) | Per-model (see PyTorch docs) | Used by WhisperX for word-level timestamps |
+
+### Other runtime components
+
+| Component | License |
+| - | - |
+| [silero-vad](https://github.com/snakers4/silero-vad) | MIT |
+| [CTranslate2](https://github.com/OpenNMT/CTranslate2) | MIT |
+| [whisperx](https://github.com/m-bain/whisperX) | BSD-2-Clause |
+| [pywhispercpp](https://github.com/absadiki/pywhispercpp) | MIT |
+
+### ⚠️ If you redistribute
+
+whisper-wrap's MIT license covers **the code in this repository only**. If you fork it and ship a desktop app, installer, or Docker image that **bundles model weights** (rather than downloading at runtime), you become the redistributor — and you must comply with each model's redistribution terms yourself. Gated pyannote models in particular do not permit silent redistribution.
+
 ## 📄 License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
