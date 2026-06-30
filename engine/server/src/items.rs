@@ -285,16 +285,22 @@ pub async fn items_diarize(
     AxumPath(id): AxumPath<String>,
     Query(q): Query<QualityQuery>,
 ) -> Response {
-    // Invalid quality is the caller's bug (400) regardless of the item.
-    let tier = match crate::meeting::QualityTier::parse(q.quality.as_deref()) {
-        Ok(t) => t,
-        Err(reason) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "detail": { "error": "invalid_quality", "reason": reason } })),
-            )
-                .into_response()
-        }
+    // Invalid quality is the caller's bug (400) regardless of the item. An
+    // omitted quality resolves to an installed tier (default_installed), so a
+    // balanced-only install isn't forced onto the missing fast default — same
+    // policy as POST /transcribe/meeting.
+    let tier = match q.quality.as_deref() {
+        None => crate::meeting::QualityTier::default_installed(&state.config),
+        Some(raw) => match crate::meeting::QualityTier::parse(Some(raw)) {
+            Ok(t) => t,
+            Err(reason) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "detail": { "error": "invalid_quality", "reason": reason } })),
+                )
+                    .into_response()
+            }
+        },
     };
     let (audio_path, _mime) = match resolve_audio(&state.history, &id) {
         Ok(x) => x,

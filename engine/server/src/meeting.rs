@@ -108,6 +108,21 @@ impl QualityTier {
             QualityTier::Balanced => &c.diarize_emb_model_balanced,
         }
     }
+
+    /// Tier to use when the caller OMITS `quality`: fast when its embedding is
+    /// installed (the recommended default), else balanced when that's the only
+    /// one present, else fast (so `availability_for` yields a sensible 503).
+    /// Defense-in-depth so a balanced-only install isn't forced onto the
+    /// missing fast default even if a client forgets to send `quality`.
+    pub(crate) fn default_installed(c: &whisper_wrap_core::Config) -> Self {
+        if c.diarize_emb_model.is_file() {
+            QualityTier::Fast
+        } else if c.diarize_emb_model_balanced.is_file() {
+            QualityTier::Balanced
+        } else {
+            QualityTier::Fast
+        }
+    }
 }
 
 /// Tiers whose model files are installed — drives /status's
@@ -201,8 +216,23 @@ fn availability_for(state: &AppState, tier: QualityTier) -> Result<(), Response>
     Ok(())
 }
 
+/// Gate for endpoints that don't target a specific tier (status polling): the
+/// meeting feature is available when segmentation + AT LEAST ONE embedding tier
+/// is installed — the same definition /status reports (`available_tiers`
+/// non-empty). The per-tier check lives in `availability_for` (used by submit),
+/// which is what must be strict about which embedding a job actually needs.
 fn availability(state: &AppState) -> Result<(), Response> {
-    availability_for(state, QualityTier::Fast)
+    if !available_tiers(&state.config).is_empty() {
+        return Ok(());
+    }
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"detail": {
+            "error": "meeting_unavailable",
+            "reason": "diarization models not installed"
+        }})),
+    )
+        .into_response())
 }
 
 // ---------- endpoints ----------
@@ -229,16 +259,22 @@ pub async fn submit(
     req: Request,
 ) -> Response {
     // Input validation before the availability gate: a typo'd quality is
-    // the caller's bug (400) regardless of which models are installed.
-    let tier = match QualityTier::parse(q.quality.as_deref()) {
-        Ok(t) => t,
-        Err(reason) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"detail": {"error": "invalid_quality", "reason": reason}})),
-            )
-                .into_response()
-        }
+    // the caller's bug (400) regardless of which models are installed. An
+    // OMITTED quality resolves to an installed tier (defense-in-depth): the
+    // PWA normally sends the right tier, but a balanced-only install must not
+    // be forced onto the missing fast default.
+    let tier = match q.quality.as_deref() {
+        None => QualityTier::default_installed(&state.config),
+        Some(raw) => match QualityTier::parse(Some(raw)) {
+            Ok(t) => t,
+            Err(reason) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"detail": {"error": "invalid_quality", "reason": reason}})),
+                )
+                    .into_response()
+            }
+        },
     };
     if let Err(resp) = availability_for(&state, tier) {
         return resp;

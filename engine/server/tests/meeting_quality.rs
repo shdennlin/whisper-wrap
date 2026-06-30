@@ -79,6 +79,52 @@ async fn fast_and_default_submissions_are_accepted() {
 }
 
 #[tokio::test]
+async fn default_submission_falls_back_to_balanced_when_fast_absent() {
+    // Balanced-only install: segmentation + the balanced embedding are
+    // present, the fast embedding is NOT. An omitted `quality` must resolve
+    // to the installed tier (balanced) rather than the hardcoded fast default
+    // — otherwise a user who installed only the balanced model gets a 503.
+    let (router, state) = no_model_app("mq-balanced-only");
+    touch(&state.config.diarize_seg_model);
+    touch(&state.config.diarize_emb_model_balanced);
+    // diarize_emb_model (fast) intentionally left absent.
+
+    let resp = router.oneshot(submit("")).await.expect("infallible");
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let body = body_json(resp).await;
+    assert!(body["job_id"].is_string());
+}
+
+#[tokio::test]
+async fn poll_does_not_503_on_a_balanced_only_install() {
+    // Balanced-only: segmentation + the balanced embedding installed, fast
+    // absent. Polling a job's status must NOT re-gate on the fast tier — the
+    // meeting feature is available (a tier is installed), and poll is a pure
+    // status read. The bug returned a "fast tier" 503 from the poll endpoint.
+    let (router, state) = no_model_app("mq-poll-balanced");
+    touch(&state.config.diarize_seg_model);
+    touch(&state.config.diarize_emb_model_balanced);
+
+    // Omitted quality resolves to the installed (balanced) tier → job created.
+    let resp = router.clone().oneshot(submit("")).await.expect("infallible");
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let job_id = body_json(resp).await["job_id"]
+        .as_str()
+        .expect("job_id")
+        .to_string();
+
+    let poll = Request::get(format!("/transcribe/meeting/{job_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(poll).await.expect("infallible");
+    assert_ne!(
+        resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "poll must not 503 when a non-fast tier is installed"
+    );
+}
+
+#[tokio::test]
 async fn status_reports_available_quality_tiers() {
     // No diarization models → meeting unavailable, no tiers.
     let (router, state) = no_model_app("mq-tiers");

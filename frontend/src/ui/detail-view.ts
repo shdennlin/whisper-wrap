@@ -456,11 +456,9 @@ export async function renderDetail(
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       try {
-        const runId = await startStage(
-          itemId,
-          kind,
-          kind === "diarize" ? { quality: "fast" } : {},
-        );
+        // Omit quality — the engine resolves an installed tier
+        // (default_installed). Hardcoding "fast" 503s on a balanced-only install.
+        const runId = await startStage(itemId, kind, {});
         deps.onRunStarted?.(kind);
         // Show the running run immediately…
         runs = await loadRuns(itemId);

@@ -308,13 +308,7 @@ export function createMeetingPage(
   qualityLabel.textContent = t("meeting.confirm.quality");
   const qualitySelect = document.createElement("select");
   qualitySelect.className = "confirm-select";
-  for (const tier of ["fast", "balanced"] as const) {
-    const o = document.createElement("option");
-    o.value = tier;
-    o.textContent =
-      tier === "fast" ? t("meeting.quality.fast") : t("meeting.quality.balanced");
-    qualitySelect.appendChild(o);
-  }
+  // Options are built from /status's installed tiers once it resolves (below).
   qualityField.append(qualityLabel, qualitySelect);
 
   const wordTsField = document.createElement("label");
@@ -798,10 +792,11 @@ export function createMeetingPage(
     // applies unless the user opted in. Matches the wordTs serialisation
     // pattern in meeting-api.ts.
     if (fastModeInput.checked) out.fast = true;
-    // Diarization quality — only meaningful when the selector is offered
-    // (balanced tier installed) and the non-default tier is chosen.
-    if (!qualityField.hidden && qualitySelect.value === "balanced") {
-      out.quality = "balanced";
+    // Diarization quality — send the selected tier whenever it isn't the
+    // engine's "fast" default. Covers a balanced-only install where the
+    // selector is hidden but "balanced" is the only (and selected) tier.
+    if (qualitySelect.value && qualitySelect.value !== "fast") {
+      out.quality = qualitySelect.value as "balanced";
     }
     return out;
   }
@@ -1376,10 +1371,26 @@ export function createMeetingPage(
         uploadLabel.classList.add("disabled");
         startBtn.disabled = true;
       }
-      // Offer the quality choice only when a second tier is installed.
-      if (info.qualityTiers?.includes("balanced")) {
-        qualityField.hidden = false;
+      // Build the quality selector from the tiers the engine actually has on
+      // disk (/status). Options + default + visibility derive from that list,
+      // so a balanced-only install selects "balanced" instead of the old
+      // hardcoded "fast" default (which 503s — the fast embedding is missing).
+      const tiers = info.qualityTiers ?? [];
+      qualitySelect.replaceChildren();
+      for (const tier of tiers) {
+        const o = document.createElement("option");
+        o.value = tier;
+        o.textContent =
+          tier === "fast"
+            ? t("meeting.quality.fast")
+            : t("meeting.quality.balanced");
+        qualitySelect.appendChild(o);
       }
+      // Engine default is "fast"; keep it when installed, else fall back to the
+      // first available tier (e.g. a balanced-only install).
+      qualitySelect.value = tiers.includes("fast") ? "fast" : (tiers[0] ?? "");
+      // A dropdown is only worth showing when there's a real choice (2+ tiers).
+      qualityField.hidden = tiers.length < 2;
     })
     .catch(() => {});
 

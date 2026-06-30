@@ -96,7 +96,9 @@ describe("renderDetail", () => {
     });
     container.querySelector<HTMLButtonElement>('.stage-btn[data-kind="diarize"]')!.click();
     await Promise.resolve();
-    expect(startStage).toHaveBeenCalledWith("i", "diarize", expect.objectContaining({ quality: "fast" }));
+    // Diarize rerun omits quality so the engine resolves an installed tier
+    // (default_installed) — hardcoding "fast" 503s on a balanced-only install.
+    expect(startStage).toHaveBeenCalledWith("i", "diarize", {});
   });
 
   it("disables Re-run Transcribe/Diarize when the item has no stored audio", async () => {

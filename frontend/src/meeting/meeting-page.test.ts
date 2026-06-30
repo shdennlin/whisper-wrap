@@ -382,6 +382,44 @@ describe("createMeetingPage — quality tiers", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("submits quality=balanced when balanced is the ONLY installed tier (no manual pick)", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST") urls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              url.startsWith("/transcribe/meeting")
+                ? { job_id: "j1", status_url: "/transcribe/meeting/j1" }
+                : { meetings: [] },
+            ),
+          text: () => Promise.resolve(""),
+        } as Response);
+      }),
+    );
+    try {
+      // Only the balanced embedding is installed (fast absent).
+      mountWithTiers(["balanced"]);
+      await flush();
+
+      // Upload as-is — the user never touches a quality dropdown.
+      document
+        .querySelector<HTMLButtonElement>(".meeting-confirm .btn-primary")!
+        .click();
+      await flush();
+      await flush();
+
+      const submit = urls.find((u) => u.startsWith("/transcribe/meeting"));
+      expect(submit).toContain("quality=balanced");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("createMeetingPage — fast mode", () => {
