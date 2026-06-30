@@ -1,0 +1,18 @@
+[package]
+name = "whisper-wrap-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "whisper-wrap-cli"
+path = "src/main.rs"
+
+[dependencies]
+whisper-wrap-core = { path = "../core" }
+anyhow.workspace = true
+serde_json.workspace = true
+env_logger = "0.11"
+
+[lints]
+workspace = true

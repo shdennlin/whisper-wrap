@@ -111,7 +111,7 @@ CT2 條目。建議的替代項目：
 - **Bun 1.1+**（僅 build-time 需要）：`make build-frontend` 編譯
   v2.4 PWA bundle（Vite + TypeScript）時需要。安裝方式：
   `curl -fsSL https://bun.sh/install | bash`。執行階段不需要；bundle
-  已預先打包在 `app/static/app/` 並由 FastAPI 提供服務。
+  已預先打包在 `app/static/app/` 並由引擎提供服務。
 
 ### 作業系統
 - macOS 10.15+（Intel / Apple Silicon）
@@ -190,8 +190,9 @@ make download-model MODEL=large-v3-turbo
 ### 4. 啟動伺服器
 
 ```bash
-make run        # uvicorn（單一 FastAPI 程序；in-process 模型載入）
-make dev        # uvicorn --reload，用於開發
+make up         # 先編譯 PWA bundle，再 build + 執行引擎伺服器
+make server     # release build + 執行引擎伺服器
+make dev        # hot-reload 開發迴圈（Vite HMR + 引擎）
 ```
 
 ## 驗證安裝

@@ -29,39 +29,51 @@ import {
   saveTheme,
   type ResolvedTheme,
 } from "./theme";
-import { MicPipeline } from "./capture/mic-pipeline";
-import { ListenSocket, type ListenEvent } from "./capture/listen-socket";
-import { BatchRecorder, DEFAULT_MAX_DURATION_MS } from "./capture/batch-recorder";
-import { DualRecorder } from "./capture/dual-recorder";
-import { LiveTimeoutManager, type LiveTimeoutReason } from "./capture/live-timeout";
-import { getAudio as fetchAudioFromApi } from "./storage/history-api-client";
 import {
-  loadCaptureMode,
-  saveCaptureMode,
-  type CaptureMode,
-} from "./capture/mode-store";
+  resolveLiveStrategy,
+  type LiveStrategy,
+} from "./capture/live-caption-strategy";
+import { loadLiveCaptions } from "./capture/mode-store";
 import { HealthMonitor } from "./health/health-monitor";
-import { TranscriptView, copyToClipboard } from "./ui/transcript-view";
-import { ConnectionIndicator } from "./ui/connection-indicator";
+import { copyToClipboard } from "./platform/clipboard";
+import { toast, toastWithAction } from "./ui/toast";
+import { maybeShowFirstRunGate } from "./ui/first-run-gate";
 import {
-  ActionsBar,
   type ActionTemplate,
   type ActionsResponse,
   type Category,
 } from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
-import { HistoryPanel } from "./ui/history-panel";
-import { HistoryView, type ActionChoice } from "./ui/history-view";
-import { HistoryResizer } from "./ui/history-resizer";
-import { ModeCard } from "./ui/mode-card";
-import { formatDuration } from "./util/format-duration";
+import { refreshAllSurfaces } from "./ui/refresh-surfaces";
+import { subscribeSessionEvents } from "./library/session-events";
+import { LIBRARY_CHANGED_EVENT } from "./library/library-events";
 import { BackendIndicator } from "./ui/backend-indicator";
-import {
-  HistoryStore,
-  MIN_USABLE_DURATION_MS,
-  sessionDurationMs,
-} from "./storage/history-store";
+import { HistoryStore } from "./storage/history-store";
 import { navigateToHistory, onRouteChange } from "./routing/hash-route";
+import { mountAppShell } from "./ui/app-shell";
+import { renderLibrary } from "./ui/library-view";
+import { renderDetail } from "./ui/detail-view";
+import { openAiActionModal } from "./ui/ai-action-modal";
+import { runStage, pollRun } from "./library/runs-api";
+import { renderModels } from "./ui/models-view";
+import { renderSettings } from "./ui/settings-view";
+import { ModelManager } from "./ui/model-manager";
+import { AuxModelManager } from "./ui/aux-model-manager";
+import { mountHomeView, type HomeViewHandle } from "./ui/home-view";
+import { createRecordingLayer } from "./ui/recording-view";
+import {
+  createRecordingController,
+  type RecordingController,
+} from "./capture/recording-controller";
+import { navigateToView, parseViewHash } from "./routing/view-route";
+import { tauriInvoke, tauriListen } from "./platform/capability";
+import {
+  bootLandingView,
+  resolveSurface,
+  surfaceProfile,
+} from "./platform/surface";
+import { itemDisplayTitle, listItems } from "./library/items";
+import { wirePastePermissionHint } from "./ui/paste-permission-hint";
 
 // Resolve locale before any component reads strings.
 loadLocale();
@@ -71,8 +83,34 @@ loadLocale();
 loadTheme();
 applyTheme();
 
-const root = document.querySelector<HTMLDivElement>("#app");
-if (!root) throw new Error("missing #app root");
+const appRoot = document.querySelector<HTMLDivElement>("#app");
+if (!appRoot) throw new Error("missing #app root");
+appRoot.replaceChildren();
+
+// Surface profile (fe-surface-profile): resolve the surface once and drive
+// every per-surface presentation decision (nav, home density, desktop-only
+// settings, boot landing) from it instead of scattered isDesktopShell() calls.
+const profile = surfaceProfile(resolveSurface());
+
+// macOS vibrancy (fe-macos-vibrancy): inside the Tauri shell the window is
+// transparent with an NSVisualEffectView backdrop — this root class lets the
+// stylesheet drop the opaque page/shell backgrounds so the material shows
+// through. Plain browsers never get the class, so web rendering is unchanged.
+if (profile.surface === "desktop") {
+  document.documentElement.classList.add("is-desktop-shell");
+}
+
+// fe-item-library cutover: the macOS app-shell is the real application root.
+// Desktop and web load this same bundle, so this single mount covers both.
+// The Home view shows the existing app (built into `root` = homeHost below).
+// The actual `mountAppShell(...)` call is deferred until after the Models /
+// Settings component dependencies (store, toast) are defined (fe-models-settings
+// D3) so those views have their real mounts at first render.
+const homeHost = document.createElement("div");
+homeHost.className = "home-host";
+
+// The existing app is built into `homeHost` (shown under the Home view).
+const root = homeHost;
 root.replaceChildren();
 
 // ---- Layout shell ----------------------------------------------------------
@@ -250,7 +288,6 @@ captureHost.append(cardsHost, wsIndicatorHost, uploadRetryHost);
 
 // Explicit classes so the touch-device media query in style.css can reorder
 // these sections via `order:` without using :has() / structural selectors.
-const transcriptHost = el("section", "transcript-host");
 const actionsHost = el("section", "actions-host");
 
 // Answer pane: header (title + copy button) + body.
@@ -284,7 +321,7 @@ answerCopyBtn.addEventListener("click", () => {
   });
 });
 
-main.append(captureHost, transcriptHost, actionsHost, answerHost);
+main.append(captureHost, actionsHost, answerHost);
 
 const aside = el("aside", "aside");
 const historyHost = el("section");
@@ -308,22 +345,124 @@ const settingsHost = el("section");
 settingsDialog.append(settingsHeader, settingsHost);
 settingsModal.append(settingsDialog);
 
-// History view host lives INSIDE the recording shell so wide-screen viewports
-// (≥1200px) can show it side-by-side with the recording UI (the slim sidebar
-// `aside` is hidden by CSS in that breakpoint). On narrower screens the host
-// is hidden via `[hidden]` and the slim sidebar takes its place; route-based
-// switching at `#/history` then toggles the visibility.
-const historyViewHost = el("div", "history-view-host");
-historyViewHost.hidden = true;
+recordingShell.append(main, aside);
 
-// Drag-resize handle between main and history columns (desktop one-page
-// only; CSS hides it on narrow viewports). Persists width to localStorage
-// so the user's preferred split survives reloads.
-const historyResizer = new HistoryResizer({ shell: recordingShell });
+// ---- New Home (fe-home-redesign) -------------------------------------------
+// The mockup-standard Home: a recording layer (recbar / draft / processing /
+// confirming / done) followed by the idle hero view. The layer renders first
+// so CSS can hide the hero while a capture is in flight. Capture
+// orchestration stays in the lifecycle functions below (hoisted function
+// declarations) — these views are presentation only.
+const homeViewHost = el("div", "home-idle-host");
 
-recordingShell.append(main, aside, historyResizer.element(), historyViewHost);
+// The recording lifecycle lives in createRecordingController(deps) now; `rec`
+// is constructed below (after store/healthMonitor/settingsPanel exist) and the
+// layer/home/quick handlers below bind to it lazily.
+let rec: RecordingController;
+let homeHandle: HomeViewHandle;
+const recLayer = createRecordingLayer(homeViewHost, {
+  // onStart is a no-op by design: orchestration starts via the hero/quick
+  // entry points (rec.start() itself morphs the layer with .start(),
+  // mirroring how the legacy flow called ModeCard.start() purely for UI).
+  live: {
+    onStart: () => {},
+    onStop: () => void rec.stop().catch(reportError),
+    onPauseResume: () => void rec.togglePause().catch(reportError),
+    onDiscard: () => void rec.discard().catch(reportError),
+  },
+  batch: {
+    onStart: () => {},
+    onStop: () => void rec.stop().catch(reportError),
+    onPauseResume: () => void rec.togglePause().catch(reportError),
+    onDiscard: () => void rec.discard().catch(reportError),
+    onFilePicked: (file) => void rec.onBatchFilePicked(file).catch(reportError),
+    onConfirmStart: () => void rec.confirmBatchStart().catch(reportError),
+    // Re-open the picker WITHOUT clearing the pending file or resetting the
+    // card; only a fresh `change` selection replaces it (via onFilePicked).
+    onConfirmChange: () => recLayer.batch.openFilePicker(),
+  },
+  setEntriesDisabled: (disabled, disabledTitle) =>
+    homeHandle?.setEntriesDisabled(disabled, disabledTitle),
+  // Recbar live-captions toggle: flip captions on/off mid-recording.
+  onLiveToggle: (on) => rec.setLiveCaptions(on),
+});
+homeHandle = mountHomeView(homeViewHost, {
+  homeDensity: profile.homeDensity,
+  listItems,
+  navigateToView,
+  // One capture action now — live captions are a toggle, not a separate mode.
+  onHeroStart: () => void rec.start().catch(reportError),
+  onQuickStart: () => void rec.start().catch(reportError),
+  onImportPick: () => recLayer.batch.openFilePicker(),
+  // Initial toggle state from storage; the controller owns the live var.
+  liveCaptionsEnabled: loadLiveCaptions(),
+  onLiveCaptionsToggle: (on) => rec.setLiveCaptions(on),
+  // The meeting page is its own legacy-routed view inside the Home host;
+  // parseViewHash maps "#/meeting" to the home view, so this both shows
+  // Home and activates the meeting route.
+  onMeeting: () => {
+    window.location.hash = "#/meeting";
+  },
+});
 
-root.append(header, recordingShell, settingsModal);
+// The recording layer owns the live transcript now (retire-v2-recording-shell),
+// so this only manages the done-view AI bar and returns the legacy actions /
+// answer panes on idle.
+// Done-view AI: one ✨AI 加工 entry that opens the shared action-picker modal,
+// replacing the old inline AI Enhance panel + answer pane (完成卡瘦身). Each
+// pick runs the item's ai stage, so the answer is recorded as an ai run and
+// shows up in the detail view's 處理紀錄 — one AI path, one data model.
+const doneAiBar = el("div", "done-ai-bar");
+const doneAiBtn = document.createElement("button");
+doneAiBtn.type = "button";
+doneAiBtn.className = "stage-btn ai-open done-ai-btn";
+doneAiBtn.textContent = "✨ AI 加工";
+doneAiBtn.addEventListener("click", () => {
+  const itemId = doneItemId;
+  if (!itemId) return;
+  openAiActionModal({
+    loadActions: fetchAiActions,
+    runAi: async (instruction) => {
+      const runId = await runStage(itemId, "ai", { prompt: instruction });
+      const done = await pollRun(runId);
+      const answer = (done.result as { answer?: string } | null)?.answer;
+      if (typeof answer !== "string") throw new Error(done.error ?? "ai run failed");
+      return answer;
+    },
+    model: aiModelStatus,
+  });
+});
+doneAiBar.appendChild(doneAiBtn);
+
+// Guarded by a placement marker so the 250 ms timer ticks don't thrash DOM.
+let panePlacement: "legacy" | "done" = "legacy";
+recLayer.subscribe((s) => {
+  if (s.state === "done") {
+    if (panePlacement !== "done") {
+      // Slimmed done card: the layer's owned transcript + Copy, then the
+      // ✨AI 加工 modal entry (no inline AI Enhance panel, no answer pane —
+      // those live in the modal / the detail view now).
+      recLayer.els.actionsHost.appendChild(doneAiBar);
+      panePlacement = "done";
+    }
+  } else if (s.state === "idle" && panePlacement !== "legacy") {
+    main.append(actionsHost, answerHost);
+    panePlacement = "legacy";
+  }
+});
+
+// Legacy chrome retired (fe-home-redesign 3.2): the old header, recording
+// shell (slim history aside, history view + resizer), and settings modal are
+// still constructed — the lifecycle code touches them — but no longer
+// mounted. Their functions live elsewhere now: history → Library view,
+// settings → Settings view, indicators + theme toggle → shell toolbar
+// (inserted after mountAppShell below), first-run gate → document.body.
+root.append(homeViewHost);
+
+// The WS reconnect row surfaces inside the recording layer (it only matters
+// mid-capture); the upload-retry prompt lands on Home where the user retries.
+recLayer.els.root.appendChild(wsIndicatorHost);
+homeViewHost.appendChild(uploadRetryHost);
 
 // ---- Insecure-origin banner (above header) ---------------------------------
 if (!window.isSecureContext && window.location.hostname !== "localhost") {
@@ -346,8 +485,6 @@ const store = new HistoryStore({
 });
 store.setRetention(settings0.retention);
 
-const transcript = new TranscriptView(transcriptHost);
-
 const backendIndicator = new BackendIndicator(indicatorHost);
 
 const settingsPanel = new SettingsPanel({
@@ -356,249 +493,146 @@ const settingsPanel = new SettingsPanel({
   onChange: (s) => store.setRetention(s.retention),
   clearAllAudio: () => store.bulkClearAudio(),
   onToast: (text) => toast(text),
+  showDesktopShortcuts: profile.showDesktopShortcuts,
+  showExperimental: profile.showExperimental,
 });
 
-// HistoryPanel and ActionsBar reference each other: ActionsBar's onAnswer
-// calls refreshHistory() to refresh persisted runs, and HistoryPanel uses
-// actionsBar.getActionLabel() to localise the action_id chips into the
-// session preview. Cyclic — so declare `history` with definite-assignment
-// (!) and assign it after actionsBar is constructed. The HistoryPanel also
-// consumes audioStore + a re-ASR transcribe callback (added by the audio
-// replay change) — those are passed in at construction further below.
-let history!: HistoryPanel;
+// Mount the app-shell now that the Models/Settings component dependencies
+// (store, toast, backendUrl) exist (fe-models-settings D3). Home shows the
+// existing app (homeHost); Library/Detail are the new views; Models/Settings
+// mount fresh ModelManager / SettingsPanel instances.
+// One-shot handoff from the sidebar ⭐ entry to the next Library render —
+// the star filter is view-internal state, not a route.
+let pendingStarredNav = false;
+function consumeStarredNav(): boolean {
+  const v = pendingStarredNav;
+  pendingStarredNav = false;
+  return v;
+}
 
-const actionsBar = new ActionsBar({
-  root: actionsHost,
-  fetchActions: async () => {
-    const r = await fetch(backendUrl("/actions"));
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const body = (await r.json()) as {
-      actions: ActionTemplate[];
-      categories?: Category[];
-    };
+// Boot landing (fe-surface-profile D4): with an empty location hash, land on
+// the surface's default view (desktop → Library, web → Home). A non-empty
+// deep-link hash is honored unchanged (bootLandingView returns null). Run
+// before mountAppShell so its initial onViewChange reads the resolved hash
+// directly (no home→library flash). parseViewHash keeps its empty/unknown →
+// home fallback as the router's net.
+{
+  const landing = bootLandingView(window.location.hash, profile.defaultView);
+  if (landing) navigateToView(landing, { replace: true });
+}
+
+const appShell = mountAppShell(appRoot, {
+  nav: profile.nav,
+  recordingState: (cb) =>
+    recLayer.subscribe((s) =>
+      cb({ active: s.active, elapsedLabel: s.elapsedLabel }),
+    ),
+  onStarredNav: () => {
+    pendingStarredNav = true;
+    // Setting the hash to the SAME value fires no hashchange, so when already
+    // on Library the renderView wouldn't re-run and the star filter wouldn't
+    // apply. `replace` always dispatches hashchange, forcing the re-render.
+    const onLibrary = parseViewHash(window.location.hash).name === "library";
+    navigateToView({ name: "library" }, onLibrary ? { replace: true } : undefined);
+  },
+  // Enriched sidebar (fe-visual-polish): counts + recents from the same
+  // unified item list the Library uses; failure degrades to the plain nav.
+  sidebarSummary: async () => {
+    const items = await listItems();
     return {
-      actions: body.actions ?? [],
-      categories: body.categories ?? [],
-    } satisfies ActionsResponse;
+      counts: {
+        library: items.length,
+        starred: items.filter((i) => i.starred).length,
+      },
+      recent: items.slice(0, 3).map((i) => ({
+        id: i.id,
+        title: itemDisplayTitle(i),
+        hint: new Date(i.createdAt).toLocaleDateString(),
+        preview: i.preview,
+      })),
+    };
   },
-  postAsk: async (prompt) => {
-    // log=false: action_runs land via /v1/sessions/{id}/runs on the
-    // PWA-owned session. Without this, every chip click would also create
-    // a separate one-shot auto-session, double-logging the answer.
-    const r = await fetch(backendUrl("/ask?log=false"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: prompt }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return (await r.json()) as { answer: string };
-  },
-  onAnswer: (run, meta) => {
-    if (currentSessionId) {
-      store.appendActionRun(currentSessionId, run);
-    }
-    currentAnswerText = run.answer;
-    answerBody.textContent = run.answer;
-    answerCopyBtn.disabled = !run.answer;
-    refreshHistory();
-    // Auto-copy only on success — copying a localised "(request failed)" to
-    // the clipboard would be hostile.
-    if (meta.succeeded && run.answer && settingsPanel.getSettings().autoCopyAnswer) {
-      void copyToClipboard(run.answer).then((ok) => {
-        if (ok) toast(t("toast.answerAutoCopied"));
+  renderView(view, container) {
+    container.classList.toggle("is-home", view.name === "home");
+    if (view.name === "home") {
+      // Meeting-route enter/leave is handled by the legacy onRouteChange
+      // below — both routers listen to the same hashchange.
+      container.replaceChildren(homeHost);
+    } else if (view.name === "library") {
+      void renderLibrary(container, {
+        initialStarred: consumeStarredNav(),
+      });
+    } else if (view.name === "detail") {
+      void renderDetail(container, view.itemId);
+    } else if (view.name === "models") {
+      renderModels(container, {
+        mount: (host) =>
+          new ModelManager(host, () => backendUrl(""), { onActiveChange: () => {} }),
+        mountAux: (host) =>
+          new AuxModelManager(host, () => backendUrl(""), { onInstalled: () => {} }),
+      });
+    } else if (view.name === "settings") {
+      void renderSettings(container, {
+        mount: (host) =>
+          new SettingsPanel({
+            root: host,
+            enumerateDevices: async () => navigator.mediaDevices.enumerateDevices(),
+            onChange: (s) => store.setRetention(s.retention),
+            clearAllAudio: () => store.bulkClearAudio(),
+            onToast: (text) => toast(text),
+            showDesktopShortcuts: profile.showDesktopShortcuts,
+            showExperimental: profile.showExperimental,
+          }),
       });
     }
   },
-  onLoading: ({ running }) => {
-    answerHost.classList.toggle("is-loading", running);
-    if (running) {
-      // First chip click after page load (or after a fresh recording) reveals
-      // the answer pane; on touch devices the CSS reorder slots it right
-      // under the transcript so the user doesn't have to scroll past the
-      // chip bar to see the response.
-      answerHost.hidden = false;
-      // Clear stale answer so the user sees a clean "processing" state.
-      currentAnswerText = "";
-      answerBody.textContent = t("answer.processing");
-      answerCopyBtn.disabled = true;
-      // Gently bring the answer pane into view. `block: "nearest"` is a no-op
-      // when the pane is already visible (desktop with chip + answer both on
-      // screen) and just enough scroll to reveal it when it's not (mobile —
-      // user just tapped a chip at the bottom of the screen, the answer pane
-      // is in the middle of the document above the chips).
-      answerHost.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  },
-  onWarn: (msg) => toast(`⚠ ${msg}`),
-  getTranscript: () => transcript.getText(),
 });
 
-// Slim sidebar — most-recent N glance only. Clicking a row navigates to the
-// full master-detail HistoryView at `#/history/<id>`.
-history = new HistoryPanel({
-  root: historyHost,
-  store,
-  maxItems: 5,
-});
-
-// Prime the history cache from the backend BEFORE the panel renders its
-// first frame so persisted sessions appear instantly instead of after a
-// blink. ActionsBar load is independent; both can run concurrently.
-void Promise.all([store.prime(), actionsBar.load()]).then(() => {
-  refreshHistory();
-  // If the user landed directly on #/history the route handler already fired
-  // synchronously below — re-render so the freshly primed cache is visible.
-  if (window.location.hash.startsWith("#/history")) {
-    historyView.show(parseSessionIdFromHash());
+// Relocate the backend indicator + theme toggle into the shell toolbar
+// (their legacy header is no longer mounted). Inserted before the model pill
+// so status chips group on the right.
+{
+  const shellToolbar = appRoot.querySelector(".shell-toolbar");
+  const shellModelPill = shellToolbar?.querySelector(".model-pill") ?? null;
+  if (shellToolbar) {
+    indicatorHost.classList.add("toolbar-indicator");
+    themeToggle.classList.add("toolbar-theme-toggle");
+    shellToolbar.insertBefore(indicatorHost, shellModelPill);
+    shellToolbar.insertBefore(themeToggle, shellModelPill);
   }
-});
-
-// ---- History master-detail view + hash routing ----------------------------
-const historyView = new HistoryView({
-  root: historyViewHost,
-  store,
-  resolveActionLabel: (id) => actionsBar.getActionLabel(id),
-  getAudio: async (id) => {
-    const got = await fetchAudioFromApi(
-      loadSettings().backendUrl || window.location.origin,
-      id,
-    );
-    if (!got) return null;
-    // duration_ms drives the waveform player's time axis and the drag-to-scrub
-    // math (`currentTime = (x/w) * duration_ms/1000`). Pull it from the cached
-    // session — after `prime()` and stopSession's PATCH, the value is either
-    // `ended_at - started_at` (preferred) or the finals-based fallback.
-    const session = store.list().find((s) => s.id === id);
-    const duration_ms = session ? sessionDurationMs(session) : 0;
-    return {
-      session_id: id,
-      mime_type: got.mime_type,
-      blob: got.blob,
-      duration_ms,
-      byte_size: got.blob.size,
-      stored_at: Date.now(),
-    };
-  },
-  listActions: () => actionsBarChoices(),
-  runActionAgain: async (_sessionId, _actionId, prompt) => {
-    // Re-run on a past session: hit /ask with the templated text only — no
-    // audio body, no STT round-trip. The answer is then persisted as a new
-    // ActionRun on the existing PWA-owned session by HistoryView itself, so
-    // log=false avoids creating a second auto-logged sibling session.
-    const r = await fetch(backendUrl("/ask?log=false"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: prompt }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const body = (await r.json()) as { answer: string };
-    return body.answer ?? "";
-  },
-  // Re-ASR: POST the stored blob back to /transcribe with an optional
-  // user-tuned prompt + language hint, then persist the result as an
-  // ActionRun with action_id="re_asr" so it lands in the runs stack.
-  reAsrDeps: {
-    transcribe: async (blob, opts) => {
-      const form = new FormData();
-      form.append("file", blob, `re-asr.${mimeToExt(blob.type)}`);
-      if (opts.prompt) form.append("prompt", opts.prompt);
-      if (opts.language) form.append("language", opts.language);
-      // log=false: the answer becomes an ActionRun on the existing PWA
-      // session, not a brand-new auto-logged sibling.
-      const r = await fetch(backendUrl("/transcribe?log=false"), {
-        method: "POST",
-        body: form,
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const body = (await r.json()) as { text: string };
-      return body.text ?? "";
-    },
-    appendActionRun: (sessionId, run) => store.appendActionRun(sessionId, run),
-  },
-  reAsrDefaults: () => ({
-    prompt: "",
-    language: "",
-    languages: RE_ASR_LANGUAGE_OPTIONS,
-  }),
-});
-
-/**
- * Language options for the re-ASR form. Whisper accepts ISO codes like
- * "en", "zh", "ja"; we list the most-used ones plus "" for auto-detect.
- * Kept short on purpose — the form is for tweaking, not for picking an
- * unfamiliar language.
- */
-const RE_ASR_LANGUAGE_OPTIONS = [
-  { value: "", label: t("settings.micAuto") },
-  { value: "en", label: "English" },
-  { value: "zh", label: "中文" },
-  { value: "ja", label: "日本語" },
-  { value: "ko", label: "한국어" },
-  { value: "es", label: "Español" },
-  { value: "fr", label: "Français" },
-  { value: "de", label: "Deutsch" },
-];
-
-function actionsBarChoices(): ActionChoice[] {
-  // ActionsBar owns the localised label resolution + the loaded template
-  // list; map it onto the smaller HistoryView shape.
-  const tpls = actionsBar.getTemplates();
-  return tpls.map((tpl) => ({
-    id: tpl.id,
-    label: actionsBar.getActionLabel(tpl.id) ?? tpl.id,
-    template: tpl.template,
-  }));
 }
 
-function parseSessionIdFromHash(): string | null {
-  const hash = window.location.hash;
-  if (!hash.startsWith("#/history/")) return null;
-  const rest = hash.slice("#/history/".length);
-  return rest && !rest.includes("/") ? rest : null;
-}
+// Shared by the done-view ✨AI 加工 modal so it reads the one /actions registry.
+const fetchAiActions = async (): Promise<ActionsResponse> => {
+  const r = await fetch(backendUrl("/actions"));
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const body = (await r.json()) as {
+    actions: ActionTemplate[];
+    categories?: Category[];
+  };
+  return { actions: body.actions ?? [], categories: body.categories ?? [] };
+};
 
-// Single entry point for "store mutated, both history surfaces need to
-// reflect it". HistoryPanel is the slim sidebar (hidden on desktop ≥1200px
-// via CSS); HistoryView is the master-detail panel (always visible on
-// desktop one-page mode). Before this helper existed, callers only refreshed
-// the sidebar, so a fresh batch transcript wouldn't appear in the desktop
-// HistoryView until the user clicked a route or resized the window.
-function refreshHistory(): void {
-  history.render();
-  historyView.refresh();
-}
+// The just-captured item + AI model, fed to the done-view AI picker modal.
+let doneItemId: string | null = null;
+let aiModelStatus: { configured: boolean; model?: string } | null = null;
 
-// Desktop ≥1200px = "one-page mode": recording UI and HistoryView are always
-// both visible (slim sidebar hidden by CSS). The route still selects which
-// session is highlighted, but no longer hides the recording shell.
-const desktopOnePage = window.matchMedia("(min-width: 1200px)");
-let currentRoute: { name: "shell" } | { name: "history"; sessionId: string | null } =
-  { name: "shell" };
+// Prime the history cache from the backend, then refresh the v3 surfaces
+// (the v2 history rail + master-detail view are retired —
+// retire-v2-recording-shell). The done-view AI path loads its templates
+// lazily through fetchAiActions when the modal opens.
+void store.prime().then(() => refreshAll());
 
-function applyLayoutForRoute(): void {
-  const isDesktop = desktopOnePage.matches;
-  if (isDesktop) {
-    // Desktop: ignore route — both panes always visible.
-    recordingShell.classList.remove("is-history-route");
-    recordingShell.hidden = false;
-    historyViewHost.hidden = false;
-    historyView.show(
-      currentRoute.name === "history" ? currentRoute.sessionId : null,
-    );
-  } else if (currentRoute.name === "history") {
-    // Mobile/tablet at #/history: hide main+aside via class (NOT the whole
-    // shell — historyViewHost lives inside the shell now and would vanish
-    // together with it).
-    recordingShell.classList.add("is-history-route");
-    recordingShell.hidden = false;
-    historyViewHost.hidden = false;
-    historyView.show(currentRoute.sessionId);
-  } else {
-    recordingShell.classList.remove("is-history-route");
-    historyView.hide();
-    historyViewHost.hidden = true;
-    recordingShell.hidden = false;
-  }
+// Refresh the v3 data surfaces at once: the App Shell sidebar (counts +
+// recents) and the Home dashboard. Routed through the shared helper so no path
+// can update one surface while leaving the other stale. The v2 history rail is
+// retired (retire-v2-recording-shell); cross-client / finalize updates also
+// arrive via the SSE push wired in subscribeSessionEvents below.
+function refreshAll(): void {
+  refreshAllSurfaces({
+    shell: () => appShell.refresh(),
+    home: () => homeHandle.refresh(),
+  });
 }
 
 // Meeting Mode lives at #/meeting. The page module is loaded on the first
@@ -626,65 +660,33 @@ async function activateMeetingRoute(): Promise<void> {
   }
   host.hidden = false;
   recordingShell.hidden = true;
+  // The meeting page replaces the Home content (hero + recording layer).
+  homeViewHost.hidden = true;
 }
 
 function deactivateMeetingRoute(): void {
   if (meetingHost) meetingHost.hidden = true;
+  homeViewHost.hidden = false;
 }
 
 onRouteChange((route) => {
   if (route.name === "meeting") {
-    currentRoute = { name: "shell" };
     paintViewTabs("meeting");
     void activateMeetingRoute();
     return;
   }
+  // Home / Library / item detail are owned by the v3 App Shell router; here we
+  // only toggle Meeting Mode and paint the view tabs.
   paintViewTabs("shell");
   deactivateMeetingRoute();
-  currentRoute =
-    route.name === "history"
-      ? { name: "history", sessionId: route.sessionId }
-      : { name: "shell" };
-  applyLayoutForRoute();
 });
 
-// Re-apply layout when crossing the wide-screen breakpoint so the view stays
-// consistent with the viewport (e.g., user rotates tablet, resizes window).
-desktopOnePage.addEventListener("change", applyLayoutForRoute);
+// ---- Capture adapters (fe-home-redesign) -----------------------------------
+// The ModeCard pair is replaced by the recording layer's two adapters, which
+// keep the exact surface the lifecycle functions below consume. The legacy
+// mode-card module stays in the tree (unreferenced here) until fe-visual-polish
+// confirms no other consumer.
 
-// ---- Mode cards (morph in place) ------------------------------------------
-const batchCard = new ModeCard({
-  mode: "batch",
-  icon: "●",
-  label: t("modeCard.batchLabel"),
-  description: t("modeCard.batchDesc"),
-  pauseSupported: true,
-  onStart: () => startRecording("batch").catch(reportError),
-  onStop: () => stopRecording().catch(reportError),
-  onPauseResume: () => togglePause().catch(reportError),
-  onDiscard: () => discardRecording().catch(reportError),
-  acceptUploads: true,
-  onFilePicked: (file) => void onBatchFilePicked(file).catch(reportError),
-  onUnsupportedFile: () => toast(t("modeCard.unsupportedFile")),
-  onConfirmStart: () => void onBatchConfirmStart().catch(reportError),
-  onConfirmChange: () => onBatchConfirmChange(),
-});
-const liveCard = new ModeCard({
-  mode: "live",
-  icon: "◉",
-  label: t("modeCard.liveLabel"),
-  description: t("modeCard.liveDesc"),
-  pauseSupported: true,
-  onStart: () => startRecording("live").catch(reportError),
-  onStop: () => stopRecording().catch(reportError),
-  onPauseResume: () => togglePause().catch(reportError),
-  onDiscard: () => discardRecording().catch(reportError),
-});
-cardsHost.append(batchCard.root, liveCard.root);
-
-const wsIndicator = new ConnectionIndicator(wsIndicatorHost, () => {
-  if (currentMode === "live") void startRecording("live").catch(reportError);
-});
 
 function openSettings(): void {
   settingsModal.hidden = false;
@@ -710,10 +712,12 @@ const healthMonitor = new HealthMonitor({
     backendIndicator.setState(state);
     const disabled = state !== "ok";
     const title = disabled ? t("backend.disabledTitle") : undefined;
-    // Only disable cards that are currently idle — never yank a card out
+    // Only disable modes that are currently idle — never yank the UI out
     // from under an in-progress recording.
-    if (batchCard.getState() === "idle") batchCard.setDisabled(disabled, title);
-    if (liveCard.getState() === "idle") liveCard.setDisabled(disabled, title);
+    if (recLayer.batch.getState() === "idle")
+      recLayer.batch.setDisabled(disabled, title);
+    if (recLayer.live.getState() === "idle")
+      recLayer.live.setDisabled(disabled, title);
   },
 });
 healthMonitor.start();
@@ -728,13 +732,8 @@ void fetch(backendUrl("/status"))
       | { configured?: boolean; model?: string }
       | undefined;
     if (!gemini) return;
-    // Hand the badge to ActionsBar — it renders next to the "AI Enhance"
-    // section heading, which is the contextually right place for "what AI
-    // is going to handle these chips".
-    actionsBar.setModel({
-      configured: !!gemini.configured,
-      model: gemini.model,
-    });
+    // Cached for the done-view ✨AI 加工 modal (openAiActionModal reads it).
+    aiModelStatus = { configured: !!gemini.configured, model: gemini.model };
   })
   .catch(() => {
     // Best-effort: if /status is unreachable here, the BackendIndicator
@@ -742,571 +741,88 @@ void fetch(backendUrl("/status"))
     // urgent signal than the main backend status.
   });
 
-// ---- Recording lifecycle ---------------------------------------------------
-let mic: MicPipeline | null = null;
-let sock: ListenSocket | null = null;
-let batch: BatchRecorder | null = null;
-let dual: DualRecorder | null = null; // Parallel compressed-audio recorder (Live only).
-let liveTimeout: LiveTimeoutManager | null = null;
-let currentSessionId: string | null = null;
-let currentMode: CaptureMode = loadCaptureMode();
-let recordingStartedAt = 0;
-/**
- * Latest in-flight partial text for the active Live session, tracked
- * independently of the UI so it survives even when the user has
- * `showPartials` off in Settings (the partial wouldn't be displayed and so
- * `transcript.getPartial()` would return an empty string at stop time).
- * Cleared whenever the server promotes a partial to a final.
- */
-let lastLivePartialText = "";
+// ---- First-run gate --------------------------------------------------------
+// A fresh install has no model weights; the engine boots with model.loaded
+// false. Block the shell behind a download gate until a model is active.
+void maybeShowFirstRunGate(
+  () => loadSettings().backendUrl || window.location.origin,
+);
 
-/**
- * One-shot resolver woken up by the next `final` event during a graceful
- * Live stop. Cleared after firing (or after the timeout expires) so it
- * never carries across recordings.
- */
-let pendingStopFinalResolver: (() => void) | null = null;
+// ---- Global ⌥Space shortcut (desktop-global-hotkey) ------------------------
+// Desktop only: the Rust shell registers ⌥Space and emits `quick-record` when
+// pressed; we start a quick-voice (batch) capture. On boot we reconcile the OS
+// registration with the user's persisted toggle (the shell registers by
+// default at startup, so a disabled preference unregisters it here).
+if (profile.surface === "desktop") {
+  tauriListen("quick-record", () => {
+    void rec.start().catch(reportError);
+  });
+  const hotkeySettings = loadSettings();
+  void tauriInvoke()?.("set_global_hotkey", {
+    enabled: hotkeySettings.globalHotkeyEnabled,
+    accelerator: hotkeySettings.globalHotkeyAccelerator,
+  });
 
-// Safety net for tab close / refresh during an active recording: fire a
-// best-effort PATCH so the backend persists ended_at + duration_ms even when
-// stopSession's normal await chain never gets to run. `keepalive: true` tells
-// the browser to deliver the request after the document unloads — the
-// modern, navigateAway-safe replacement for synchronous XHR in beforeunload.
-//
-// Uses `pagehide` (not `beforeunload`) because:
-//   - pagehide fires on the bfcache path that mobile Safari uses;
-//   - beforeunload no longer fires reliably for some PWA close paths.
-window.addEventListener("pagehide", () => {
-  if (currentSessionId === null) return;
-  const session = store.list().find((s) => s.id === currentSessionId);
-  if (!session || session.ended_at !== null) return;
-  const ended_at = Date.now();
-  fetch(backendUrl(`/v1/sessions/${currentSessionId}`), {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      ended_at,
-      duration_ms: ended_at - session.started_at,
-    }),
-    keepalive: true,
-  }).catch(() => {});
+  // ---- Auto-paste (overlay-auto-paste) -------------------------------------
+  // Reconcile the shell's live paste state with the persisted settings on
+  // boot — mirrors the set_global_hotkey reconciliation above. The shell
+  // starts these features off, so an enabled preference re-arms them here.
+  void tauriInvoke()?.("set_auto_paste", {
+    enabled: hotkeySettings.autoPasteEnabled,
+  });
+  void tauriInvoke()?.("set_paste_hotkey", {
+    enabled: hotkeySettings.pasteHotkeyEnabled,
+    accelerator: hotkeySettings.pasteHotkeyAccelerator,
+  });
+  // Experimental: auto-pause-media (overlay-media-pause).
+  void tauriInvoke()?.("set_auto_pause_media", {
+    enabled: hotkeySettings.autoPauseMediaEnabled,
+  });
+
+  // Overlay surface prefs (extract-premium-surfaces): the dictation overlay now
+  // runs as a separate private bundle at its own asset origin, so it can read
+  // NEITHER this window's localStorage NOR the engine's same-origin cookie.
+  // Report the two values it depends on to the shell, which forwards them: the
+  // locale (so a non-English overlay keeps its language) and the Save-audio
+  // preference (re-sent per capture so a mid-session opt-out is honored).
+  void tauriInvoke()?.("set_overlay_prefs", {
+    audioSave: hotkeySettings.audioSave,
+    locale: loadLocale(),
+  });
+
+  // One-time hint when a paste runs without macOS Accessibility permission.
+  wirePastePermissionHint({ listen: tauriListen, showHint: (msg) => toast(msg) });
+}
+
+// ---- Recording lifecycle (recording-controller-extract) --------------------
+// The capture start/stop/pause/discard, batch upload, live-caption sink wiring,
+// audio persistence, upload-retry UI, and health gating moved verbatim into
+// createRecordingController(deps). main.ts builds the deps and binds the
+// card / recbar / home-toggle handlers (above) to the controller instance.
+/** Active ASR live capability → strategy (local Whisper → windowed-batch). */
+const liveStrategy: LiveStrategy = resolveLiveStrategy({ localWhisper: true });
+rec = createRecordingController({
+  store,
+  healthMonitor,
+  recLayer,
+  liveStrategy,
+  settingsPanel,
+  onLibraryChanged: refreshAll,
+  wsIndicatorHost,
+  uploadRetryHost,
+  // Reset the legacy answer pane on a fresh capture (desktop keeps it visible).
+  resetAnswerPane: () => {
+    currentAnswerText = "";
+    answerBody.textContent = t("app.answerPlaceholder");
+    answerCopyBtn.disabled = true;
+    answerHost.hidden = isTouchDevice();
+  },
+  showMicPermissionError: micPermissionModal,
+  // Hand the just-finished item id to the done-view AI modal.
+  onDoneItem: (sessionId) => {
+    doneItemId = sessionId;
+  },
 });
-
-/** 250 ms silent PCM frame at 16 kHz mono int16, used to coax the server's
- *  VAD into endpointing the in-flight utterance on a graceful Live stop. */
-const SILENT_FRAME_BYTES = 4000 * 2;
-/** Push 2 s of silence (8 × 250 ms) on stop; long enough to clear any sane
- *  end-of-utterance VAD window. */
-const GRACEFUL_STOP_SILENCE_FRAMES = 8;
-/** Hard ceiling on how long we wait for the final after pressing stop. */
-const GRACEFUL_STOP_TIMEOUT_MS = 3000;
-const settings = settingsPanel.getSettings();
-
-function activeCard(): ModeCard {
-  return currentMode === "batch" ? batchCard : liveCard;
-}
-
-function otherCard(): ModeCard {
-  return currentMode === "batch" ? liveCard : batchCard;
-}
-
-async function startRecording(mode: CaptureMode): Promise<void> {
-  const health = await healthMonitor.checkNow();
-  if (health !== "ok") {
-    toast(t("toast.backendOffline"));
-    return;
-  }
-
-  currentMode = mode;
-  saveCaptureMode(mode);
-  hideRetryPrompt();
-  transcript.clear();
-  currentAnswerText = "";
-  // Reset to the localised placeholder so desktop (where the pane is always
-  // visible) shows a helpful default instead of a stale answer or blank box.
-  answerBody.textContent = t("app.answerPlaceholder");
-  answerCopyBtn.disabled = true;
-  // Touch only: re-hide for the same reason as initial state — pane sits
-  // between transcript and chips via CSS reorder; empty pane = wasted space.
-  answerHost.hidden = isTouchDevice();
-  recordingStartedAt = Date.now();
-  lastLivePartialText = "";
-
-  activeCard().start();
-  otherCard().setDisabled(true, t("modeCard.recordingInProgress"));
-
-  if (mode === "live") {
-    currentSessionId = store.startSession("live");
-    refreshHistory();
-    // WS row stays hidden while everything is fine; the connection indicator
-    // surfaces itself only on reconnecting / failed states (see handler below).
-    wsIndicatorHost.hidden = true;
-    wsIndicator.setState("idle");
-    const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${wsProto}//${window.location.host}/listen`;
-    sock = new ListenSocket({ url: wsUrl, onEvent: handleListenEvent });
-    sock.start();
-    // Idle / hard-cap auto-stop. Reads the latest settings each time so the
-    // user can tune the values mid-session.
-    const liveSettings = settingsPanel.getSettings();
-    liveTimeout = new LiveTimeoutManager({
-      idleMinutes: liveSettings.liveIdleMinutes,
-      maxMinutes: liveSettings.liveMaxMinutes,
-      onTimeout: (reason: LiveTimeoutReason) => {
-        toast(
-          reason === "idle"
-            ? t("toast.autoStopIdle", { minutes: liveSettings.liveIdleMinutes })
-            : t("toast.autoStopMax", { minutes: liveSettings.liveMaxMinutes }),
-        );
-        void stopRecording().catch(reportError);
-      },
-    });
-    liveTimeout.start();
-    try {
-      mic = new MicPipeline({
-        deviceId: settings.deviceId ?? undefined,
-        onFrame: (frame) => sock?.send(frame),
-      });
-      await mic.start();
-      // Attach a parallel MediaRecorder to the same MediaStream so we can
-      // persist a compressed copy of the audio for replay / re-ASR. Honours
-      // the audio.save Setting — when off, DualRecorder is constructed but
-      // skips the actual recording (start() is a no-op, stop() resolves with
-      // blob: null) so callers don't have to branch on the toggle.
-      const live = settingsPanel.getSettings();
-      const stream = mic.getStream();
-      if (stream) {
-        dual = new DualRecorder(stream, "live", live.audioSave !== false);
-        dual.start();
-      }
-    } catch (e) {
-      micPermissionModal(e instanceof Error ? e.message : String(e));
-      await stopRecording();
-    }
-  } else {
-    currentSessionId = null;
-    wsIndicatorHost.hidden = true;
-    try {
-      batch = new BatchRecorder({
-        deviceId: settings.deviceId ?? undefined,
-        maxDurationMs: DEFAULT_MAX_DURATION_MS,
-        onAutoStop: () => toast(t("toast.tenMinReached")),
-      });
-      await batch.start();
-    } catch (e) {
-      micPermissionModal(e instanceof Error ? e.message : String(e));
-      resetIdle();
-    }
-  }
-}
-
-async function togglePause(): Promise<void> {
-  const nextState = activeCard().togglePause();
-  if (currentMode === "batch" && batch) {
-    if (nextState === "paused") batch.pause();
-    else if (nextState === "recording") batch.resume();
-  } else if (currentMode === "live" && mic) {
-    if (nextState === "paused") {
-      mic.pause();
-      dual?.pause();
-    } else if (nextState === "recording") {
-      mic.resume();
-      dual?.resume();
-    }
-    // Pause/resume counts as user activity — push the idle timer forward.
-    liveTimeout?.onActivity();
-  }
-}
-
-async function discardRecording(): Promise<void> {
-  if (currentMode === "live") {
-    liveTimeout?.stop();
-    liveTimeout = null;
-    await mic?.stop();
-    mic = null;
-    sock?.stop();
-    sock = null;
-    // Tear down the parallel recorder; whatever blob it has built up is
-    // dropped because we never write it to AudioStore on the discard path.
-    await dual?.stop();
-    dual = null;
-    if (currentSessionId) {
-      store.deleteSession(currentSessionId);
-      refreshHistory();
-    }
-    currentSessionId = null;
-    toast(t("toast.discarded"));
-    resetIdle();
-    return;
-  }
-  if (batch) {
-    await batch.discard();
-    batch = null;
-  }
-  toast(t("toast.discarded"));
-  resetIdle();
-}
-
-async function stopRecording(): Promise<void> {
-  if (currentMode === "live") {
-    // Graceful Live stop: keep the WS open, pause the real mic, push a short
-    // burst of silence frames so the server's silero-VAD endpoints the
-    // pending utterance, and wait briefly for one more `final` event.
-    if (sock && mic) {
-      activeCard().showProcessing(t("modeCard.confirmingFinal"));
-      mic.pause();
-      sendSilenceFrames(sock, GRACEFUL_STOP_SILENCE_FRAMES);
-      await waitForNextFinalOr(GRACEFUL_STOP_TIMEOUT_MS);
-    }
-
-    // After the graceful wait, flush any remaining in-flight partial.
-    const partial = lastLivePartialText.trim();
-    if (partial && currentSessionId) {
-      const ts = Math.max(0, Date.now() - recordingStartedAt);
-      store.appendFinal(currentSessionId, {
-        text: partial,
-        start_ms: ts,
-        end_ms: ts,
-      });
-      transcript.appendFinal({
-        text: partial,
-        start_ms: ts,
-        end_ms: ts,
-        kind: "live",
-      });
-    }
-
-    liveTimeout?.stop();
-    liveTimeout = null;
-    // Stop the parallel recorder concurrently with the mic / sock — the
-    // returned blob is what we persist to AudioStore. Capture it BEFORE
-    // resetting `dual` so a late-arriving `stop` event still resolves.
-    const dualStop = dual ? dual.stop() : Promise.resolve(null);
-    await mic?.stop();
-    mic = null;
-    sock?.stop();
-    sock = null;
-    if (currentSessionId) {
-      // Await so the PATCH lands AND the local cache mutation (ended_at
-      // assignment) happens before we check it below. Swallow network errors
-      // here — the pagehide keepalive handler is the last-resort retry.
-      await store.stopSession(currentSessionId).catch(() => {});
-      const session = store.list().find((s) => s.id === currentSessionId);
-      const dur = Date.now() - recordingStartedAt;
-      let sessionDeleted = false;
-      if (
-        session &&
-        session.ended_at !== null &&
-        dur < MIN_USABLE_DURATION_MS &&
-        session.finals.length === 0
-      ) {
-        store.deleteSession(currentSessionId);
-        sessionDeleted = true;
-        toast(t("toast.tooShortNotSaved", { duration: formatBriefDuration(dur) }));
-      } else if (session && session.finals.length > 0) {
-        await maybeAutoCopy();
-      }
-      // Best-effort: await the parallel-recorder blob and persist it. Skip
-      // when the session was already dropped (no point keeping orphan audio).
-      // Persistence failures MUST NOT bubble to the user — recording already
-      // succeeded.
-      const recording = await dualStop.catch(() => null);
-      if (
-        !sessionDeleted &&
-        recording &&
-        recording.blob &&
-        recording.blob.size > 0
-      ) {
-        await persistAudio(currentSessionId, recording.blob, recording.duration_ms);
-      }
-      refreshHistory();
-    }
-    dual = null;
-    currentSessionId = null;
-    resetIdle();
-    return;
-  }
-
-  if (!batch) {
-    resetIdle();
-    return;
-  }
-  activeCard().showProcessing();
-  let recording;
-  try {
-    recording = await batch.stop();
-  } catch (e) {
-    toast(t("toast.recordFailed", { error: e instanceof Error ? e.message : String(e) }));
-    batch = null;
-    resetIdle();
-    return;
-  }
-  batch = null;
-  if (recording.durationMs < MIN_USABLE_DURATION_MS) {
-    toast(t("toast.tooShortNotSaved", { duration: formatBriefDuration(recording.durationMs) }));
-    resetIdle();
-    return;
-  }
-  await processBatchRecording(recording.blob, recording.mimeType, recording.durationMs);
-}
-
-async function processBatchRecording(
-  blob: Blob,
-  mimeType: string,
-  durationMs: number,
-): Promise<void> {
-  try {
-    const text = await uploadForTranscription(blob, mimeType);
-    const sessionId = store.startSession("batch");
-    await store.appendFinal(sessionId, { text, start_ms: 0, end_ms: durationMs });
-    await store.stopSession(sessionId);
-    transcript.appendFinal({
-      text,
-      start_ms: 0,
-      end_ms: durationMs,
-      kind: "batch",
-    });
-    currentSessionId = sessionId;
-    // Persist the captured blob so the user can replay or re-transcribe it
-    // later. Honours the audio.save Setting; errors are isolated from the
-    // upload-success path.
-    if (loadSettings().audioSave !== false) {
-      await persistAudio(sessionId, blob, durationMs);
-    }
-    refreshHistory();
-    await maybeAutoCopy();
-    resetIdle();
-    hideRetryPrompt();
-  } catch (e) {
-    resetIdle();
-    showRetryPrompt({
-      blob,
-      mimeType,
-      durationMs,
-      errorMessage: e instanceof Error ? e.message : String(e),
-    });
-  }
-}
-
-// ---- Batch file-upload flow ------------------------------------------------
-// Lets users transcribe a pre-recorded audio file via the same /transcribe
-// pipeline as mic-recorded clips. File → confirm card → reuse
-// processBatchRecording → history + persistence + retry-on-failure.
-interface PendingBatchFile {
-  file: File;
-  durationMs: number;
-}
-let pendingBatchFile: PendingBatchFile | null = null;
-
-/** Probe an audio file's duration via an off-DOM <audio> element. */
-function readAudioDurationMs(file: File): Promise<number> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const audio = document.createElement("audio");
-    audio.preload = "metadata";
-    const cleanup = () => {
-      audio.removeEventListener("loadedmetadata", onMeta);
-      audio.removeEventListener("error", onError);
-      URL.revokeObjectURL(url);
-    };
-    const onMeta = () => {
-      const ms = Number.isFinite(audio.duration)
-        ? Math.round(audio.duration * 1000)
-        : 0;
-      cleanup();
-      resolve(ms);
-    };
-    const onError = () => {
-      cleanup();
-      resolve(0);
-    };
-    audio.addEventListener("loadedmetadata", onMeta);
-    audio.addEventListener("error", onError);
-    audio.src = url;
-  });
-}
-
-async function onBatchFilePicked(file: File): Promise<void> {
-  currentMode = "batch";
-  saveCaptureMode("batch");
-  hideRetryPrompt();
-  const durationMs = await readAudioDurationMs(file);
-  pendingBatchFile = { file, durationMs };
-  const durationLabel = durationMs > 0
-    ? formatDuration(Math.round(durationMs / 1000))
-    : "—";
-  batchCard.showConfirming(file.name, durationLabel);
-  liveCard.setDisabled(true, t("modeCard.batchUploadPending"));
-}
-
-function onBatchConfirmChange(): void {
-  // Re-open the picker WITHOUT clearing pendingBatchFile or resetting the
-  // card. If the user cancels the OS picker (ESC / close), the confirm
-  // card stays with the previous file. The pending file is only replaced
-  // when `change` fires with a new selection — wired through
-  // onBatchFilePicked which calls showConfirming() again.
-  batchCard.openFilePicker();
-}
-
-async function onBatchConfirmStart(): Promise<void> {
-  if (!pendingBatchFile) return;
-  const { file, durationMs } = pendingBatchFile;
-  pendingBatchFile = null;
-  transcript.clear();
-  // Reset the answer pane the same way startRecording does, so the desktop
-  // layout doesn't hold a stale Q&A response next to a fresh transcript.
-  currentAnswerText = "";
-  answerBody.textContent = t("app.answerPlaceholder");
-  answerCopyBtn.disabled = true;
-  answerHost.hidden = isTouchDevice();
-  recordingStartedAt = Date.now();
-  batchCard.showProcessing();
-  liveCard.setDisabled(true, t("modeCard.processingInProgress"));
-  await processBatchRecording(
-    file,
-    file.type || "application/octet-stream",
-    durationMs,
-  );
-}
-
-/**
- * Best-effort upload of `blob` to the backend for `sessionId`. The backend
- * stores the file under `data/audio/{id}{ext}` and stamps `audio_path` on
- * the session row; the HistoryStore mirrors this as `audio_saved=true`.
- * Errors surface as a toast — the transcript is already saved server-side.
- * `durationMs` is unused now (waveform player decodes its own duration).
- */
-async function persistAudio(
-  sessionId: string,
-  blob: Blob,
-  _durationMs: number,
-): Promise<void> {
-  try {
-    await store.uploadSessionAudio(sessionId, blob, blob.type || "audio/webm");
-  } catch (e) {
-    toast(`⚠ ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-async function maybeAutoCopy(): Promise<void> {
-  if (!loadSettings().autoCopy) return;
-  const text = transcript.getText();
-  if (!text) return;
-  const ok = await copyToClipboard(text);
-  if (ok) toast(t("toast.autoCopied"));
-}
-
-interface PendingUpload {
-  blob: Blob;
-  mimeType: string;
-  durationMs: number;
-  errorMessage: string;
-}
-
-let pendingUpload: PendingUpload | null = null;
-
-function showRetryPrompt(p: PendingUpload): void {
-  pendingUpload = p;
-  uploadRetryHost.replaceChildren();
-
-  const message = el("span", "msg");
-  message.textContent = t("uploadRetry.message", {
-    duration: formatBriefDuration(p.durationMs),
-    error: p.errorMessage,
-  });
-  const retryBtn = button(t("uploadRetry.retry"));
-  retryBtn.addEventListener("click", async () => {
-    if (!pendingUpload) return;
-    const u = pendingUpload;
-    hideRetryPrompt();
-    activeCard().start();
-    activeCard().showProcessing();
-    otherCard().setDisabled(true, t("modeCard.processingInProgress"));
-    await processBatchRecording(u.blob, u.mimeType, u.durationMs);
-  });
-  const downloadBtn = button(t("uploadRetry.downloadWebm"));
-  downloadBtn.addEventListener("click", () => {
-    if (!pendingUpload) return;
-    downloadBlob(
-      pendingUpload.blob,
-      `whisper-wrap-failed-${Date.now()}.${mimeToExt(pendingUpload.mimeType)}`,
-    );
-  });
-  const dismissBtn = button(t("uploadRetry.dismiss"));
-  dismissBtn.addEventListener("click", () => hideRetryPrompt());
-
-  uploadRetryHost.append(message, retryBtn, downloadBtn, dismissBtn);
-  uploadRetryHost.hidden = false;
-}
-
-function hideRetryPrompt(): void {
-  pendingUpload = null;
-  uploadRetryHost.hidden = true;
-  uploadRetryHost.replaceChildren();
-}
-
-function resetIdle(): void {
-  batchCard.reset();
-  liveCard.reset();
-  // Re-apply current health gating so cards reflect the latest backend state.
-  const healthy = healthMonitor.getState() === "ok";
-  const title = healthy ? undefined : t("backend.disabledTitle");
-  batchCard.setDisabled(!healthy, title);
-  liveCard.setDisabled(!healthy, title);
-  wsIndicatorHost.hidden = true;
-}
-
-async function uploadForTranscription(blob: Blob, mimeType: string): Promise<string> {
-  // log=false: the PWA owns its own session lifecycle via /v1/sessions/*.
-  // External API consumers (Shortcut, curl) default to log=true so they
-  // also appear in the history view.
-  const r = await fetch(backendUrl("/transcribe?log=false"), {
-    method: "POST",
-    headers: { "content-type": mimeType || "application/octet-stream" },
-    body: blob,
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const body = (await r.json()) as { text: string };
-  return body.text ?? "";
-}
-
-function handleListenEvent(e: ListenEvent): void {
-  switch (e.type) {
-    case "state":
-      wsIndicator.setState(e.state);
-      wsIndicatorHost.hidden = e.state === "open" || e.state === "idle";
-      break;
-    case "partial":
-      lastLivePartialText = e.text;
-      if (loadSettings().showPartials) transcript.setPartial(e.text);
-      break;
-    case "final":
-      lastLivePartialText = "";
-      pendingStopFinalResolver?.();
-      pendingStopFinalResolver = null;
-      if (currentSessionId) {
-        store.appendFinal(currentSessionId, {
-          text: e.text,
-          start_ms: e.start_ms,
-          end_ms: e.end_ms,
-        });
-      }
-      transcript.appendFinal({
-        text: e.text,
-        start_ms: e.start_ms,
-        end_ms: e.end_ms,
-      });
-      if (loadSettings().autoScroll) {
-        transcript.root.scrollTop = transcript.root.scrollHeight;
-      }
-      refreshHistory();
-      liveTimeout?.onActivity();
-      break;
-    case "error":
-      toast(`⚠ ${e.message}`);
-      break;
-  }
-}
 
 // ---- Background-tab freshness ---------------------------------------------
 // When the user backgrounds the PWA, calls /transcribe (Shortcut / curl /
@@ -1321,8 +837,21 @@ document.addEventListener("visibilitychange", () => {
   const now = Date.now();
   if (now - lastVisibilityReprime < REPRIME_MIN_INTERVAL_MS) return;
   lastVisibilityReprime = now;
-  void store.prime().then(() => refreshHistory());
+  void store.prime().then(() => refreshAll());
 });
+
+// ---- Live library refresh (live-library-push) ------------------------------
+// The debounced re-prime + refresh lives in the controller now
+// (rec.scheduleLiveRefresh); the two push channels below feed it: the backend
+// SSE stream (universal) and a desktop Tauri event the overlay emits on save.
+
+// Backend SSE — a no-op where EventSource is unavailable, so startup never throws.
+subscribeSessionEvents({
+  onChange: () => rec.scheduleLiveRefresh(),
+  url: backendUrl("/v1/sessions/events"),
+});
+// Desktop fast-path — null (no-op) in a plain browser with no Tauri bridge.
+tauriListen(LIBRARY_CHANGED_EVENT, () => rec.scheduleLiveRefresh());
 
 // ---- Service worker --------------------------------------------------------
 // registerType: "prompt" means the new SW stays in "waiting" until we call
@@ -1376,89 +905,10 @@ function backendUrl(path: string): string {
   return base.replace(/\/$/, "") + path;
 }
 
-function toast(message: string): void {
-  const tNode = el("div", "toast");
-  tNode.textContent = message;
-  document.body.appendChild(tNode);
-  setTimeout(() => tNode.remove(), 4000);
-}
-
-/** Toast with an inline action button. Used for SW update prompts where the
- * user MUST get an interaction surface — iOS standalone PWAs have no native
- * "refresh" otherwise. Click dismisses the toast and calls onAction. */
-function toastWithAction(
-  message: string,
-  actionLabel: string,
-  onAction: () => void,
-): void {
-  const tNode = el("div", "toast toast-with-action");
-  const text = document.createElement("span");
-  text.textContent = message;
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "toast-action";
-  btn.textContent = actionLabel;
-  btn.addEventListener("click", () => {
-    tNode.remove();
-    onAction();
-  });
-  tNode.append(text, btn);
-  document.body.appendChild(tNode);
-  // Longer dwell time than plain toast — user needs reading + clicking time.
-  setTimeout(() => tNode.remove(), 10000);
-}
-
 function micPermissionModal(detail: string): void {
   const modal = el("div", "banner");
   modal.textContent = t("app.micPermissionDenied", { detail });
   root!.insertBefore(modal, root!.firstChild);
-}
-
-function formatBriefDuration(ms: number): string {
-  const tenths = Math.floor(ms / 100);
-  const sec = Math.floor(tenths / 10);
-  const dec = tenths % 10;
-  return `${sec}.${dec}s`;
-}
-
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = el("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function mimeToExt(mime: string): string {
-  if (mime.startsWith("audio/webm")) return "webm";
-  if (mime.startsWith("audio/mp4")) return "m4a";
-  if (mime.startsWith("audio/ogg")) return "ogg";
-  return "bin";
-}
-
-function sendSilenceFrames(socket: ListenSocket, frameCount: number): void {
-  for (let i = 0; i < frameCount; i++) {
-    socket.send(new ArrayBuffer(SILENT_FRAME_BYTES));
-  }
-}
-
-function waitForNextFinalOr(timeoutMs: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    const settle = (): void => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    pendingStopFinalResolver = settle;
-    setTimeout(() => {
-      if (pendingStopFinalResolver === settle) pendingStopFinalResolver = null;
-      settle();
-    }, timeoutMs);
-  });
 }
 
 function reportError(e: unknown): void {

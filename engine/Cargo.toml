@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["core", "server", "cli"]
+
+[workspace.package]
+version = "3.0.0-beta.1"
+edition = "2021"
+# Open-core engine: core/server/cli are GPLv3. The closed desktop shell is NOT
+# part of this workspace — it lives in the private umbrella repo with its own
+# proprietary license, and links the server only as an out-of-process sidecar.
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+whisper-rs = { version = "0.15", features = ["metal"] }
+
+# Workspace-wide lints (each crate opts in via `[lints] workspace = true`).
+# clippy::all is surfaced as warnings — run `make lint`; CI can add
+# `-D warnings` to fail the build on any.
+[workspace.lints.clippy]
+all = "warn"

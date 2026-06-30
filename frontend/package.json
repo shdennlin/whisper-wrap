@@ -8,9 +8,16 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run --environment happy-dom",
-    "test:watch": "vitest --environment happy-dom"
+    "test:watch": "vitest --environment happy-dom",
+    "test:e2e": "playwright test --project=mocked",
+    "test:e2e:smoke": "playwright test --project=smoke",
+    "lint": "biome lint src vite.config.ts",
+    "format": "biome check --write src vite.config.ts",
+    "check": "biome check src vite.config.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
+    "@playwright/test": "^1.60.0",
     "@vitest/web-worker": "^2.1.5",
     "fake-indexeddb": "^6.2.5",
     "happy-dom": "^15.11.6",

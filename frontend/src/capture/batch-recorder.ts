@@ -105,6 +105,11 @@ export class BatchRecorder {
     this.scheduleAutoStop(this.maxMs);
   }
 
+  /** The live capture MediaStream (for a waveform), or null before start(). */
+  getStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async stop(): Promise<BatchRecording> {
     if (!this.recorder) {
       throw new Error("BatchRecorder not started");

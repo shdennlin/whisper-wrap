@@ -9,7 +9,7 @@
  * job — this module is just the HTTP transport layer.
  */
 
-import type { ActionRun, SessionFinal, SessionRecord } from "./history-store";
+import type { SessionFinal, SessionRecord } from "./history-store";
 
 export type CaptureMode = "batch" | "live";
 
@@ -22,6 +22,12 @@ export interface SessionDigest {
   audio_mime_type: string | null;
   audio_size_bytes: number | null;
   duration_ms: number | null;
+  // Item metadata (item-metadata backend). Optional so older/partial responses
+  // still typecheck; the backend returns them on current rows.
+  title?: string | null;
+  starred?: boolean;
+  project?: string | null;
+  category?: string | null;
 }
 
 export interface SessionFull extends SessionDigest {
@@ -135,6 +141,11 @@ export async function patchSession(
     audio_path: string;
     audio_mime_type: string;
     audio_size_bytes: number;
+    // Item metadata (item-metadata): renamable / starrable / organisable.
+    title: string;
+    starred: boolean;
+    project: string;
+    category: string;
   }>,
 ): Promise<SessionFull> {
   const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}`), {
@@ -167,34 +178,6 @@ export async function appendFinalToApi(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  await ensureOk(r);
-}
-
-export async function appendActionRunToApi(
-  backendUrl: string,
-  sessionId: string,
-  body: ActionRun & { model_used?: string | null; succeeded?: boolean },
-): Promise<{ id: number }> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}/runs`), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  await ensureOk(r);
-  // Backend returns the full ActionRunOut shape including the autoincrement id.
-  return r.json();
-}
-
-export async function deleteActionRun(
-  backendUrl: string,
-  sessionId: string,
-  runId: number,
-): Promise<void> {
-  const r = await fetch(
-    url(backendUrl, `/v1/sessions/${sessionId}/runs/${runId}`),
-    { method: "DELETE" },
-  );
-  if (r.status === 204) return;
   await ensureOk(r);
 }
 

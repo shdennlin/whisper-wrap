@@ -24,6 +24,11 @@ export interface MeetingFull {
   audio_path?: string | null;
   audio_mime_type?: string | null;
   audio_size_bytes?: number | null;
+  // Item metadata (item-metadata backend). Optional for back-compat.
+  title?: string | null;
+  starred?: boolean;
+  project?: string | null;
+  category?: string | null;
 }
 
 export interface MeetingListResponse {
@@ -101,6 +106,19 @@ export async function patchMeetingFilename(
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ filename }),
+  });
+  return ok<MeetingFull>(r);
+}
+
+/** PATCH a meeting's item metadata (item-metadata): title/starred/project/category. */
+export async function patchMeetingMeta(
+  id: string,
+  body: Partial<{ title: string; starred: boolean; project: string; category: string }>,
+): Promise<MeetingFull> {
+  const r = await fetch(`/v1/meetings/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   });
   return ok<MeetingFull>(r);
 }

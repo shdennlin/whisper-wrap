@@ -3,7 +3,7 @@
 **English** | [繁體中文](README.zh-TW.md)
 
 
-Single-process FastAPI server for **in-process audio transcription, live captioning, and Gemini-backed Q&A**.
+A Rust engine for **audio transcription, live captioning, and LLM-backed Q&A**.
 
 v2.1 ships two Whisper backends in the same codebase and picks one at startup based on the host OS:
 
@@ -71,7 +71,7 @@ Open `http://localhost:8000/app/` for the PWA, `http://localhost:8000/status` fo
 
 ```
 ┌──────────────────┐         ┌────────────────────────────────────┐
-│   Client App     │───────▶ │  whisper-wrap (FastAPI, port 8000) │
+│   Client App     │───────▶ │  whisper-wrap (Rust engine, port 8000) │
 │  (iOS/Web/CLI)   │         │  ├── /transcribe                   │
 │                  │         │  ├── /ask  → Gemini API            │
 │                  │         │  ├── /listen (WebSocket)           │
@@ -584,8 +584,8 @@ Downloaded only when you `uv sync --extra meeting` and set `HF_TOKEN`. **All thr
 
 ### ⚠️ If you redistribute
 
-whisper-wrap's MIT license covers **the code in this repository only**. If you fork it and ship a desktop app, installer, or Docker image that **bundles model weights** (rather than downloading at runtime), you become the redistributor — and you must comply with each model's redistribution terms yourself. Gated pyannote models in particular do not permit silent redistribution.
+whisper-wrap's GPLv3 license covers **the code in this repository only**. If you fork it and ship a desktop app, installer, or Docker image that **bundles model weights** (rather than downloading at runtime), you become the redistributor — and you must comply with each model's redistribution terms yourself. Gated pyannote models in particular do not permit silent redistribution.
 
 ## 📄 License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under GPL-3.0-or-later — see the [LICENSE](LICENSE) file for details.

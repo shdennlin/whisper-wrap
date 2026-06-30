@@ -15,7 +15,7 @@ make check-system-deps
 # Test API health (status returns the loaded model and uptime)
 curl http://localhost:8000/status
 
-# Start the server (single FastAPI process; lifespan loads the model)
+# Start the server (single Rust engine process; loads the model on startup)
 make dev
 ```
 
@@ -94,7 +94,7 @@ free -h  # Linux
 vm_stat | grep "Pages free"  # macOS
 
 # Check CPU usage during transcription
-top -p $(pgrep -f "uvicorn app.main:app")
+top -p $(pgrep -f whisper-wrap-server)
 
 # Check disk space
 df -h
@@ -232,7 +232,7 @@ make dev
 
 ```bash
 # Watch API logs
-make run  # Shows FastAPI logs (model load + per-request lines)
+make server  # Shows engine logs (model load + per-request lines)
 ```
 
 ### 用簡單檔案測試

@@ -17,11 +17,9 @@
  */
 
 import {
-  appendActionRunToApi,
   appendFinalToApi,
   bulkClearAudio,
   createSession,
-  deleteActionRun as deleteActionRunApi,
   deleteSession as deleteSessionApi,
   listSessions,
   patchSession,
@@ -215,45 +213,6 @@ export class HistoryStore {
     }
   }
 
-  async appendActionRun(id: string, run: ActionRun): Promise<void> {
-    const session = this.cache.find((s) => s.id === id);
-    if (!session) {
-      throw new Error(`HistoryStore: unknown session id ${id}`);
-    }
-    await this.awaitCreate(id);
-    try {
-      const created = await appendActionRunToApi(
-        this.opts.backendUrl(),
-        id,
-        run,
-      );
-      // Cache the row with the server-assigned id so future deleteRun calls
-      // can target it. If the backend (somehow) omits id, fall back to the
-      // client input so the UI still sees the new entry.
-      session.action_runs.push({ ...run, id: created.id ?? run.id });
-    } catch (e) {
-      this.opts.onError?.(e, { op: "appendActionRun", sessionId: id });
-      throw e;
-    }
-  }
-
-  /** Delete a single action_run row. Returns void on 204; rejects with a
-   *  HistoryApiError on non-204 (cache untouched, `onError` fired). */
-  async deleteRun(sessionId: string, runId: number): Promise<void> {
-    const session = this.cache.find((s) => s.id === sessionId);
-    try {
-      await deleteActionRunApi(this.opts.backendUrl(), sessionId, runId);
-      if (session) {
-        session.action_runs = session.action_runs.filter(
-          (r) => r.id !== runId,
-        );
-      }
-    } catch (e) {
-      this.opts.onError?.(e, { op: "deleteRun", sessionId });
-      throw e;
-    }
-  }
-
   async stopSession(id: string): Promise<void> {
     const session = this.cache.find((s) => s.id === id);
     if (!session) {
@@ -369,7 +328,7 @@ function sessionFromDigest(d: SessionFull | {
   };
 }
 
-function generateId(): string {
+export function generateId(): string {
   // ULID-style: timestamp + random suffix. Not cryptographic; adequate for
   // client-side session identity that's also used as the backend PK.
   const t = Date.now().toString(36);

@@ -1,20 +1,30 @@
 /**
- * Persists the active capture mode (Live vs Batch) to localStorage.
+ * Persists whether live captions are enabled (fe-recording-modes).
  *
- * Default is "batch" — short voice memos with a single transcription on stop
- * are the most common use case; live captioning is opt-in.
+ * The old model had two exclusive capture modes (Batch vs Live); the new model
+ * is one capture session with a "live captions" toggle, so the only persisted
+ * state is a boolean. Default is false (live off) — short voice memos with a
+ * single transcription on stop are the common case; live captioning is opt-in.
+ *
+ * Migration: the legacy `whisper-wrap.captureMode` key ("batch"|"live") is read
+ * once as a fallback when the new key is absent ("live" → true, else false).
+ * The legacy key is intentionally left intact for one release so reverting the
+ * frontend keeps the old behavior.
  */
 
-export type CaptureMode = "batch" | "live";
+export const LIVE_CAPTIONS_KEY = "whisper-wrap.liveCaptions";
+export const LEGACY_CAPTURE_MODE_KEY = "whisper-wrap.captureMode";
+export const DEFAULT_LIVE_CAPTIONS = false;
 
-export const CAPTURE_MODE_KEY = "whisper-wrap.captureMode";
-export const DEFAULT_CAPTURE_MODE: CaptureMode = "batch";
-
-export function loadCaptureMode(): CaptureMode {
-  const raw = window.localStorage.getItem(CAPTURE_MODE_KEY);
-  return raw === "live" || raw === "batch" ? raw : DEFAULT_CAPTURE_MODE;
+export function loadLiveCaptions(): boolean {
+  const raw = window.localStorage.getItem(LIVE_CAPTIONS_KEY);
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  // No explicit choice yet — migrate from the legacy exclusive mode.
+  const legacy = window.localStorage.getItem(LEGACY_CAPTURE_MODE_KEY);
+  return legacy === "live";
 }
 
-export function saveCaptureMode(mode: CaptureMode): void {
-  window.localStorage.setItem(CAPTURE_MODE_KEY, mode);
+export function saveLiveCaptions(on: boolean): void {
+  window.localStorage.setItem(LIVE_CAPTIONS_KEY, String(on));
 }

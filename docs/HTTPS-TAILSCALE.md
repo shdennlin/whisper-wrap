@@ -45,11 +45,9 @@ export WHISPER_KEY="$PWD/mac-mini.tailXXXXX.ts.net.key"
 make dev-https
 ```
 
-`make dev-https` runs uvicorn with `--reload --ssl-certfile / --ssl-keyfile`
-pointed at the env vars — use it during development. For production (no
-reload), use `make run-https`. Both share the same cert-presence guard and
-fail with a clear message if either env var is unset or points at a missing
-file.
+The engine itself serves plain HTTP; TLS termination is handled by the reverse
+proxy / Tailscale sitting in front of it, which presents the cert and key from
+these env vars on `:8000`.
 
 Now any machine on your tailnet — including your phone — can open:
 

@@ -110,10 +110,15 @@ describe("createMeetingPage — rendering", () => {
   });
 
   it("export buttons trigger a Blob download with the correct filename", () => {
-    const createObjectURL = vi.fn(() => "blob:export-fake");
+    // Exports now route through saveTextFile, whose browser fallback uses the
+    // GLOBAL URL.createObjectURL (happy-dom lacks it, so spy it in).
+    const createObjectURL = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:export-fake");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const page = createMeetingPage({
       fetchStatus: async () => ({ available: true }),
-      createObjectURL,
+      createObjectURL: () => "blob:fake",
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
@@ -161,16 +166,21 @@ describe("createMeetingPage — rendering", () => {
     // createObjectURL was called once per export blob (5 total now
     // that TXT has two variants).
     expect(createObjectURL).toHaveBeenCalledTimes(5);
+    vi.restoreAllMocks();
   });
 });
 
 describe("createMeetingPage — speaker rename", () => {
-  it("rename via prompt updates every chip of that speaker", () => {
-    const promptFn = vi.fn(() => "Alice");
+  // renameSpeaker awaits promptFn (now async — the modal returns a promise),
+  // so the DOM updates a microtask after the click. flush() drains it.
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("rename via inline edit updates every chip of that speaker", async () => {
+    const editFn = vi.fn(() => "Alice");
     const page = createMeetingPage({
       fetchStatus: async () => ({ available: true }),
       createObjectURL: () => "blob:fake",
-      promptFn,
+      editFn,
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
@@ -186,8 +196,9 @@ describe("createMeetingPage — speaker rename", () => {
     );
     expect(editBtns.length).toBeGreaterThan(0);
     editBtns[0].click();
+    await flush();
 
-    expect(promptFn).toHaveBeenCalledTimes(1);
+    expect(editFn).toHaveBeenCalledTimes(1);
     const chips = document.querySelectorAll<HTMLElement>(".segment-meta-name");
     // Two segments for SPEAKER_00 (segments 0 + 2), one for SPEAKER_01.
     expect(chips[0].textContent).toContain("Alice");
@@ -195,41 +206,40 @@ describe("createMeetingPage — speaker rename", () => {
     expect(chips[2].textContent).toContain("Alice");
   });
 
-  it("rename to empty string reverts to raw SPEAKER_xx label", () => {
+  it("rename to empty string reverts to raw SPEAKER_xx label", async () => {
     let returnValue: string | null = "Bob";
-    const promptFn = vi.fn(() => returnValue);
+    const editFn = vi.fn(() => returnValue);
     const page = createMeetingPage({
       fetchStatus: async () => ({ available: true }),
       createObjectURL: () => "blob:fake",
-      promptFn,
+      editFn,
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
     switchToDetail();
 
-    const edit0 = document.querySelector<HTMLElement>(
-      ".transcript-segment .segment-meta-edit",
-    )!;
-    edit0.click();
+    document
+      .querySelector<HTMLElement>(".transcript-segment .segment-meta-edit")!
+      .click();
+    await flush();
     // Now rename back to "" — should revert.
     returnValue = "";
     document
       .querySelector<HTMLElement>(".transcript-segment .segment-meta-edit")!
       .click();
+    await flush();
     const chip = document.querySelector<HTMLElement>(".segment-meta-name")!;
     expect(chip.textContent).toContain("SPEAKER_00");
   });
 
-  it("renamed speakers flow into JSON export payload", () => {
-    const promptFn = vi.fn(() => "Charlie");
+  it("renamed speakers flow into JSON export payload", async () => {
+    const editFn = vi.fn(() => "Charlie");
     let downloadedJson: string | null = null;
-    // Capture the Blob payload by spying on createObjectURL: in the JSON
-    // export path we pass the blob through createObjectURL, so we can use
-    // a closure to grab the source.
-    const createObjectURL = vi.fn((b: File | Blob) => {
+    // Exports route through saveTextFile → global URL.createObjectURL; spy it
+    // to capture the Blob payload the JSON export path passes through.
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.spyOn(URL, "createObjectURL").mockImplementation((b: Blob | MediaSource) => {
       if (b instanceof Blob) {
-        // Synchronous text read isn't possible — use FileReader's sync-ish
-        // text() promise. Tests await this below.
         void b.text().then((t) => {
           if (t.startsWith("{")) downloadedJson = t;
         });
@@ -238,17 +248,19 @@ describe("createMeetingPage — speaker rename", () => {
     });
     const page = createMeetingPage({
       fetchStatus: async () => ({ available: true }),
-      createObjectURL,
-      promptFn,
+      createObjectURL: () => "blob:fake",
+      editFn,
     });
     document.body.appendChild(page.element);
     page.renderResult(SAMPLE_RESULT, "blob:fake");
     switchToDetail();
 
     // Rename SPEAKER_00 → Charlie via the icon on the first segment.
+    // renameSpeaker awaits the (async) prompt, so flush before exporting.
     document
       .querySelector<HTMLElement>(".transcript-segment .segment-meta-edit")!
       .click();
+    await new Promise((r) => setTimeout(r, 0));
 
     // Trigger JSON download.
     const origClick = HTMLAnchorElement.prototype.click;
@@ -260,17 +272,16 @@ describe("createMeetingPage — speaker rename", () => {
     }
 
     // Drain the microtask queue so the Blob.text() promise resolves.
-    return Promise.resolve()
-      .then(() => Promise.resolve())
-      .then(() => {
-        expect(downloadedJson).not.toBeNull();
-        const parsed = JSON.parse(downloadedJson!);
-        // SPEAKER_00 was renamed to Charlie in segments 0 and 2.
-        expect(parsed.speakers).toContain("Charlie");
-        expect(parsed.segments[0].speaker).toBe("Charlie");
-        expect(parsed.segments[0].raw_speaker).toBe("SPEAKER_00");
-        expect(parsed.segments[1].speaker).toBe("SPEAKER_01");
-      });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(downloadedJson).not.toBeNull();
+    const parsed = JSON.parse(downloadedJson!);
+    // SPEAKER_00 was renamed to Charlie in segments 0 and 2.
+    expect(parsed.speakers).toContain("Charlie");
+    expect(parsed.segments[0].speaker).toBe("Charlie");
+    expect(parsed.segments[0].raw_speaker).toBe("SPEAKER_00");
+    expect(parsed.segments[1].speaker).toBe("SPEAKER_01");
+    vi.restoreAllMocks();
   });
 });
 
@@ -294,6 +305,82 @@ describe("createMeetingPage — unavailability", () => {
       document.querySelector<HTMLDivElement>(".meeting-unavailable")!;
     expect(unavailable.hidden).toBe(false);
     expect(unavailable.textContent).toContain("HF_TOKEN");
+  });
+});
+
+describe("createMeetingPage — quality tiers", () => {
+  function mountWithTiers(tiers: string[] | undefined): void {
+    const page = createMeetingPage({
+      fetchStatus: async () => ({ available: true, qualityTiers: tiers }),
+      createObjectURL: () => "blob:fake",
+    });
+    document.body.appendChild(page.element);
+    const fileInput = document.querySelector<HTMLInputElement>(
+      ".meeting-upload input[type=file]",
+    )!;
+    const file = new File([new Uint8Array([0, 1])], "meeting.wav", {
+      type: "audio/wav",
+    });
+    Object.defineProperty(fileInput, "files", { value: [file], writable: false });
+    fileInput.dispatchEvent(new Event("change"));
+  }
+
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  const qualityField = () =>
+    document.querySelector<HTMLElement>(".confirm-field-quality")!;
+
+  it("hides the quality select when only the fast tier is installed", async () => {
+    mountWithTiers(["fast"]);
+    await flush();
+    expect(qualityField().hidden).toBe(true);
+  });
+
+  it("hides the quality select when the backend predates quality_tiers", async () => {
+    mountWithTiers(undefined);
+    await flush();
+    expect(qualityField().hidden).toBe(true);
+  });
+
+  it("shows the quality select when balanced is installed and submits quality=balanced", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST") urls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              url.startsWith("/transcribe/meeting")
+                ? { job_id: "j1", status_url: "/transcribe/meeting/j1" }
+                : { meetings: [] },
+            ),
+          text: () => Promise.resolve(""),
+        } as Response);
+      }),
+    );
+    try {
+      mountWithTiers(["fast", "balanced"]);
+      await flush();
+      expect(qualityField().hidden).toBe(false);
+
+      const select = qualityField().querySelector<HTMLSelectElement>("select")!;
+      expect(select.value).toBe("fast"); // default
+      select.value = "balanced";
+
+      document
+        .querySelector<HTMLButtonElement>(".meeting-confirm .btn-primary")!
+        .click();
+      await flush();
+      await flush();
+
+      const submit = urls.find((u) => u.startsWith("/transcribe/meeting"));
+      expect(submit).toContain("quality=balanced");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

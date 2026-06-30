@@ -18,7 +18,7 @@
  * unit-tested in isolation.
  */
 
-import type { MeetingResult, Segment } from "./types";
+import type { MeetingResult, Segment, Word } from "./types";
 
 const EDIT_ICON_SVG =
   '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -29,6 +29,9 @@ export interface ChatTurn {
   start: number;
   end: number;
   text: string;
+  /** The source segments of this turn, in order — used by the word-
+   *  level renderer so per-word seek survives the chat collapse. */
+  segments: Segment[];
 }
 
 export interface RenderOptions {
@@ -37,7 +40,8 @@ export interface RenderOptions {
   formatTime: (totalSeconds: number) => string;
   cssSafe: (s: string) => string;
   seekTo: (seg: Segment) => void;
-  onRename: (rawSpeaker: string) => void;
+  /** `anchor` is the speaker-name label element the caller can edit in place. */
+  onRename: (rawSpeaker: string, anchor: HTMLElement) => void;
   renameTooltip: string;
 }
 
@@ -64,16 +68,101 @@ export function collapseToChatTurns(
       // _merge), so a single space gives natural sentence flow.
       last.text = `${last.text} ${seg.text}`.replace(/\s+/g, " ");
       last.end = seg.end;
+      last.segments.push(seg);
     } else {
       turns.push({
         raw_speaker: seg.speaker,
         start: seg.start,
         end: seg.end,
         text: seg.text,
+        segments: [seg],
       });
     }
   }
   return turns;
+}
+
+/** One renderable slice of a segment's text: either plain text (word
+ *  gaps — usually whitespace) or a span backed by a timed Word. */
+export interface TextChunk {
+  text: string;
+  word?: Word;
+}
+
+/**
+ * Map a segment's `words` back onto its display text.
+ *
+ * The server's word list drops the original inter-word spacing
+ * (zh output like "7 月 1 號" becomes words ["7","月","1","號"]), so
+ * rendering words directly would change the visible text. Instead we
+ * walk `text` greedily: whitespace runs become plain chunks, and each
+ * word must match the next non-space characters exactly. The engine
+ * guarantees concat(words) === text-without-spaces, so alignment is
+ * exact; if it ever isn't (older history rows, future engine drift),
+ * return null and let the caller fall back to plain text.
+ */
+export function alignWordsToText(
+  text: string,
+  words: ReadonlyArray<Word>,
+): TextChunk[] | null {
+  const chunks: TextChunk[] = [];
+  let i = 0;
+  for (const w of words) {
+    let ws = "";
+    while (i < text.length && /\s/.test(text[i])) {
+      ws += text[i];
+      i += 1;
+    }
+    if (ws) chunks.push({ text: ws });
+    if (text.slice(i, i + w.word.length) !== w.word) return null;
+    chunks.push({ text: w.word, word: w });
+    i += w.word.length;
+  }
+  if (i < text.length) {
+    const rest = text.slice(i);
+    if (rest.trim() !== "") return null;
+    chunks.push({ text: rest });
+  }
+  return chunks;
+}
+
+/**
+ * Fill `textEl` with the segment's text, wrapping each timed word in a
+ * clickable span that seeks to that word's start. Segments without
+ * words (pre-words history rows) render as plain text — identical to
+ * the previous behavior.
+ */
+function appendSegmentText(
+  textEl: HTMLElement,
+  seg: Segment,
+  opts: RenderOptions,
+): void {
+  const chunks = seg.words?.length
+    ? alignWordsToText(seg.text, seg.words)
+    : null;
+  if (!chunks) {
+    textEl.append(document.createTextNode(seg.text));
+    return;
+  }
+  for (const chunk of chunks) {
+    if (!chunk.word) {
+      textEl.append(document.createTextNode(chunk.text));
+      continue;
+    }
+    const word = chunk.word;
+    const span = document.createElement("span");
+    span.className = "segment-word";
+    span.dataset.start = String(word.start);
+    span.title = opts.formatTime(word.start);
+    span.textContent = chunk.text;
+    span.addEventListener("click", (e) => {
+      // Don't let the parent segment/turn button seek to its own
+      // start right after we seeked to the word.
+      e.stopPropagation();
+      opts.seekTo({ ...seg, start: word.start });
+    });
+    textEl.append(span);
+  }
 }
 
 /** Detail mode — one card per segment, tightened from the original. */
@@ -107,13 +196,13 @@ export function renderDetailMode(
     editBtn.innerHTML = EDIT_ICON_SVG;
     editBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      opts.onRename(seg.speaker);
+      opts.onRename(seg.speaker, chipText);
     });
     metaEl.append(chipText, editBtn);
 
     const textEl = document.createElement("span");
     textEl.className = "segment-text";
-    textEl.textContent = seg.text;
+    appendSegmentText(textEl, seg, opts);
 
     item.append(metaEl, textEl);
     item.addEventListener("click", () => opts.seekTo(seg));
@@ -161,13 +250,22 @@ export function renderChatMode(
     editBtn.innerHTML = EDIT_ICON_SVG;
     editBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      opts.onRename(turn.raw_speaker);
+      opts.onRename(turn.raw_speaker, nameEl);
     });
     head.append(nameEl, timeEl, editBtn);
 
     const textEl = document.createElement("span");
     textEl.className = "chat-turn-text";
-    textEl.textContent = turn.text;
+    if (turn.segments.some((s) => s.words?.length)) {
+      // Render per source segment so word spans survive the collapse;
+      // single-space joins mirror the turn.text merge above.
+      turn.segments.forEach((seg, idx) => {
+        if (idx > 0) textEl.append(document.createTextNode(" "));
+        appendSegmentText(textEl, seg, opts);
+      });
+    } else {
+      textEl.textContent = turn.text;
+    }
 
     item.append(head, textEl);
     item.addEventListener("click", () =>

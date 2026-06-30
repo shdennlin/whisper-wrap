@@ -3,7 +3,7 @@
 [English](README.md) | **繁體中文**
 
 
-單一 process 的 FastAPI 伺服器，提供「**in-process 音訊轉寫、即時字幕，以及由 Gemini 支援的 Q&A**」。
+用於「**音訊轉寫、即時字幕，以及由 LLM 支援的 Q&A**」的 Rust 引擎。
 
 v2.1 在同一個 codebase 中內建兩種 Whisper backend，並依據主機 OS 在啟動時自動挑選其一：
 
@@ -71,7 +71,7 @@ curl -X POST http://localhost:8000/transcribe \
 
 ```
 ┌──────────────────┐         ┌────────────────────────────────────┐
-│   Client App     │───────▶ │  whisper-wrap (FastAPI, port 8000) │
+│   Client App     │───────▶ │  whisper-wrap (Rust engine, port 8000) │
 │  (iOS/Web/CLI)   │         │  ├── /transcribe                   │
 │                  │         │  ├── /ask  → Gemini API            │
 │                  │         │  ├── /listen (WebSocket)           │

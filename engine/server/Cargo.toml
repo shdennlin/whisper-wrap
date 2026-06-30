@@ -1,0 +1,39 @@
+[package]
+name = "whisper-wrap-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "whisper-wrap-server"
+path = "src/main.rs"
+
+[dependencies]
+whisper-wrap-core = { path = "../core", features = ["diarize"] }
+ulid = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq", "rustls-tls"] }
+# Model downloads stream through ureq directly (hf-hub's sync get() has no
+# progress hook or abort point); same version hf-hub already pulls in.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum = { version = "0.8", features = ["multipart", "ws"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+async-stream = "0.3"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+env_logger = "0.11"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true

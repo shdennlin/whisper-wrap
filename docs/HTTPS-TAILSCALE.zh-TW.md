@@ -45,7 +45,7 @@ export WHISPER_KEY="$PWD/mac-mini.tailXXXXX.ts.net.key"
 make dev-https
 ```
 
-`make dev-https` 會以 `--reload --ssl-certfile` / `--ssl-keyfile` 指向這些環境變數來執行 uvicorn,適合**開發**時使用。**生產環境**(無 reload)請改用 `make run-https`。兩者共用同一個憑證存在性檢查 — 若任一環境變數未設定或指向不存在的檔案,target 會以明確訊息失敗。
+引擎本身只提供純 HTTP；TLS termination 由前方的反向代理 / Tailscale 負責，由它以這些環境變數中的憑證與金鑰在 `:8000` 上對外提供 HTTPS。
 
 接著你 tailnet 上任何機器 — 包含手機 — 都能開啟:
 

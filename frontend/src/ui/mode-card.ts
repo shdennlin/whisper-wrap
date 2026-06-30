@@ -16,8 +16,12 @@
  * don't also fire the body's start/stop handler.
  */
 
-import type { CaptureMode } from "../capture/mode-store";
 import { t } from "../i18n";
+
+/** Legacy capture-mode label for the card's `data-mode` attribute. The capture
+ *  model is now one session + a live-captions toggle (fe-recording-modes); this
+ *  module is retained but unreferenced, so it keeps a local type. */
+type CaptureMode = "batch" | "live";
 
 export type ModeCardState =
   | "idle"

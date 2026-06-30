@@ -49,7 +49,7 @@ make setup
 
 `make setup` runs three steps:
 
-1. `uv sync` — installs Python deps (whisper backends, FastAPI, etc.)
+1. `cargo build --release` — builds the Rust engine (no Python deps to install)
 2. Downloads the default model (`breeze-asr-25` ≈ 1.5 GB)
 3. `bun run build` — emits the PWA bundle to `app/static/app/`
 
