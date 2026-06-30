@@ -854,6 +854,188 @@ describe("SettingsPanel + persistence helpers", () => {
     document.body.appendChild(host);
   });
 
+  function hotkeyToggle(): HTMLInputElement | undefined {
+    return [...host.querySelectorAll<HTMLLabelElement>(".settings-checkbox")]
+      .find((l) => l.textContent?.includes("⌥Space"))
+      ?.querySelector("input") as HTMLInputElement | undefined;
+  }
+
+  it("omits the global-hotkey toggle in a plain browser", () => {
+    new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {} });
+    expect(hotkeyToggle()).toBeUndefined();
+  });
+
+  it("renders the global-hotkey toggle on desktop and invokes set_global_hotkey", () => {
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    try {
+      new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {}, showDesktopShortcuts: true, showExperimental: true });
+      const toggle = hotkeyToggle();
+      expect(toggle).toBeTruthy();
+      expect(toggle!.checked).toBe(true); // default enabled
+      toggle!.checked = false;
+      toggle!.dispatchEvent(new Event("change"));
+      // Re-registration carries the current accelerator (default ⌥Space).
+      expect(invoke).toHaveBeenCalledWith("set_global_hotkey", {
+        enabled: false,
+        accelerator: "Alt+Space",
+      });
+      // The flip persists to the stored Settings.
+      expect(loadSettings().globalHotkeyEnabled).toBe(false);
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+
+  it("rebinds the shortcut: captures a combo, re-registers, and persists", () => {
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    try {
+      new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {}, showDesktopShortcuts: true, showExperimental: true });
+      const btn = host.querySelector(
+        ".settings-shortcut-btn",
+      ) as HTMLButtonElement | null;
+      expect(btn).toBeTruthy();
+      expect(btn!.textContent).toBe("⌥Space"); // default
+
+      // Enter capture mode, then press ⌃⇧K.
+      btn!.click();
+      expect(btn!.classList.contains("is-capturing")).toBe(true);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyK",
+          ctrlKey: true,
+          shiftKey: true,
+        }),
+      );
+
+      expect(btn!.classList.contains("is-capturing")).toBe(false);
+      expect(btn!.textContent).toBe("⌃⇧K");
+      // Default toggle is enabled, so the new binding re-registers at the OS.
+      expect(invoke).toHaveBeenCalledWith("set_global_hotkey", {
+        enabled: true,
+        accelerator: "Control+Shift+KeyK",
+      });
+      expect(loadSettings().globalHotkeyAccelerator).toBe("Control+Shift+KeyK");
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+
+  it("rebind ignores modifier-only presses and Esc cancels capture", () => {
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    try {
+      new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {}, showDesktopShortcuts: true, showExperimental: true });
+      const btn = host.querySelector(
+        ".settings-shortcut-btn",
+      ) as HTMLButtonElement | null;
+      btn!.click();
+      // A lone modifier keeps capture mode active (no full combo yet).
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { code: "AltLeft", altKey: true }),
+      );
+      expect(btn!.classList.contains("is-capturing")).toBe(true);
+      // Esc abandons the rebind without changing the binding.
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Escape" }));
+      expect(btn!.classList.contains("is-capturing")).toBe(false);
+      expect(btn!.textContent).toBe("⌥Space");
+      expect(loadSettings().globalHotkeyAccelerator).toBe("Alt+Space");
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+
+  function autoPasteToggle(): HTMLInputElement | undefined {
+    return [...host.querySelectorAll<HTMLLabelElement>(".settings-checkbox")]
+      .find((l) => l.textContent?.includes("Auto-paste transcript"))
+      ?.querySelector("input") as HTMLInputElement | undefined;
+  }
+
+  it("omits the auto-paste toggle in a plain browser", () => {
+    new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {} });
+    expect(autoPasteToggle()).toBeUndefined();
+  });
+
+  it("renders the auto-paste toggle on desktop and invokes set_auto_paste on change", () => {
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    try {
+      new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {}, showDesktopShortcuts: true, showExperimental: true });
+      const toggle = autoPasteToggle();
+      expect(toggle).toBeTruthy();
+      expect(toggle!.checked).toBe(false); // default disabled
+      toggle!.checked = true;
+      toggle!.dispatchEvent(new Event("change"));
+      expect(invoke).toHaveBeenCalledWith("set_auto_paste", { enabled: true });
+      expect(loadSettings().autoPasteEnabled).toBe(true);
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+
+  function autoPauseMediaToggle(): HTMLInputElement | undefined {
+    return [...host.querySelectorAll<HTMLLabelElement>(".settings-checkbox")]
+      .find((l) => l.textContent?.includes("Pause media while recording"))
+      ?.querySelector("input") as HTMLInputElement | undefined;
+  }
+
+  it("omits the Experimental auto-pause-media toggle in a plain browser", () => {
+    new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {} });
+    expect(autoPauseMediaToggle()).toBeUndefined();
+  });
+
+  it("renders the auto-pause-media toggle on desktop and invokes set_auto_pause_media on change", () => {
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    try {
+      new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {}, showDesktopShortcuts: true, showExperimental: true });
+      const toggle = autoPauseMediaToggle();
+      expect(toggle).toBeTruthy();
+      expect(toggle!.checked).toBe(false); // default disabled
+      toggle!.checked = true;
+      toggle!.dispatchEvent(new Event("change"));
+      expect(invoke).toHaveBeenCalledWith("set_auto_pause_media", { enabled: true });
+      expect(loadSettings().autoPauseMediaEnabled).toBe(true);
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+
+  it("rebinds the paste-last shortcut: captures a combo, invokes set_paste_hotkey, persists", () => {
+    const invoke = vi.fn(async () => undefined);
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = { core: { invoke } };
+    try {
+      new SettingsPanel({ root: host, enumerateDevices: async () => [], onChange: () => {}, showDesktopShortcuts: true, showExperimental: true });
+      const btn = host.querySelector(
+        ".settings-paste-shortcut-btn",
+      ) as HTMLButtonElement | null;
+      expect(btn).toBeTruthy();
+
+      btn!.click();
+      expect(btn!.classList.contains("is-capturing")).toBe(true);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyV",
+          ctrlKey: true,
+          shiftKey: true,
+        }),
+      );
+
+      expect(btn!.classList.contains("is-capturing")).toBe(false);
+      expect(btn!.textContent).toBe("⌃⇧V");
+      // Capturing a combo enables the paste hotkey at the OS level.
+      expect(invoke).toHaveBeenCalledWith("set_paste_hotkey", {
+        enabled: true,
+        accelerator: "Control+Shift+KeyV",
+      });
+      expect(loadSettings().pasteHotkeyAccelerator).toBe("Control+Shift+KeyV");
+      expect(loadSettings().pasteHotkeyEnabled).toBe(true);
+    } finally {
+      delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+    }
+  });
+
   it("renders all the documented controls", async () => {
     const panel = new SettingsPanel({
       root: host,
@@ -884,6 +1066,12 @@ describe("SettingsPanel + persistence helpers", () => {
       liveIdleMinutes: 15,
       liveMaxMinutes: 120,
       audioSave: false,
+      globalHotkeyEnabled: true,
+      globalHotkeyAccelerator: "Control+Shift+KeyK",
+      autoPasteEnabled: true,
+      pasteHotkeyEnabled: true,
+      pasteHotkeyAccelerator: "Alt+V",
+      autoPauseMediaEnabled: false,
     });
     const reloaded = loadSettings();
     expect(reloaded.deviceId).toBe("airpods-id");
@@ -896,6 +1084,10 @@ describe("SettingsPanel + persistence helpers", () => {
     expect(reloaded.liveIdleMinutes).toBe(15);
     expect(reloaded.liveMaxMinutes).toBe(120);
     expect(reloaded.audioSave).toBe(false);
+    expect(reloaded.globalHotkeyAccelerator).toBe("Control+Shift+KeyK");
+    expect(reloaded.autoPasteEnabled).toBe(true);
+    expect(reloaded.pasteHotkeyEnabled).toBe(true);
+    expect(reloaded.pasteHotkeyAccelerator).toBe("Alt+V");
   });
 
   it("changing a control fires onChange with the merged Settings and writes localStorage", async () => {
@@ -945,9 +1137,12 @@ describe("SettingsPanel audio controls", () => {
       'input[type="checkbox"]',
     ) as NodeListOf<HTMLInputElement>;
     expect(checkboxes.length).toBe(5);
-    // The audio.save checkbox is the last one (appended after the existing
-    // Settings, immediately below the Live timeout inputs).
-    const audioSave = checkboxes[checkboxes.length - 1];
+    // Locate by label (cards reorder checkboxes, so index is unreliable).
+    const audioSave = [
+      ...host.querySelectorAll<HTMLLabelElement>(".settings-checkbox"),
+    ]
+      .find((l) => l.textContent?.includes("Save audio for replay"))
+      ?.querySelector("input") as HTMLInputElement;
     expect(audioSave.checked).toBe(true);
   });
 
@@ -958,10 +1153,11 @@ describe("SettingsPanel audio controls", () => {
       enumerateDevices: async () => [],
       onChange: () => {},
     });
-    const checkboxes = host.querySelectorAll(
-      'input[type="checkbox"]',
-    ) as NodeListOf<HTMLInputElement>;
-    const audioSave = checkboxes[checkboxes.length - 1];
+    const audioSave = [
+      ...host.querySelectorAll<HTMLLabelElement>(".settings-checkbox"),
+    ]
+      .find((l) => l.textContent?.includes("Save audio for replay"))
+      ?.querySelector("input") as HTMLInputElement;
     audioSave.checked = false;
     audioSave.dispatchEvent(new Event("change"));
 
@@ -969,6 +1165,23 @@ describe("SettingsPanel audio controls", () => {
       window.localStorage.getItem(SETTINGS_KEY) ?? "{}",
     );
     expect(persisted.audioSave).toBe(false);
+  });
+
+  // (3b) Settings render grouped into titled cards, with controls inside them.
+  it("groups settings into titled cards", () => {
+    new SettingsPanel({
+      root: host,
+      enumerateDevices: async () => [],
+      onChange: () => {},
+    });
+    expect(host.querySelectorAll(".settings-card").length).toBeGreaterThanOrEqual(
+      4,
+    );
+    expect(host.querySelector(".settings-card-title")).toBeTruthy();
+    const audioSaveLabel = [
+      ...host.querySelectorAll<HTMLLabelElement>(".settings-checkbox"),
+    ].find((l) => l.textContent?.includes("Save audio for replay"));
+    expect(audioSaveLabel?.closest(".settings-card")).toBeTruthy();
   });
 
   // (4) Audio budget numeric input renders with default 100.
@@ -1048,16 +1261,22 @@ describe("SettingsPanel audio controls", () => {
       onToast: (t) => toasts.push(t),
     });
 
-    const confirmSpy = vi
-      .spyOn(window, "confirm")
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true);
+    // Confirmation is now an in-DOM modalConfirm (window.confirm no-ops in
+    // the WKWebView shell). Each clear double-confirms, so resolve two modals
+    // in sequence; a microtask between them lets the handler mount the next.
+    const answerModal = (ok: boolean) => {
+      const sel = ok ? ".modal-prompt-ok" : ".modal-prompt-cancel";
+      document.querySelector<HTMLButtonElement>(sel)?.click();
+    };
     const button = host.querySelector(
       "button.settings-clear-audio",
     ) as HTMLButtonElement | null;
     expect(button).not.toBeNull();
+
     button!.click();
-    // Allow the awaited clearAllAudio promise + toast emit to settle.
+    answerModal(true);
+    await Promise.resolve();
+    answerModal(true);
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
@@ -1066,12 +1285,11 @@ describe("SettingsPanel audio controls", () => {
     expect(toasts[0]).toContain("7");
 
     // Second click: cancel on the second confirm — clearAllAudio not called.
-    confirmSpy.mockReset();
-    confirmSpy.mockReturnValueOnce(true).mockReturnValueOnce(false);
     button!.click();
+    answerModal(true);
+    await Promise.resolve();
+    answerModal(false);
     await new Promise((r) => setTimeout(r, 0));
     expect(clearAllAudio).toHaveBeenCalledTimes(1); // unchanged
-
-    confirmSpy.mockRestore();
   });
 });

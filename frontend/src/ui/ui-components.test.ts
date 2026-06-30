@@ -1,55 +1,11 @@
 /**
- * Snapshot-style tests for the transcript-view + connection-indicator
- * components (Decision 3 + Real-time captioning UI).
+ * Snapshot-style tests for the connection-indicator component. The transcript
+ * rendering moved into the recording layer (retire-v2-recording-shell) and is
+ * covered by recording-view.test.ts.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { TranscriptView } from "./transcript-view";
 import { ConnectionIndicator } from "./connection-indicator";
-
-describe("TranscriptView", () => {
-  let host: HTMLDivElement;
-  beforeEach(() => {
-    document.body.replaceChildren();
-    host = document.createElement("div");
-    document.body.appendChild(host);
-  });
-
-  it("renders a partial-then-final sequence: partial appears grey then is replaced by final", () => {
-    const view = new TranscriptView(host);
-    view.setPartial("hello wor");
-    expect(host.querySelector(".transcript-partial")?.textContent).toBe("hello wor");
-    expect(host.querySelectorAll(".transcript-final").length).toBe(0);
-
-    view.appendFinal({ text: "hello world.", start_ms: 0, end_ms: 1200 });
-    expect(host.querySelector(".transcript-partial")?.textContent).toBe("");
-    const finals = host.querySelectorAll(".transcript-final");
-    expect(finals.length).toBe(1);
-    expect(finals[0].querySelector(".transcript-text")?.textContent).toBe(
-      "hello world.",
-    );
-    expect(finals[0].querySelector(".transcript-ts")?.textContent).toBe("00:00");
-  });
-
-  it("each new partial replaces the prior partial", () => {
-    const view = new TranscriptView(host);
-    view.setPartial("foo");
-    view.setPartial("foo bar");
-    view.setPartial("foo bar baz");
-    expect(host.querySelector(".transcript-partial")?.textContent).toBe("foo bar baz");
-  });
-
-  it("appendFinal preserves order in the DOM", () => {
-    const view = new TranscriptView(host);
-    view.appendFinal({ text: "a", start_ms: 0, end_ms: 100 });
-    view.appendFinal({ text: "b", start_ms: 100, end_ms: 200 });
-    view.appendFinal({ text: "c", start_ms: 200, end_ms: 300 });
-    const texts = Array.from(host.querySelectorAll(".transcript-text")).map(
-      (el) => el.textContent,
-    );
-    expect(texts).toEqual(["a", "b", "c"]);
-  });
-});
 
 describe("ConnectionIndicator", () => {
   let host: HTMLDivElement;

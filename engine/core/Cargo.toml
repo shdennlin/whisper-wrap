@@ -1,0 +1,22 @@
+[package]
+name = "whisper-wrap-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+whisper-rs.workspace = true
+infer = "0.16"
+uuid = { version = "1", features = ["v4"] }
+sherpa-rs = { version = "0.6", features = ["download-binaries"], optional = true }
+
+[features]
+diarize = ["dep:sherpa-rs"]
+
+[lints]
+workspace = true

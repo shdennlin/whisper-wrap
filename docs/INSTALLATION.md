@@ -111,7 +111,7 @@ If you depended on a dropped entry, add an equivalent CT2 entry to your local
 - **Bun 1.1+** (build-time only): needed by `make build-frontend` to compile the
   v2.4 PWA bundle (Vite + TypeScript). Install with
   `curl -fsSL https://bun.sh/install | bash`. Not required at runtime; the
-  bundle is shipped in `app/static/app/` and served by FastAPI.
+  bundle is shipped in `app/static/app/` and served by the engine.
 
 ### Operating Systems
 - macOS 10.15+ (Intel/Apple Silicon)
@@ -190,8 +190,9 @@ make download-model MODEL=large-v3-turbo
 ### 4. Start the Server
 
 ```bash
-make run        # uvicorn (single FastAPI process; in-process model load)
-make dev        # uvicorn --reload for development
+make up         # build the PWA bundle, then build + run the engine server
+make server     # release build + run the engine server
+make dev        # hot-reload dev loop (Vite HMR + engine)
 ```
 
 ## Verification

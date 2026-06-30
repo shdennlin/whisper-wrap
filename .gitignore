@@ -226,3 +226,6 @@ app/static/app/
 data/
 alembic/__pycache__/
 alembic/versions/__pycache__/
+
+# local model backup (12G weights, never commit)
+models.bak/

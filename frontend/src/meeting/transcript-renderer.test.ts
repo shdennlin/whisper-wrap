@@ -3,8 +3,9 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import type { MeetingResult, Segment } from "./types";
+import type { MeetingResult, Segment, Word } from "./types";
 import {
+  alignWordsToText,
   buildPromptText,
   collapseToChatTurns,
   renderChatMode,
@@ -119,7 +120,8 @@ describe("renderChatMode", () => {
     )!;
     expect(edit).toBeTruthy();
     edit.click();
-    expect(onRename).toHaveBeenCalledWith("SPEAKER_00");
+    // onRename now receives the speaker plus the name label to edit in place.
+    expect(onRename).toHaveBeenCalledWith("SPEAKER_00", expect.any(HTMLElement));
   });
 
   it("applies speaker color via --turn-speaker-color custom property", () => {
@@ -149,6 +151,121 @@ describe("renderDetailMode", () => {
     segs[3].click(); // SPEAKER_01 segment at 4.0
     expect(seekTo).toHaveBeenCalledTimes(1);
     expect(seekTo.mock.calls[0][0].start).toBe(4.0);
+  });
+});
+
+function word(w: string, start: number, end: number): Word {
+  return { word: w, start, end };
+}
+
+describe("alignWordsToText", () => {
+  it("maps zh text with spaces back onto space-less words", () => {
+    // The engine's word list drops inter-word spacing; alignment must
+    // restore the original display text exactly.
+    const chunks = alignWordsToText("7 月 1 號", [
+      word("7", 6.9, 6.93),
+      word("月", 6.94, 7.06),
+      word("1", 7.06, 7.09),
+      word("號", 7.26, 7.33),
+    ])!;
+    expect(chunks.map((c) => c.text).join("")).toBe("7 月 1 號");
+    expect(chunks.filter((c) => c.word)).toHaveLength(4);
+  });
+
+  it("aligns plain English words", () => {
+    const chunks = alignWordsToText("hello world.", [
+      word("hello", 0, 0.4),
+      word("world.", 0.5, 0.9),
+    ])!;
+    expect(chunks.map((c) => c.text).join("")).toBe("hello world.");
+    expect(chunks[2].word?.start).toBe(0.5);
+  });
+
+  it("returns null when words don't match the text (graceful fallback)", () => {
+    expect(alignWordsToText("completely different", [word("你好", 0, 1)])).toBeNull();
+    // Leftover non-space text after the last word is also a mismatch.
+    expect(alignWordsToText("hello world", [word("hello", 0, 1)])).toBeNull();
+  });
+});
+
+describe("word-level seek", () => {
+  const WORDS_SEGMENT: Segment = {
+    speaker: "SPEAKER_00",
+    start: 6.8,
+    end: 8.2,
+    text: "7 月 1 號",
+    words: [
+      word("7", 6.9, 6.93),
+      word("月", 6.94, 7.06),
+      word("1", 7.06, 7.09),
+      word("號", 7.26, 7.33),
+    ],
+  };
+  const RESULT: MeetingResult = {
+    language: "zh",
+    duration_seconds: 30,
+    speakers: ["SPEAKER_00"],
+    segments: [WORDS_SEGMENT, makeSegment("SPEAKER_00", 8.2, 9.0, "plain")],
+  };
+
+  it("detail mode renders a .segment-word span per timed word", () => {
+    const host = document.createElement("div");
+    renderDetailMode(host, RESULT, makeOpts());
+    const spans = host.querySelectorAll<HTMLElement>(".segment-word");
+    expect(spans).toHaveLength(4);
+    expect(spans[1].textContent).toBe("月");
+    expect(spans[1].dataset.start).toBe("6.94");
+    // Visible text is unchanged — spacing preserved by alignment.
+    const textEl = host.querySelector(".segment-text")!;
+    expect(textEl.textContent).toBe("7 月 1 號");
+  });
+
+  it("clicking a word seeks to the word's start, not the segment's", () => {
+    const host = document.createElement("div");
+    const seekTo = vi.fn();
+    renderDetailMode(host, RESULT, makeOpts({ seekTo }));
+    const spans = host.querySelectorAll<HTMLElement>(".segment-word");
+    spans[3].click(); // 號 @ 7.26
+    expect(seekTo).toHaveBeenCalledTimes(1); // stopPropagation: segment handler must not double-fire
+    expect(seekTo.mock.calls[0][0].start).toBe(7.26);
+  });
+
+  it("segments without words render as plain text (no spans)", () => {
+    const host = document.createElement("div");
+    renderDetailMode(host, RESULT, makeOpts());
+    const segs = host.querySelectorAll(".transcript-segment");
+    expect(segs[1].querySelectorAll(".segment-word")).toHaveLength(0);
+    expect(segs[1].querySelector(".segment-text")!.textContent).toBe("plain");
+  });
+
+  it("chat mode keeps word spans across the same-speaker collapse", () => {
+    const host = document.createElement("div");
+    const seekTo = vi.fn();
+    renderChatMode(host, RESULT, makeOpts({ seekTo }));
+    // Both segments collapse into one turn; the worded one still has spans.
+    const turns = host.querySelectorAll(".chat-turn");
+    expect(turns).toHaveLength(1);
+    const spans = turns[0].querySelectorAll<HTMLElement>(".segment-word");
+    expect(spans).toHaveLength(4);
+    expect(turns[0].querySelector(".chat-turn-text")!.textContent).toBe(
+      "7 月 1 號 plain",
+    );
+    spans[0].click(); // 7 @ 6.9
+    expect(seekTo).toHaveBeenCalledTimes(1);
+    expect(seekTo.mock.calls[0][0].start).toBe(6.9);
+  });
+
+  it("falls back to plain text when words mismatch the text", () => {
+    const broken: MeetingResult = {
+      ...RESULT,
+      segments: [{ ...WORDS_SEGMENT, text: "different text entirely" }],
+    };
+    const host = document.createElement("div");
+    renderDetailMode(host, broken, makeOpts());
+    expect(host.querySelectorAll(".segment-word")).toHaveLength(0);
+    expect(host.querySelector(".segment-text")!.textContent).toBe(
+      "different text entirely",
+    );
   });
 });
 

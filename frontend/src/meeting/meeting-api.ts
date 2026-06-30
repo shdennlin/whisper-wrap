@@ -28,6 +28,12 @@ export interface SubmitOptions {
    * uploaded, not a synthesised `meeting-<job_id>` placeholder.
    */
   filename?: string;
+  /**
+   * Diarization quality tier (v3 engine): "fast" (default, CAM++) or
+   * "balanced" (larger embedding model, better speaker separation).
+   * Only offered when /status meeting.quality_tiers includes it.
+   */
+  quality?: "fast" | "balanced";
 }
 
 export interface JobHandle {
@@ -57,6 +63,8 @@ export async function submitMeeting(
   // Same opt-in pattern as enableWordTimestamps: only send when true, so a
   // future backend default change to fast-on-everywhere is honoured.
   if (opts.fast === true) params.set("fast", "true");
+  // Backend default is fast — only send the non-default tier.
+  if (opts.quality === "balanced") params.set("quality", "balanced");
   if (opts.filename) params.set("filename", opts.filename);
 
   const url = `/transcribe/meeting${params.toString() ? `?${params}` : ""}`;

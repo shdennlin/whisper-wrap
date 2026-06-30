@@ -1,0 +1,6 @@
+# Playwright E2E (fe-e2e-playwright) — report + trace/output artifacts.
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+playwright/.cache/

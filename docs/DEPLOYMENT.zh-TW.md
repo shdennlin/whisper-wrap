@@ -46,7 +46,7 @@ make setup
 
 `make setup` 會執行三個步驟：
 
-1. `uv sync` — 安裝 Python 相依套件（whisper 後端、FastAPI 等）
+1. `cargo build --release` — 編譯 Rust 引擎（無 Python 相依套件需安裝）
 2. 下載預設模型（`breeze-asr-25` ≈ 1.5 GB）
 3. `bun run build` — 將 PWA bundle 輸出至 `app/static/app/`
 

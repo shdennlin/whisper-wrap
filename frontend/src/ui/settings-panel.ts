@@ -23,6 +23,9 @@ import {
   type Locale,
   type StringKey,
 } from "../i18n";
+import { modalConfirm } from "./modal-prompt";
+import { tauriInvoke } from "../platform/capability";
+import { accelFromEvent, formatAccelerator } from "./shortcut-capture";
 
 export const SETTINGS_KEY = "whisper-wrap.settings";
 
@@ -58,6 +61,21 @@ export interface Settings {
   liveMaxMinutes: number;
   /** Persist per-session audio so transcripts can be replayed / re-ASR'd. */
   audioSave: boolean;
+  /** Desktop-only: register the global ⌥Space quick-voice shortcut. */
+  globalHotkeyEnabled: boolean;
+  /** Desktop-only: the quick-voice shortcut accelerator (Tauri syntax, e.g.
+   *  "Alt+Space"). Rebindable from Settings. */
+  globalHotkeyAccelerator: string;
+  /** Desktop-only: paste the transcript into the frontmost app when a
+   *  quick-voice capture finishes (needs macOS Accessibility permission). */
+  autoPasteEnabled: boolean;
+  /** Desktop-only: register the global "paste last transcript" shortcut. */
+  pasteHotkeyEnabled: boolean;
+  /** Desktop-only: the paste-last shortcut accelerator (Tauri syntax). Empty
+   *  string = unbound. Rebindable from Settings. */
+  pasteHotkeyAccelerator: string;
+  /** Desktop-only (Experimental): pause playing media while recording. */
+  autoPauseMediaEnabled: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -71,6 +89,12 @@ export const DEFAULTS: Settings = {
   liveIdleMinutes: 30,
   liveMaxMinutes: 240,
   audioSave: true,
+  globalHotkeyEnabled: true,
+  globalHotkeyAccelerator: "Alt+Space",
+  autoPasteEnabled: false,
+  pasteHotkeyEnabled: false,
+  pasteHotkeyAccelerator: "",
+  autoPauseMediaEnabled: false,
 };
 
 export function loadSettings(): Settings {
@@ -151,6 +175,14 @@ export interface SettingsPanelOptions {
   clearAllAudio?: () => Promise<number>;
   /** Optional toast sink for ephemeral messages (clear-all completion). */
   onToast?: (text: string) => void;
+  /**
+   * Render the desktop-only Shortcuts section (global hotkey + rebinds) and the
+   * auto-paste row. Sourced from the surface profile via main.ts; defaults to
+   * false so a standalone panel never shows OS controls that no-op on the web.
+   */
+  showDesktopShortcuts?: boolean;
+  /** Render the desktop-only Experimental section. Defaults to false. */
+  showExperimental?: boolean;
 }
 
 export class SettingsPanel {
@@ -165,9 +197,23 @@ export class SettingsPanel {
   private liveIdleInput!: HTMLInputElement;
   private liveMaxInput!: HTMLInputElement;
   private audioSaveInput!: HTMLInputElement;
+  /** Desktop-only — null in a plain browser (no global shortcuts on the web). */
+  private globalHotkeyInput: HTMLInputElement | null = null;
+  /** The accelerator currently chosen in the rebind control. */
+  private globalHotkeyAccel = DEFAULTS.globalHotkeyAccelerator;
+  /** Desktop-only auto-paste toggle; null in a plain browser. */
+  private autoPasteInput: HTMLInputElement | null = null;
+  /** Desktop-only (Experimental) auto-pause-media toggle; null in a browser. */
+  private autoPauseMediaInput: HTMLInputElement | null = null;
+  /** The accelerator currently chosen in the paste-last rebind control. */
+  private pasteHotkeyAccel = DEFAULTS.pasteHotkeyAccelerator;
   private audioBudgetInput!: HTMLInputElement;
   private audioBudgetError!: HTMLSpanElement;
   private languageSelect!: HTMLSelectElement;
+  /** The open card rows mount into; null = mount directly on the panel root. */
+  private currentCard: HTMLElement | null = null;
+  /** Empty-state line shown when a search query matches nothing. */
+  private emptyEl!: HTMLParagraphElement;
 
   constructor(private readonly opts: SettingsPanelOptions) {
     this.current = loadSettings();
@@ -180,28 +226,37 @@ export class SettingsPanel {
   }
 
   private build(): void {
-    this.languageSelect = this.makeSelect(t("settings.language"));
-    for (const loc of AVAILABLE_LOCALES) {
-      const opt = document.createElement("option");
-      opt.value = loc;
-      opt.textContent = LOCALE_LABELS[loc];
-      this.languageSelect.appendChild(opt);
-    }
-    this.languageSelect.value = getLocale();
-    // Locale change is rare; reload the page rather than re-rendering every
-    // component subtree on the fly.
-    this.languageSelect.addEventListener("change", () => {
-      const next = this.languageSelect.value as Locale;
-      saveLocale(next);
-      window.location.reload();
-    });
+    this.initSearchState();
 
+    // --- Shortcuts (desktop only — the web has no global hotkey API) ---
+    if (this.opts.showDesktopShortcuts ?? false) {
+      this.makeCard("settings.cardShortcuts");
+      this.globalHotkeyAccel = this.current.globalHotkeyAccelerator;
+      this.globalHotkeyInput = this.makeCheckboxWithHint(
+        tSafe("settings.globalHotkeyLabel"),
+        this.current.globalHotkeyEnabled,
+        tSafe("settings.globalHotkeyHint"),
+      );
+      // Register/unregister at the OS level the moment the toggle flips —
+      // re-registering uses the current accelerator.
+      this.globalHotkeyInput.addEventListener("change", () => {
+        void tauriInvoke()?.("set_global_hotkey", {
+          enabled: this.globalHotkeyInput!.checked,
+          accelerator: this.globalHotkeyAccel,
+        });
+      });
+      this.buildShortcutRebind();
+      // "Paste last transcript" global shortcut rebind.
+      this.pasteHotkeyAccel = this.current.pasteHotkeyAccelerator;
+      this.buildPasteShortcutRebind();
+    }
+
+    // --- Audio Input ---
+    this.makeCard("settings.cardAudioInput");
     this.deviceSelect = this.makeSelect(t("settings.mic"));
-    this.backendInput = this.makeInput(
-      t("settings.backendUrl"),
-      "url",
-      this.current.backendUrl,
-    );
+
+    // --- Recording ---
+    this.makeCard("settings.cardRecording");
     this.partialsInput = this.makeCheckbox(
       t("settings.showPartials"),
       this.current.showPartials,
@@ -210,22 +265,21 @@ export class SettingsPanel {
       t("settings.autoScroll"),
       this.current.autoScroll,
     );
-    this.autocopyInput = this.makeCheckbox(
-      t("settings.autoCopy"),
-      this.current.autoCopy,
+    this.audioSaveInput = this.makeCheckboxWithHint(
+      tSafe("settings.audioSaveLabel"),
+      this.current.audioSave,
+      tSafe("settings.audioSaveHint"),
     );
-    this.autocopyAnswerInput = this.makeCheckbox(
-      t("settings.autoCopyAnswer"),
-      this.current.autoCopyAnswer,
-    );
-    this.retentionInput = this.makeInput(
-      t("settings.retention"),
-      "number",
-      String(this.current.retention),
-    );
-    this.retentionInput.min = "1";
-    this.retentionInput.max = "50";
-
+    // Keep the desktop overlay's Save-audio preference in sync: the overlay
+    // surface runs at a separate asset origin and cannot read this from
+    // localStorage, so the shell must be told the current value (it forwards it
+    // to the overlay per capture). No-ops on the web (no Tauri bridge).
+    this.audioSaveInput.addEventListener("change", () => {
+      void tauriInvoke()?.("set_overlay_prefs", {
+        audioSave: this.audioSaveInput.checked,
+        locale: getLocale(),
+      });
+    });
     this.makeSectionTitle(t("settings.liveSection"));
     this.liveIdleInput = this.makeInputWithHint(
       t("settings.liveIdleLabel"),
@@ -243,15 +297,6 @@ export class SettingsPanel {
     );
     this.liveMaxInput.min = "0";
     this.liveMaxInput.max = "720";
-
-    // Audio retention controls — placed immediately below the Live timeout
-    // fields so users see them next to other recording-related settings.
-    this.audioSaveInput = this.makeCheckboxWithHint(
-      tSafe("settings.audioSaveLabel"),
-      this.current.audioSave,
-      tSafe("settings.audioSaveHint"),
-    );
-
     const budgetField = this.makeInputWithHintAndError(
       tSafe("settings.audioBudgetLabel"),
       "number",
@@ -263,6 +308,81 @@ export class SettingsPanel {
     this.audioBudgetInput.min = String(AUDIO_BUDGET_MIN_MB);
     this.audioBudgetInput.max = String(AUDIO_BUDGET_MAX_MB);
 
+    // --- Output & Paste ---
+    this.makeCard("settings.cardOutput");
+    this.autocopyInput = this.makeCheckbox(
+      t("settings.autoCopy"),
+      this.current.autoCopy,
+    );
+    this.autocopyAnswerInput = this.makeCheckbox(
+      t("settings.autoCopyAnswer"),
+      this.current.autoCopyAnswer,
+    );
+    if (this.opts.showDesktopShortcuts ?? false) {
+      // Auto-paste-on-finish (overlay-auto-paste): paste the transcript into
+      // the frontmost app the moment a quick-voice capture lands.
+      this.autoPasteInput = this.makeCheckboxWithHint(
+        tSafe("settings.autoPasteLabel"),
+        this.current.autoPasteEnabled,
+        tSafe("settings.autoPasteHint"),
+      );
+      this.autoPasteInput.addEventListener("change", () => {
+        void tauriInvoke()?.("set_auto_paste", {
+          enabled: this.autoPasteInput!.checked,
+        });
+      });
+      // Accessibility-permission status row — auto-paste silently no-ops
+      // without it, so surface the live state + a one-click jump to the pane.
+      this.buildAccessibilityRow();
+    }
+
+    // --- Experimental (desktop only) ---
+    if (this.opts.showExperimental ?? false) {
+      this.makeCard("settings.cardExperimental");
+      // Auto-pause-media (overlay-media-pause): opt-in, coarse heuristics.
+      this.autoPauseMediaInput = this.makeCheckboxWithHint(
+        tSafe("settings.autoPauseMediaLabel"),
+        this.current.autoPauseMediaEnabled,
+        tSafe("settings.autoPauseMediaHint"),
+      );
+      this.autoPauseMediaInput.addEventListener("change", () => {
+        void tauriInvoke()?.("set_auto_pause_media", {
+          enabled: this.autoPauseMediaInput!.checked,
+        });
+      });
+    }
+
+    // --- General ---
+    this.makeCard("settings.cardGeneral");
+    this.backendInput = this.makeInput(
+      t("settings.backendUrl"),
+      "url",
+      this.current.backendUrl,
+    );
+    this.languageSelect = this.makeSelect(t("settings.language"));
+    for (const loc of AVAILABLE_LOCALES) {
+      const opt = document.createElement("option");
+      opt.value = loc;
+      opt.textContent = LOCALE_LABELS[loc];
+      this.languageSelect.appendChild(opt);
+    }
+    this.languageSelect.value = getLocale();
+    // Locale change is rare; reload the page rather than re-rendering every
+    // component subtree on the fly.
+    this.languageSelect.addEventListener("change", () => {
+      const next = this.languageSelect.value as Locale;
+      saveLocale(next);
+      window.location.reload();
+    });
+    this.retentionInput = this.makeInput(
+      t("settings.retention"),
+      "number",
+      String(this.current.retention),
+    );
+    this.retentionInput.min = "1";
+    this.retentionInput.max = "50";
+    // Model management lives in its own dedicated Models view now — no need to
+    // duplicate it inside Settings.
     this.buildClearAllAudioButton();
 
     this.populateDevices();
@@ -279,11 +399,23 @@ export class SettingsPanel {
         liveIdleMinutes: clampMinutes(this.liveIdleInput.valueAsNumber, 180),
         liveMaxMinutes: clampMinutes(this.liveMaxInput.valueAsNumber, 720),
         audioSave: this.audioSaveInput.checked,
+        // Desktop-only input; keep the stored value when the toggle is absent.
+        globalHotkeyEnabled:
+          this.globalHotkeyInput?.checked ?? this.current.globalHotkeyEnabled,
+        globalHotkeyAccelerator: this.globalHotkeyAccel,
+        // Desktop-only inputs; keep the stored value when absent (web).
+        autoPasteEnabled:
+          this.autoPasteInput?.checked ?? this.current.autoPasteEnabled,
+        pasteHotkeyEnabled: this.current.pasteHotkeyEnabled,
+        pasteHotkeyAccelerator: this.pasteHotkeyAccel,
+        autoPauseMediaEnabled:
+          this.autoPauseMediaInput?.checked ??
+          this.current.autoPauseMediaEnabled,
       };
       saveSettings(this.current);
       this.opts.onChange(this.current);
     };
-    for (const el of [
+    const changeInputs: (HTMLElement | null)[] = [
       this.deviceSelect,
       this.backendInput,
       this.partialsInput,
@@ -294,8 +426,12 @@ export class SettingsPanel {
       this.liveIdleInput,
       this.liveMaxInput,
       this.audioSaveInput,
-    ]) {
-      el.addEventListener("change", onAnyChange);
+      this.globalHotkeyInput, // desktop-only; may be null
+      this.autoPasteInput, // desktop-only; may be null
+      this.autoPauseMediaInput, // desktop-only; may be null
+    ];
+    for (const el of changeInputs) {
+      el?.addEventListener("change", onAnyChange);
     }
 
     // The audio budget lives under its OWN localStorage key (shared with the
@@ -330,7 +466,7 @@ export class SettingsPanel {
       void this.handleClearAll();
     });
     wrap.appendChild(btn);
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
   }
 
   private async handleClearAll(): Promise<void> {
@@ -339,8 +475,8 @@ export class SettingsPanel {
     // Double-confirm to match the mode-card discard pattern: prevents an
     // accidental click from wiping every recording.
     const prompt = tSafe("settings.audioClearAllConfirm");
-    if (!window.confirm(prompt)) return;
-    if (!window.confirm(prompt)) return;
+    if (!(await modalConfirm(prompt))) return;
+    if (!(await modalConfirm(prompt))) return;
     try {
       const count = await dep();
       const onToast = this.opts.onToast;
@@ -385,13 +521,94 @@ export class SettingsPanel {
     }
   }
 
+  /** Append an element to the open card, or the panel root if none is open. */
+  private mount(el: HTMLElement): void {
+    (this.currentCard ?? this.opts.root).appendChild(el);
+  }
+
+  /** Prepare the no-results line (the search box itself lives at the top of the
+   *  Settings view, above the AI card — see settings-view.ts). */
+  private initSearchState(): void {
+    this.emptyEl = document.createElement("p");
+    this.emptyEl.className = "settings-search-empty";
+    this.emptyEl.textContent = tSafe("settings.searchNoResults");
+    this.emptyEl.hidden = true;
+  }
+
+  /** Filter the panel's cards/rows by a live query (driven by the view's
+   *  top-of-page search box). */
+  filter(query: string): void {
+    this.applyFilter(query);
+  }
+
+  /** Filter cards/rows by a case-insensitive substring of their visible text.
+   *  A card (and its title) hides when none of its rows match; a `.settings-
+   *  section` sub-heading hides when no row beneath it (until the next heading)
+   *  matches. An empty query restores everything. */
+  private applyFilter(raw: string): void {
+    const q = raw.trim().toLowerCase();
+    const root = this.opts.root;
+    let anyCardVisible = false;
+    // Walk the panel's children: each .settings-card pairs with the
+    // .settings-card-title immediately before it (avoids `:scope`, which
+    // happy-dom doesn't support).
+    let pendingTitle: HTMLElement | null = null;
+    for (const node of Array.from(root.children) as HTMLElement[]) {
+      if (node.classList.contains("settings-card-title")) {
+        pendingTitle = node;
+        continue;
+      }
+      if (!node.classList.contains("settings-card")) continue;
+      let cardVisible = false;
+      let section: HTMLElement | null = null;
+      let sectionVisible = false;
+      const flush = (): void => {
+        if (section) section.hidden = !sectionVisible;
+      };
+      for (const child of Array.from(node.children) as HTMLElement[]) {
+        if (child.classList.contains("settings-section")) {
+          flush();
+          section = child;
+          sectionVisible = false;
+          continue;
+        }
+        const match = q === "" || (child.textContent ?? "").toLowerCase().includes(q);
+        child.hidden = !match;
+        if (match) {
+          cardVisible = true;
+          sectionVisible = true;
+        }
+      }
+      flush();
+      node.hidden = !cardVisible;
+      if (pendingTitle) pendingTitle.hidden = !cardVisible;
+      pendingTitle = null;
+      if (cardVisible) anyCardVisible = true;
+    }
+    // Mount the empty-state lazily so an untouched panel never carries it.
+    if (!this.emptyEl.isConnected) root.appendChild(this.emptyEl);
+    this.emptyEl.hidden = q === "" || anyCardVisible;
+  }
+
+  /** Open a titled settings card; subsequent rows mount inside it. */
+  private makeCard(titleKey: string): void {
+    const title = document.createElement("div");
+    title.className = "settings-card-title";
+    title.textContent = tSafe(titleKey);
+    this.opts.root.appendChild(title);
+    const card = document.createElement("div");
+    card.className = "settings-card";
+    this.opts.root.appendChild(card);
+    this.currentCard = card;
+  }
+
   private makeSelect(label: string): HTMLSelectElement {
     const wrap = document.createElement("label");
     wrap.className = "settings-field";
     wrap.append(document.createTextNode(label));
     const sel = document.createElement("select");
     wrap.appendChild(sel);
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
     return sel;
   }
 
@@ -403,7 +620,7 @@ export class SettingsPanel {
     input.type = type;
     input.value = value;
     wrap.appendChild(input);
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
     return input;
   }
 
@@ -424,7 +641,7 @@ export class SettingsPanel {
     hintEl.className = "settings-hint";
     hintEl.textContent = hint;
     wrap.appendChild(hintEl);
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
     return input;
   }
 
@@ -449,7 +666,7 @@ export class SettingsPanel {
     errEl.className = "settings-error";
     errEl.textContent = "";
     wrap.appendChild(errEl);
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
     return { input, error: errEl };
   }
 
@@ -460,7 +677,7 @@ export class SettingsPanel {
     input.type = "checkbox";
     input.checked = checked;
     wrap.append(input, document.createTextNode(label));
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
     return input;
   }
 
@@ -479,15 +696,203 @@ export class SettingsPanel {
     hintEl.className = "settings-hint";
     hintEl.textContent = hint;
     wrap.appendChild(hintEl);
-    this.opts.root.appendChild(wrap);
+    this.mount(wrap);
     return input;
+  }
+
+  /** Desktop-only rebind control: a button that captures the next key combo
+   *  and re-registers the quick-voice shortcut at the OS level. */
+  private buildShortcutRebind(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "settings-field settings-shortcut";
+    const label = document.createElement("span");
+    label.className = "settings-shortcut-label";
+    label.textContent = tSafe("settings.shortcutLabel");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "settings-shortcut-btn";
+    btn.textContent = formatAccelerator(this.globalHotkeyAccel);
+    const hint = document.createElement("span");
+    hint.className = "settings-hint";
+    hint.textContent = tSafe("settings.shortcutHint");
+
+    let capturing = false;
+    const stopCapture = (restore: boolean): void => {
+      capturing = false;
+      btn.classList.remove("is-capturing");
+      window.removeEventListener("keydown", onKey, true);
+      if (restore) btn.textContent = formatAccelerator(this.globalHotkeyAccel);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Esc abandons the rebind without changing the binding.
+      if (e.code === "Escape") {
+        stopCapture(true);
+        return;
+      }
+      const accel = accelFromEvent(e);
+      if (!accel) return; // wait for a real modifier+key combo
+      this.globalHotkeyAccel = accel;
+      stopCapture(false);
+      btn.textContent = formatAccelerator(accel);
+      this.current = { ...this.current, globalHotkeyAccelerator: accel };
+      saveSettings(this.current);
+      this.opts.onChange(this.current);
+      // Re-register at the OS only when the shortcut is enabled.
+      if (this.globalHotkeyInput?.checked) {
+        void tauriInvoke()?.("set_global_hotkey", {
+          enabled: true,
+          accelerator: accel,
+        });
+      }
+    };
+    btn.addEventListener("click", () => {
+      if (capturing) {
+        stopCapture(true);
+        return;
+      }
+      capturing = true;
+      btn.classList.add("is-capturing");
+      btn.textContent = tSafe("settings.shortcutCapturing");
+      window.addEventListener("keydown", onKey, true);
+    });
+
+    wrap.append(label, btn, hint);
+    this.mount(wrap);
+  }
+
+  /** Desktop-only rebind control for the "paste last transcript" global
+   *  shortcut. Capturing a combo enables the hotkey at the OS level and
+   *  re-registers it through `set_paste_hotkey` (which may reject on an
+   *  invalid accelerator — rolled back to the prior binding on failure). */
+  private buildPasteShortcutRebind(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "settings-field settings-shortcut settings-paste-shortcut";
+    const label = document.createElement("span");
+    label.className = "settings-shortcut-label";
+    label.textContent = tSafe("settings.pasteHotkeyLabel");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "settings-shortcut-btn settings-paste-shortcut-btn";
+    btn.textContent = this.pasteHotkeyAccel
+      ? formatAccelerator(this.pasteHotkeyAccel)
+      : tSafe("settings.shortcutCapturing");
+    const hint = document.createElement("span");
+    hint.className = "settings-hint";
+    hint.textContent = tSafe("settings.pasteHotkeyHint");
+
+    let capturing = false;
+    const stopCapture = (restore: boolean): void => {
+      capturing = false;
+      btn.classList.remove("is-capturing");
+      window.removeEventListener("keydown", onKey, true);
+      if (restore) {
+        btn.textContent = this.pasteHotkeyAccel
+          ? formatAccelerator(this.pasteHotkeyAccel)
+          : tSafe("settings.shortcutCapturing");
+      }
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === "Escape") {
+        stopCapture(true);
+        return;
+      }
+      const accel = accelFromEvent(e);
+      if (!accel) return; // wait for a real modifier+key combo
+      const prevAccel = this.pasteHotkeyAccel;
+      const prevEnabled = this.current.pasteHotkeyEnabled;
+      this.pasteHotkeyAccel = accel;
+      stopCapture(false);
+      btn.textContent = formatAccelerator(accel);
+      // A freshly captured combo enables the paste hotkey.
+      this.current = {
+        ...this.current,
+        pasteHotkeyAccelerator: accel,
+        pasteHotkeyEnabled: true,
+      };
+      saveSettings(this.current);
+      this.opts.onChange(this.current);
+      // set_paste_hotkey may reject on an invalid accelerator — roll the UI
+      // and stored state back so the button reflects what is actually bound.
+      void tauriInvoke()
+        ?.("set_paste_hotkey", { enabled: true, accelerator: accel })
+        .catch(() => {
+          this.pasteHotkeyAccel = prevAccel;
+          this.current = {
+            ...this.current,
+            pasteHotkeyAccelerator: prevAccel,
+            pasteHotkeyEnabled: prevEnabled,
+          };
+          saveSettings(this.current);
+          this.opts.onChange(this.current);
+          btn.textContent = prevAccel
+            ? formatAccelerator(prevAccel)
+            : tSafe("settings.shortcutCapturing");
+        });
+    };
+    btn.addEventListener("click", () => {
+      if (capturing) {
+        stopCapture(true);
+        return;
+      }
+      capturing = true;
+      btn.classList.add("is-capturing");
+      btn.textContent = tSafe("settings.shortcutCapturing");
+      window.addEventListener("keydown", onKey, true);
+    });
+
+    wrap.append(label, btn, hint);
+    this.mount(wrap);
+  }
+
+  /** Desktop-only Accessibility-permission status row: reads
+   *  `accessibility_trusted()` (async) and shows granted / not-granted plus a
+   *  button that opens the macOS Accessibility settings pane. */
+  private buildAccessibilityRow(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "settings-field settings-accessibility";
+    const label = document.createElement("span");
+    label.className = "settings-shortcut-label";
+    label.textContent = tSafe("settings.accessibilityLabel");
+    const status = document.createElement("span");
+    status.className = "settings-accessibility-status";
+    status.textContent = "…";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "settings-accessibility-btn";
+    btn.textContent = tSafe("settings.accessibilityGrant");
+    btn.addEventListener("click", () => {
+      void tauriInvoke()?.("open_accessibility_settings");
+    });
+
+    wrap.append(label, status, btn);
+    this.mount(wrap);
+
+    // Reflect the live permission state once the async probe resolves.
+    void Promise.resolve(tauriInvoke()?.("accessibility_trusted"))
+      .then((trusted) => {
+        const granted = trusted === true;
+        status.textContent = granted
+          ? tSafe("settings.accessibilityGranted")
+          : tSafe("settings.accessibilityNotGranted");
+        status.dataset.granted = String(granted);
+        // Hide the "open settings" button once permission is already granted.
+        btn.hidden = granted;
+      })
+      .catch(() => {
+        status.textContent = tSafe("settings.accessibilityNotGranted");
+        status.dataset.granted = "false";
+      });
   }
 
   private makeSectionTitle(text: string): void {
     const h = document.createElement("h3");
     h.className = "settings-section";
     h.textContent = text;
-    this.opts.root.appendChild(h);
+    this.mount(h);
   }
 }
 

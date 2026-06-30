@@ -16,6 +16,23 @@
   --yellow: #d97706;
   --red: #dc2626;
   --grey: #9ca3af;
+  /* App-shell tokens (app-shell) — macOS-native shell chrome, from the v3
+     mockup. Reuses --bg/--surface/--fg/--muted/--border/--accent above. */
+  --sidebar: rgba(246, 246, 248, 0.82);
+  /* Frosted-glass chrome (fe-liquid-glass): translucent surface tint + hairline
+     edge + inset top specular line, over the window's NSVisualEffectView. */
+  --glass: rgba(255, 255, 255, 0.78);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.65);
+  --rec: #ff453a;
+  --star: #f7b500;
+  --ai: #7d4cdb;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.07), 0 8px 24px rgba(0, 0, 0, 0.06);
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --s1: #d70015;
+  --s2: #0a84ff;
+  --s3: #1c7c2e;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
 }
@@ -35,6 +52,16 @@
   --partial: #6b7280;
   --border: #3a4150;
   --accent: #60a5fa;
+  /* App-shell dark tokens. */
+  --sidebar: rgba(40, 40, 44, 0.78);
+  --glass: rgba(32, 37, 46, 0.62);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.1);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --ai: #a78bfa;
+  --s1: #ff6961;
+  --s2: #64a8ff;
+  --s3: #5dc46f;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -45,6 +72,15 @@
     --partial: #6b7280;
     --border: #3a4150;
     --accent: #60a5fa;
+    --sidebar: rgba(40, 40, 44, 0.78);
+    --glass: rgba(32, 37, 46, 0.62);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-highlight: rgba(255, 255, 255, 0.1);
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --ai: #a78bfa;
+    --s1: #ff6961;
+    --s2: #64a8ff;
+    --s3: #5dc46f;
   }
 }
 
@@ -891,6 +927,18 @@ body { min-height: 100vh; }
 }
 
 .settings-panel { display: flex; flex-direction: column; gap: 0.75rem; padding: 0; }
+/* Search filter hides non-matching rows/cards via [hidden]; force it past the
+   flex display on .settings-field etc. */
+.settings-panel [hidden] { display: none !important; }
+.settings-search { margin: 0 0 0.5rem; }
+.settings-search-input {
+  width: 100%; padding: 0.5rem 0.75rem; font-size: 0.9rem; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: transparent; color: var(--fg);
+}
+.settings-search-input::placeholder { color: var(--muted); }
+.settings-search-input:focus { outline: none; border-color: var(--accent); }
+.settings-search-empty { font-size: 0.85rem; color: var(--muted); padding: 0.5rem 0.25rem; }
 .settings-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--muted); }
 .settings-field input, .settings-field select { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; font-size: 0.95rem; }
 .settings-checkbox { flex-direction: row; align-items: center; gap: 0.4rem; }
@@ -907,6 +955,167 @@ body { min-height: 100vh; }
   color: var(--muted);
   line-height: 1.4;
   margin-top: 0.1rem;
+}
+.settings-shortcut-label { font-size: 0.85rem; color: var(--fg); }
+.settings-shortcut-btn {
+  align-self: flex-start;
+  min-width: 5rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface, rgba(120, 120, 128, 0.08));
+  color: var(--fg);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-shortcut-btn:hover { background: rgba(120, 120, 128, 0.16); }
+.settings-shortcut-btn.is-capturing {
+  border-color: var(--accent, #7aa2f7);
+  color: var(--accent, #7aa2f7);
+  font-weight: 500;
+}
+
+/* ---- Settings: card-grouped layout (fe-settings-redesign) ----------------
+   Sections render as titled cards using theme tokens, so the panel reads
+   natively in both light and dark. Rows are label-left / control-right via a
+   flex-wrap trick: the control is pushed right with order+margin, and hints
+   wrap to a full-width line below. */
+.settings-panel { gap: 0; }
+.settings-card-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 1.15rem 0 0.4rem;
+  padding: 0 0.25rem;
+}
+.settings-card-title:first-child { margin-top: 0; }
+.settings-card {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 var(--glass-highlight);
+  overflow: hidden;
+}
+/* Divider between consecutive rows within a card. */
+.settings-card > * + * {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+/* Rows: label left, control right, hint/error full-width below. */
+.settings-card .settings-field {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.75rem;
+  margin: 0;
+  padding: 0.6rem 0.85rem;
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+.settings-card .settings-field:hover {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.settings-card .settings-field > input,
+.settings-card .settings-field > select {
+  order: 2;
+  margin-left: auto;
+  width: auto;
+  min-width: 5rem;
+  max-width: 16rem;
+}
+.settings-card .settings-field > .settings-hint,
+.settings-card .settings-field > .settings-error {
+  order: 3;
+  flex-basis: 100%;
+  margin: 0.2rem 0 0;
+}
+/* In-card subheading (e.g. "Live mode auto-stop"). */
+.settings-card .settings-section {
+  margin: 0;
+  padding: 0.5rem 0.85rem 0.2rem;
+  border-bottom: none;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+/* Checkbox → macOS-style switch (the real input stays, restyled). The knob is
+   drawn with background-image (NOT ::after — WebKit/WKWebView doesn't reliably
+   render pseudo-elements on <input>) and slides via background-position on
+   :checked. box-sizing/padding are reset so the inherited .settings-field input
+   padding can't bloat the track or mis-place the knob. */
+.settings-card .settings-checkbox > input[type="checkbox"] {
+  order: 2;
+  margin: 0 0 0 auto;
+  padding: 0;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  /* Apple geometry: ~1.6:1 track + a knob that nearly fills the height
+     (iOS knob ≈ 0.87 of track height). A small knob in a long track is
+     what read as "too wide" before — close the gutters, not just the track. */
+  width: 38px;
+  height: 22px;
+  /* Override the generic `.settings-field > input { min-width: 5rem }` rule
+     (line ~1012) — without this, min-width:5rem (80px) clamps the track to
+     80px wide regardless of `width`, which is what made the switch read as a
+     super-long thin pill. */
+  min-width: 0;
+  max-width: none;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  background-color: color-mix(in srgb, var(--fg) 18%, transparent);
+  /* knob: a clean white disc filling its 18px box (≈0.82 of track height) */
+  background-image: radial-gradient(
+    circle at center,
+    #fff 0 50%,
+    transparent 52%
+  );
+  background-repeat: no-repeat;
+  background-size: 18px 18px;
+  background-position: left 2px center;
+  box-shadow: inset 0 1px 2.5px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    background-position 0.2s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.settings-card .settings-checkbox > input[type="checkbox"]:checked {
+  background-color: var(--accent);
+  border-color: transparent;
+  background-position: right 2px center;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.settings-card .settings-checkbox > input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Shortcut row → label left, keycap chip right. */
+.settings-card .settings-shortcut {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.75rem;
+  padding: 0.6rem 0.85rem;
+}
+.settings-card .settings-shortcut .settings-shortcut-btn {
+  order: 2;
+  margin-left: auto;
+  align-self: center;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+.settings-card .settings-shortcut .settings-hint {
+  order: 3;
+  flex-basis: 100%;
+  margin: 0.2rem 0 0;
 }
 
 /* ---- Modal (Settings) ---- */
@@ -927,16 +1136,20 @@ body { min-height: 100vh; }
   to   { opacity: 1; }
 }
 .modal-dialog {
-  background: var(--bg);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  backdrop-filter: blur(28px) saturate(1.6);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
   padding: 1.25rem 1.5rem;
   max-width: 28rem;
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 var(--glass-highlight);
 }
 .modal-header {
   display: flex;
@@ -966,6 +1179,155 @@ body { min-height: 100vh; }
 .history-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.5rem; }
 .history-actions button { padding: 0.2rem 0.5rem; font-size: 0.75rem; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
 .history-body { white-space: pre-wrap; font-size: 0.85rem; margin: 0.25rem 0; }
+
+/* First-run gate — full-screen blocker over the shell until a model loads. */
+.first-run-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+.first-run-panel {
+  width: 100%;
+  max-width: 36rem;
+}
+.first-run-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+}
+.first-run-subtitle {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.first-run-bg {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.first-run-bg:hover { color: var(--fg); border-color: var(--accent); }
+
+/* inlineEdit() — edit-in-place input that replaces a speaker/title label. */
+.inline-edit-input {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 0.25rem;
+  min-width: 6rem;
+  max-width: 16rem;
+}
+.inline-edit-input:focus { outline: none; }
+
+/* modalPrompt() — window.prompt replacement (no-op in WKWebView). Reuses the
+   modal-backdrop look. */
+.modal-prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 110;
+  animation: modal-fade 0.15s ease-out;
+}
+.modal-prompt {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  max-width: 24rem;
+  width: 100%;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+}
+.modal-prompt-message {
+  display: block;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+.modal-prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+.modal-prompt-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.modal-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.modal-prompt-actions button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.modal-prompt-ok {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.modal-prompt-actions button:hover { border-color: var(--accent); }
+
+/* AI action picker modal (ai-action-modal): hosts the categorised ActionsBar
+   grid + an inline response pane, opened from the detail view's ✨ AI button. */
+.ai-modal {
+  position: relative;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+  padding: 20px 22px; width: min(760px, 100%);
+  max-height: 86vh; overflow-y: auto;
+}
+.ai-modal-close {
+  position: absolute; top: 12px; right: 12px;
+  width: 28px; height: 28px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.ai-modal-close:hover { color: var(--fg); border-color: var(--accent); }
+.ai-modal-answer {
+  margin-top: 16px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); padding: 12px 14px;
+}
+.ai-modal-answer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.ai-modal-answer-title { font-size: 12px; font-weight: 600; color: var(--muted); }
+.ai-modal-copy {
+  font-size: 12px; padding: 3px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg); cursor: pointer;
+}
+.ai-modal-copy:disabled { opacity: .5; cursor: not-allowed; }
+.ai-modal-answer-body { font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 
 .toast { position: fixed; bottom: 1rem; right: 1rem; background: var(--fg); color: var(--bg); padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.85rem; }
 .toast-with-action { display: inline-flex; align-items: center; gap: 0.6rem; }
@@ -1791,6 +2153,16 @@ body { min-height: 100vh; }
   color: var(--fg);
   word-break: break-word;
 }
+/* Word-level seek targets (server sends per-word timestamps in
+   meeting mode). Invisible at rest so the transcript reads as plain
+   text; hover reveals the word is individually clickable. */
+.segment-word {
+  cursor: pointer;
+  border-radius: 3px;
+}
+.segment-word:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
 
 /* Chat-mode bubbles — one per collapsed turn (consecutive same-
    speaker segments merged). Visually distinguished from Detail by:
@@ -2013,4 +2385,578 @@ body { min-height: 100vh; }
 @media (max-width: 900px) {
   /* Sidebar becomes a scrollable strip across the bottom on narrow viewports. */
   .meeting-sidebar { position: static; }
+}
+
+/* ---- Model manager (settings) ------------------------------------------ */
+.model-manager { display: flex; flex-direction: column; gap: 0.5rem; }
+.model-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface);
+}
+.model-row-info { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.model-row-name { font-weight: 600; color: var(--fg); }
+.model-row-desc { font-size: 0.82rem; color: var(--fg); opacity: 0.85; }
+.model-row-meta { font-size: 0.72rem; color: var(--muted); }
+.model-row-action { flex-shrink: 0; }
+.model-btn {
+  border: 1px solid var(--accent); background: var(--accent); color: var(--surface);
+  border-radius: 6px; padding: 0.35rem 0.7rem; font-size: 0.8rem; cursor: pointer;
+}
+.model-btn:hover { opacity: 0.9; }
+.model-row-action { display: flex; align-items: center; gap: 0.4rem; }
+/* Remove (uninstall) — subdued/destructive, sits next to the primary action. */
+.model-btn-remove {
+  background: transparent; color: var(--red, #f85149);
+  border-color: color-mix(in srgb, var(--red, #f85149) 45%, transparent);
+}
+.model-chip {
+  display: inline-block; padding: 0.25rem 0.55rem; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 600;
+}
+.model-chip-active { background: var(--green); color: var(--surface); }
+.model-chip-busy { background: var(--yellow); color: var(--surface); }
+.model-chip-muted { background: var(--grey); color: var(--surface); }
+.model-chip-required {
+  margin-left: 0.45rem; padding: 0.1rem 0.4rem; font-size: 0.62rem;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+}
+.model-chip-recommended {
+  margin-left: 0.5rem; padding: 0.12rem 0.45rem; font-size: 0.62rem;
+  background: color-mix(in srgb, var(--green, #3fb950) 18%, transparent);
+  color: var(--green, #3fb950);
+}
+/* Recommended / All filter tabs above the model list. */
+.model-tabs { display: flex; gap: 6px; margin-bottom: 0.5rem; }
+.model-tab {
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.78rem; cursor: pointer;
+}
+.model-tab.on { color: var(--fg); border-color: var(--accent); }
+/* Speed/accuracy ratings: "速度 ●●●●○ 8.5" — dots coloured by tier. */
+.model-row-ratings { display: flex; gap: 0.9rem; font-size: 0.7rem; color: var(--muted); margin-top: 0.15rem; }
+.model-rating { display: inline-flex; align-items: center; gap: 0.35rem; }
+.model-rating-dots { display: inline-flex; gap: 2px; }
+.model-rating-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border); display: inline-block; }
+.model-rating-dots[data-tier="high"] i.on { background: var(--green, #3fb950); }
+.model-rating-dots[data-tier="mid"] i.on { background: var(--yellow, #d29922); }
+.model-rating-dots[data-tier="low"] i.on { background: var(--yellow, #d29922); }
+.model-rating-num { font-variant-numeric: tabular-nums; }
+
+/* Models view: per-stage sections (轉錄 / 講者分離 / 即時). */
+.models-section-title {
+  font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted); margin: 0.9rem 0 0.4rem; padding: 0 0.25rem;
+}
+.aux-stage-group { display: flex; flex-direction: column; gap: 0.5rem; }
+.aux-stage-group + .aux-stage-group { margin-top: 0.75rem; }
+.aux-stage-title {
+  font-size: 0.78rem; font-weight: 600; color: var(--fg);
+  padding-bottom: 0.3rem; border-bottom: 1px solid var(--border);
+}
+.aux-stage-note { font-size: 0.72rem; color: var(--muted); line-height: 1.5; }
+.model-manager-error { color: var(--red); font-size: 0.8rem; margin: 0.25rem 0 0; }
+.aux-models-note { color: var(--muted); font-size: 0.8rem; margin: 0.25rem 0 0; line-height: 1.5; }
+
+/* Download progress: bar + label + cancel, inline in the action slot. */
+.model-progress { display: flex; align-items: center; gap: 0.5rem; }
+.model-progress-bar {
+  width: 110px; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--border);
+}
+.model-progress-fill {
+  height: 100%; background: var(--accent); border-radius: inherit;
+  transition: width 0.4s ease;
+}
+.model-progress-label { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.model-btn-cancel {
+  border-color: var(--border); background: transparent; color: var(--fg);
+}
+
+/* ---- App shell (app-shell) ---------------------------------------------
+   The macOS-native chrome the views mount into. Not wired to the app root
+   yet (cutover lands with fe-item-library); styled here so it renders right
+   the moment a view mounts it. Uses the shell tokens above. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+}
+.shell-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--sidebar);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+}
+.shell-toolbar .traffic-inset { width: 64px; flex: none; } /* macOS lights */
+.shell-toolbar .search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  background: rgba(120, 120, 128, 0.12);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.shell-toolbar .search kbd { margin-left: auto; font: 11px var(--mono); opacity: 0.8; }
+.shell-toolbar .model-pill {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 3px 10px;
+  background: var(--surface);
+}
+.shell-body { display: flex; flex: 1; min-height: 0; }
+.shell-sidebar {
+  width: 200px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  background: var(--sidebar);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-right: 1px solid var(--border);
+}
+.shell-sidebar .nav-item {
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 13px;
+}
+.shell-sidebar .nav-item:hover { background: rgba(120, 120, 128, 0.12); }
+.shell-sidebar .nav-item.active { background: var(--accent); color: #fff; }
+/* Enriched sidebar (fe-visual-polish): counts, sections, recents, spacer. */
+.shell-sidebar .nav-item { display: flex; align-items: center; gap: 9px; }
+.shell-sidebar .nav-item small { margin-left: auto; color: inherit; opacity: 0.55; font-size: 11px; }
+.shell-sidebar .spacer { flex: 1; }
+.shell-sidebar .sec {
+  font-size: 11px; color: var(--muted); font-weight: 600; padding: 12px 10px 3px;
+}
+.shell-sidebar .recent {
+  display: block; width: 100%; border: 0; background: none; text-align: left;
+  cursor: pointer; padding: 5px 10px; border-radius: 7px; color: var(--fg);
+}
+.shell-sidebar .recent:hover { background: rgba(120, 120, 128, 0.12); }
+.shell-sidebar .recent b {
+  display: block; font-weight: 500; font-size: 12.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shell-sidebar .recent span { font-size: 11px; color: var(--muted); }
+.shell-sidebar .recent .recent-preview {
+  display: block; margin-top: 1px; font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.85;
+}
+
+/* Models / Settings card-row treatment (fe-visual-polish). */
+.row-title { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; }
+.row-title h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.mrow, .mrow-frame {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 13px 16px; margin-bottom: 9px;
+}
+.mrow { font-size: 11.5px; color: var(--muted); }
+/* The AI provider card (settings-view) is populated AFTER an async
+   getConfig(), and it carries .settings-card (backdrop-filter + overflow:
+   hidden) only for its row layout. WebKit/WKWebView leaves such a card
+   collapsed and blank until the first click — drop the compositing layer +
+   clip on this one card so it paints on mount. .mrow already gives it a solid
+   surface. */
+.settings-ai.settings-card {
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  overflow: visible; background: var(--surface);
+}
+/* `.settings-field { display: flex }` outranks the UA [hidden] rule, so a
+   `hidden` field (e.g. the base-URL row for Gemini) wouldn't actually hide.
+   Force it everywhere settings fields are used (panel + AI provider card). */
+.settings-field[hidden] { display: none !important; }
+/* AI provider editor action row: Refresh · Test · Save (Save is primary). */
+.ai-actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 12px; }
+.ai-actions button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  border-radius: 8px; padding: 7px 14px; font-size: 12.5px; cursor: pointer;
+}
+.ai-actions button:hover { border-color: var(--accent); }
+.ai-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.ai-save-btn { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.ai-status { padding-top: 8px; }
+.ai-status[data-state="ok"] { color: var(--s3, #3fb950); }
+.ai-status[data-state="error"] { color: var(--danger, #f85149); }
+.chip-active {
+  background: color-mix(in srgb, var(--s3) 15%, transparent); color: var(--s3);
+  font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 99px;
+}
+.shell-view { flex: 1; min-width: 0; overflow: auto; padding: 16px; }
+.shell-view .view-placeholder { color: var(--muted); }
+
+/* fe-item-library cutover: the existing app now lives inside the shell's Home
+   view (homeHost) instead of directly at #app. Replicate the old #app flex
+   root, and let it fill the Home view flush (no shell padding). */
+.home-host {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  width: 100%;
+}
+.shell-view.is-home {
+  padding: 0;
+}
+/* Library view (fe-visual-polish): mockup filters + thumbnailed item rows +
+   dated quick-capture group. */
+.library-view { display: flex; flex-direction: column; gap: 12px; }
+/* History list, simplified after VoiceInk: search + a flat list of clean
+   rows (timestamp + transcript preview + chevron). */
+.library-search { display: flex; gap: 8px; align-items: center; }
+.library-search-input {
+  flex: 1; min-width: 0; padding: 0.55rem 0.8rem; font-size: 0.9rem; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--fg);
+}
+.library-search-input::placeholder { color: var(--muted); }
+.library-search-input:focus { outline: none; border-color: var(--accent); }
+.library-starfilter {
+  flex: none; border: 1px solid var(--border); background: var(--surface);
+  color: var(--fg); border-radius: 9px; padding: 0.5rem 0.85rem; font-size: 12px; cursor: pointer;
+}
+.library-starfilter.on { border-color: var(--star); color: var(--star); }
+
+.library-list { display: flex; flex-direction: column; gap: 8px; }
+.lib-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 11px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); color: var(--fg); cursor: pointer;
+}
+.lib-row:hover { border-color: var(--accent); }
+.lib-row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.lib-row-time { font: 11px var(--mono); color: var(--muted); }
+.lib-row-text {
+  font-size: 13.5px; line-height: 1.45; color: var(--fg); word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
+}
+.lib-row-star { flex: none; font-size: 15px; opacity: 0; transition: opacity 0.12s; }
+.lib-row:hover .lib-row-star, .lib-row-star.on { opacity: 1; }
+.lib-row-chev { flex: none; color: var(--muted); font-size: 18px; line-height: 1; }
+
+.library-star { color: var(--muted); cursor: pointer; }
+.library-star.on { color: var(--star); }
+.library-empty { color: var(--muted); padding: 24px; text-align: center; }
+
+/* Item Detail (fe-visual-polish): document column + vibrancy inspector rail,
+   floating player capsule, askbar. */
+.detail-view { display: flex; flex-direction: column; min-height: 100%; }
+.detail-wrap {
+  position: relative; display: grid; grid-template-columns: 1fr 250px;
+  gap: 0; flex: 1; min-height: 0;
+}
+@media (max-width: 860px) { .detail-wrap { grid-template-columns: 1fr; } }
+.detail-wrap .doc { padding: 4px 22px 110px 4px; overflow-y: auto; min-width: 0; }
+.detail-header { display: flex; align-items: center; gap: 10px; }
+.detail-back { font-size: 12px; color: var(--accent); background: none; border: none; cursor: pointer; }
+.detail-title { font-size: 18px; font-weight: 700; }
+.detail-delete {
+  margin-left: auto; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--rec);
+  border-radius: 7px; padding: 4px 11px;
+}
+.detail-delete:hover { border-color: var(--rec); }
+.detail-delete:disabled { opacity: .5; cursor: not-allowed; }
+.detail-wrap .doc .meta {
+  color: var(--muted); font-size: 12px; margin: 4px 0 18px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.detail-wrap .badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
+}
+.turn { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 7px 0; }
+.turn .who { font-weight: 600; font-size: 12.5px; }
+.turn .t { font: 10.5px var(--mono); color: var(--muted); display: block; }
+.turn p { font-size: 13.5px; margin: 0; }
+.turn.c1 .who { color: var(--s1); }
+.turn.c2 .who { color: var(--s2); }
+.turn.c3 .who { color: var(--s3); }
+.detail-wrap .inspector {
+  border-left: 1px solid var(--border); background: var(--sidebar);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  padding: 16px 14px; overflow-y: auto; font-size: 12px; min-width: 0;
+}
+.detail-wrap .inspector h4 {
+  font-size: 11px; color: var(--muted); font-weight: 600; margin: 16px 0 7px;
+}
+.detail-wrap .inspector h4:first-child { margin-top: 0; }
+.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stage-btn.ai-open { background: color-mix(in srgb, var(--ai) 14%, var(--surface)); border-color: color-mix(in srgb, var(--ai) 40%, var(--border)); }
+.stage-btn.ai-open:disabled { background: var(--surface); }
+/* Done-card AI entry: a single button where the inline AI Enhance panel used
+   to be (完成卡瘦身). */
+.done-ai-bar { display: flex; padding: 2px 0; }
+.done-ai-btn { font-size: 13px; padding: 8px 16px; border-radius: 8px; }
+.stage-btn {
+  font-size: 12px; padding: 4px 11px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg); cursor: pointer;
+}
+.stage-btn:disabled { opacity: .5; cursor: not-allowed; }
+.run-inspector { display: flex; flex-direction: column; gap: 12px; }
+.run-group { display: flex; flex-direction: column; gap: 3px; }
+.run-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.run-row {
+  display: flex; align-items: center; gap: 7px; font-size: 12px; text-align: left;
+  padding: 6px 8px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg); cursor: pointer;
+}
+/* Synthesized, read-only runs (unify-run-ledger): muted + dashed so they read
+   as a record, not a re-runnable action. */
+.run-row.read-only { color: var(--muted); border-style: dashed; }
+.run-row.read-only.active { color: var(--fg); }
+.run-row:hover { border-color: var(--accent); }
+.run-row.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.run-snapshot { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 14px 18px; }
+.run-snapshot .snapshot-empty { color: var(--muted); margin: 0; }
+.detail-wrap .askbar {
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-start;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 11px 14px; font-size: 12.5px; min-width: 0;
+}
+.detail-wrap .player {
+  position: sticky; bottom: 14px; justify-self: start; align-self: end;
+  grid-column: 1; width: min(500px, 90%); margin: 8px 0 0 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 99px;
+  box-shadow: var(--shadow); padding: 6px 12px;
+}
+/* The waveform "voice bar": play | waveform | time, in the sticky capsule.
+   WaveformPlayer adds .waveform-player to the same .player host. */
+.detail-wrap .player.waveform-player { display: flex; align-items: center; gap: 10px; }
+.detail-wrap .player .waveform-play {
+  flex: none; width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  font-size: 12px; line-height: 1; cursor: pointer; display: grid; place-items: center;
+}
+.detail-wrap .player .waveform-play:hover { border-color: var(--accent); }
+.detail-wrap .player .waveform-canvas { flex: 1; width: 100%; height: 34px; min-width: 0; cursor: pointer; }
+.detail-wrap .player .waveform-time { flex: none; font: 12px/1 var(--mono); color: var(--muted); }
+.detail-wrap .player .waveform-label { display: none; }
+.detail-wrap .player audio { display: none; }
+.snapshot-body { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }
+
+/* ---- Home view (fe-home-redesign) ---------------------------------------
+   Mockup-standard idle Home: hero record button, capability capsules, AI
+   hint, recent-item cards. Tokens only — both themes inherit. */
+.home-view { padding: 26px 30px; }
+.home-view .hero { text-align: center; padding: 22px 0 4px; }
+.home-view .rec-btn {
+  width: 88px; height: 88px; border-radius: 50%; border: 0; cursor: pointer;
+  margin-inline: auto;
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--rec) 70%, #fff), var(--rec));
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--rec) 35%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  display: grid; place-items: center; transition: transform 0.15s;
+}
+.home-view .rec-btn:hover { transform: scale(1.05); }
+.home-view .rec-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.home-view .rec-btn i { width: 25px; height: 25px; background: #fff; clip-path: circle(48%); }
+.home-view .hero h2 { font-size: 17px; font-weight: 600; margin: 12px 0 0; }
+.home-view .hero > p { color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }
+.home-view .caps { display: flex; gap: 8px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+.home-view .cap {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg);
+  border-radius: 99px; padding: 7px 16px;
+  font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow);
+}
+.home-view .cap kbd {
+  font: 10.5px var(--mono); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 5px;
+}
+.home-view .cap:hover { border-color: var(--accent); }
+.home-view .cap:disabled { opacity: 0.5; cursor: not-allowed; }
+.home-view .enh { margin-top: 12px; font-size: 11.5px; color: var(--muted); }
+.home-view .row-title { display: flex; align-items: baseline; gap: 8px; margin: 22px 0 10px; }
+.home-view .row-title h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.home-view .row-title a { font-size: 12px; color: var(--accent); cursor: pointer; margin-left: auto; }
+.home-view .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 760px) { .home-view .cards { grid-template-columns: 1fr; } }
+.home-view .card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 12px 14px; cursor: pointer; text-align: left; color: var(--fg);
+}
+.home-view .card:hover { border-color: var(--accent); }
+.home-view .card .meta {
+  display: flex; gap: 7px; font-size: 11px; color: var(--muted);
+  margin-bottom: 5px; align-items: center; flex-wrap: wrap;
+}
+.home-view .badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
+}
+.home-view .badge.proj { background: rgba(120, 120, 128, 0.14); color: var(--muted); }
+.home-view .star { color: var(--star); }
+.home-view .card b { font-size: 13px; font-weight: 600; display: block; margin-bottom: 3px; }
+.home-view .card .meta-line { font-size: 12px; color: var(--muted); margin: 0; }
+
+/* ---- Home activity dashboard (fe-home-dashboard) -------------------------
+   Sparkline of the last 14 days + stat chips, sitting under the recent
+   cards. Tokens only. */
+.home-view .activity { margin-top: 22px; }
+.home-view .sparkline {
+  display: block; width: 100%; height: 56px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 6px 10px; box-sizing: border-box;
+}
+/* VoiceInk-style weekly banner + stat cards (user feedback 2026-06-12). */
+.home-view .stat-banner {
+  background: linear-gradient(100deg,
+    color-mix(in srgb, var(--rec) 80%, var(--ai)),
+    color-mix(in srgb, var(--ai) 75%, var(--rec)));
+  color: #fff; font-size: 14px; font-weight: 700; text-align: center;
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 18px; margin-bottom: 10px;
+}
+.home-view .stat-cards {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  margin-bottom: 10px;
+}
+@media (max-width: 860px) { .home-view .stat-cards { grid-template-columns: repeat(2, 1fr); } }
+.home-view .stat-card {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 14px;
+}
+.home-view .stat-card .ic { font-size: 17px; }
+.home-view .stat-card b { font-size: 22px; font-weight: 700; }
+.home-view .stat-card .cap-label { font-size: 11px; color: var(--muted); }
+.home-view .activity-empty { color: var(--muted); font-size: 12.5px; margin: 0; }
+
+/* ---- Recording layer (fe-home-redesign) ----------------------------------
+   recbar + LIVE draft while capturing; processing; done layout housing the
+   re-housed transcript/actions/answer panes. The layer precedes the idle
+   .home-view inside .home-idle-host, so a visible layer hides the hero. */
+.home-idle-host { display: flex; flex-direction: column; }
+.home-idle-host[hidden] { display: none !important; } /* meeting route */
+.home-idle-host .recording-layer:not([hidden]) ~ .home-view { display: none; }
+/* The layer toggles its state blocks via the hidden attribute; the display
+   rules below would otherwise out-specificity the UA's [hidden] style. */
+.recording-layer [hidden],
+.recording-layer[hidden] { display: none !important; }
+.recording-layer { padding: 26px 30px; }
+.recording-layer[data-state="idle"] { display: none; }
+.recording-layer .recbar {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 16px; margin-bottom: 16px;
+}
+@keyframes rec-blink { 50% { opacity: 0.25; } }
+.recording-layer .recdot {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--rec);
+  animation: rec-blink 1.2s infinite;
+}
+.recording-layer[data-state="paused"] .recdot { animation: none; opacity: 0.45; }
+.recording-layer .recbar time { font: 600 15px var(--mono); }
+/* Live waveform curve (fe-home-dashboard): flexes between the dot and the
+   timer; empty (transparent) when no stream is feeding it. */
+.recording-layer .recbar .rec-waveform {
+  flex: 1; min-width: 60px; height: 36px; align-self: center;
+}
+.recording-layer .recbar .rec-ctl {
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg);
+  border-radius: 7px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.recording-layer .stopbtn {
+  margin-left: auto; background: var(--rec); color: #fff; border: 0;
+  border-radius: 8px; padding: 7px 16px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.recording-layer .draft {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 18px 22px; position: relative;
+}
+.recording-layer .draft-label {
+  position: absolute; top: 10px; right: 14px;
+  font-size: 10px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase;
+}
+/* Partial (in-flight) line from the existing transcript renderer. */
+.recording-layer .draft .transcript-partial { opacity: 0.45; font-style: italic; }
+.recording-layer .processing {
+  display: flex; align-items: center; gap: 10px; color: var(--muted);
+  font-size: 12.5px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.recording-layer .confirm-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 16px; font-size: 12.5px;
+}
+.recording-layer .confirm-row button {
+  border: 1px solid var(--border); background: var(--surface); color: var(--accent);
+  border-radius: 7px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+}
+.recording-layer .done-layout { display: flex; flex-direction: column; gap: 14px; }
+.recording-layer .done-layout h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.recording-layer .done-header { display: flex; align-items: center; }
+.recording-layer .done-close {
+  margin-left: auto; border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); border-radius: 7px; padding: 2px 9px;
+  font-size: 12px; cursor: pointer;
+}
+.recording-layer .done-close:hover { border-color: var(--accent); color: var(--fg); }
+.recording-layer .open-item {
+  align-self: flex-start; border: 1px dashed var(--border); background: none;
+  color: var(--accent); border-radius: 7px; padding: 6px 12px;
+  font-size: 12.5px; cursor: pointer;
+}
+.recording-layer .open-item:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+/* ---- macOS vibrancy (fe-macos-vibrancy) -----------------------------------
+   Inside the Tauri shell the window is transparent over an
+   NSVisualEffectView (Sidebar material). Drop the opaque page/shell
+   backgrounds so the material reads through the sidebar/toolbar's
+   translucent rgba layers; the content column keeps a solid background
+   for readability. Browsers never carry .is-desktop-shell. */
+html.is-desktop-shell,
+html.is-desktop-shell body,
+html.is-desktop-shell #app,
+html.is-desktop-shell .app-shell { background: transparent; }
+html.is-desktop-shell .shell-view { background: var(--bg); }
+
+/* Relocated legacy header controls (fe-home-redesign 3.2). */
+.shell-toolbar .toolbar-indicator { display: flex; align-items: center; }
+.shell-toolbar .toolbar-theme-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  border-radius: 99px; padding: 3px 10px; font-size: 11.5px; cursor: pointer;
+}
+
+/* Toolbar REC pill (lives beside the model pill). */
+.shell-toolbar .pill.reclive {
+  display: flex; align-items: center; gap: 6px; margin-left: auto;
+  font-size: 11.5px; font-weight: 600; color: var(--rec);
+  border: 1px solid var(--rec); border-radius: 99px; padding: 3px 10px;
+  background: var(--surface); cursor: pointer;
+}
+.shell-toolbar .pill.reclive + .model-pill { margin-left: 0; }
+.shell-toolbar .pill.reclive .dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--rec);
+  animation: rec-blink 1.2s infinite;
 }

@@ -32,8 +32,12 @@ models:
   breeze-asr-25:
     description: "MediaTek Breeze ASR 25 — Taiwanese Mandarin + English code-switching"
     languages: [zh-TW, en]
+    license: "See model card (MediaTek Research, Whisper-based)"
     default: true
+    recommended: true
     size: "1.5-2.0 GB"
+    speed: 6.5
+    accuracy: 9.2
     variants:
       - format: ct2
         repo_id: "shdennlin/breeze-asr-25-ct2"
@@ -52,10 +56,81 @@ models:
   large-v3-turbo:
     description: "OpenAI Whisper large-v3-turbo — multilingual fallback"
     languages: [multilingual]
+    license: "MIT (OpenAI Whisper)"
     size: "1.6 GB"
+    speed: 8.5
+    accuracy: 9.0
     variants:
       - format: ct2
         repo_id: "Systran/faster-whisper-large-v3-turbo"
         compute_type: int8_float16
         local_dir: large-v3-turbo
-        default_on: [linux, darwin]
+        default_on: [linux]
+      # ggml build so the macOS (whisper.cpp / whisper-rs) backend can run it
+      # too — without this it shows "Not supported" on desktop.
+      - format: ggml
+        repo_id: "ggerganov/whisper.cpp"
+        filename: ggml-large-v3-turbo.bin
+        local_dir: large-v3-turbo-ggml
+        default_on: [darwin]
+
+  # --- OpenAI Whisper ggml builds (ggerganov/whisper.cpp) -------------------
+  # Curated speed/accuracy ladder for the picker; all multilingual ggml so the
+  # whisper-rs backend runs them on every platform.
+  whisper-large-v3:
+    description: "OpenAI Whisper large-v3 — highest accuracy, multilingual"
+    languages: [multilingual]
+    license: "MIT (OpenAI Whisper)"
+    recommended: true
+    size: "2.9 GB"
+    speed: 5.0
+    accuracy: 9.5
+    variants:
+      - format: ggml
+        repo_id: "ggerganov/whisper.cpp"
+        filename: ggml-large-v3.bin
+        local_dir: whisper-large-v3-ggml
+        default_on: [darwin, linux]
+
+  whisper-small:
+    description: "OpenAI Whisper small — balanced speed and accuracy, multilingual"
+    languages: [multilingual]
+    license: "MIT (OpenAI Whisper)"
+    recommended: true
+    size: "466 MB"
+    speed: 8.0
+    accuracy: 7.2
+    variants:
+      - format: ggml
+        repo_id: "ggerganov/whisper.cpp"
+        filename: ggml-small.bin
+        local_dir: whisper-small-ggml
+        default_on: [darwin, linux]
+
+  whisper-base:
+    description: "OpenAI Whisper base — fast, multilingual"
+    languages: [multilingual]
+    license: "MIT (OpenAI Whisper)"
+    size: "142 MB"
+    speed: 8.8
+    accuracy: 7.0
+    variants:
+      - format: ggml
+        repo_id: "ggerganov/whisper.cpp"
+        filename: ggml-base.bin
+        local_dir: whisper-base-ggml
+        default_on: [darwin, linux]
+
+  whisper-tiny:
+    description: "OpenAI Whisper tiny — fastest, lowest accuracy, multilingual"
+    languages: [multilingual]
+    license: "MIT (OpenAI Whisper)"
+    size: "75 MB"
+    speed: 9.5
+    accuracy: 6.0
+    variants:
+      - format: ggml
+        repo_id: "ggerganov/whisper.cpp"
+        filename: ggml-tiny.bin
+        local_dir: whisper-tiny-ggml
+        default_on: [darwin, linux]

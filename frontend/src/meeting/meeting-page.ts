@@ -16,6 +16,9 @@ import { formatDuration } from "../util/format-duration";
 import { exportSpeakerSrt } from "../export/speaker-srt";
 import { exportSpeakerTxt, exportSpeakerTxtChat } from "../export/speaker-txt";
 import { exportSpeakerVtt } from "../export/speaker-vtt";
+import { saveTextFile } from "../platform/save-file";
+import { modalPrompt } from "../ui/modal-prompt";
+import { inlineEdit } from "../ui/inline-edit";
 import {
   ActionsBar,
   type ActionTemplate,
@@ -57,6 +60,9 @@ import type { JobStatusResponse, MeetingResult, Segment } from "./types";
 export interface StatusInfo {
   available: boolean;
   reason?: string;
+  /** Installed diarization tiers from /status meeting.quality_tiers
+   *  ("fast"/"balanced"). Absent on older backends → fast only. */
+  qualityTiers?: string[];
 }
 
 export interface MeetingPageHandle {
@@ -71,8 +77,19 @@ export interface MeetingPageOptions {
   fetchStatus?: () => Promise<StatusInfo>;
   pollIntervalMs?: number;
   now?: () => number;
-  /** Test seam: replaces window.prompt for speaker rename. */
-  promptFn?: (message: string, defaultValue?: string) => string | null;
+  /** Test seam: one-off text entry (custom language code). Defaults to an
+   *  in-DOM modal — window.prompt is a no-op in the Tauri WKWebView shell. */
+  promptFn?: (
+    message: string,
+    defaultValue?: string,
+  ) => string | null | Promise<string | null>;
+  /** Test seam: edit-in-place for speaker / title rename. Defaults to
+   *  inlineEdit (swaps the label for an input). Returns the new value or
+   *  null on cancel. */
+  editFn?: (
+    anchor: HTMLElement,
+    value: string,
+  ) => string | null | Promise<string | null>;
 }
 
 // --- Stage model -------------------------------------------------------------
@@ -151,7 +168,8 @@ export function createMeetingPage(
   const root = document.createElement("section");
   root.className = "meeting-page";
   const now = opts.now ?? (() => Date.now());
-  const promptFn = opts.promptFn ?? ((m, d) => globalThis.prompt(m, d));
+  const promptFn = opts.promptFn ?? ((m, d) => modalPrompt(m, d ?? ""));
+  const editFn = opts.editFn ?? ((anchor, value) => inlineEdit(anchor, value));
 
   // ------ DOM ---------------------------------------------------------------
   const layout = document.createElement("div");
@@ -279,6 +297,26 @@ export function createMeetingPage(
   }
   languageField.append(languageLabel, languageSelect);
 
+  // Diarization quality tier — hidden until /status reports that the
+  // balanced embedding model is installed (no point offering a choice
+  // of one).
+  const qualityField = document.createElement("label");
+  qualityField.className = "confirm-field confirm-field-quality";
+  qualityField.hidden = true;
+  const qualityLabel = document.createElement("span");
+  qualityLabel.className = "confirm-field-label";
+  qualityLabel.textContent = t("meeting.confirm.quality");
+  const qualitySelect = document.createElement("select");
+  qualitySelect.className = "confirm-select";
+  for (const tier of ["fast", "balanced"] as const) {
+    const o = document.createElement("option");
+    o.value = tier;
+    o.textContent =
+      tier === "fast" ? t("meeting.quality.fast") : t("meeting.quality.balanced");
+    qualitySelect.appendChild(o);
+  }
+  qualityField.append(qualityLabel, qualitySelect);
+
   const wordTsField = document.createElement("label");
   wordTsField.className = "confirm-field confirm-field-checkbox";
   const wordTsInput = document.createElement("input");
@@ -314,7 +352,13 @@ export function createMeetingPage(
     if (fastModeInput.checked) wordTsInput.checked = false;
   });
 
-  confirmOptions.append(speakersField, languageField, wordTsField, fastModeField);
+  confirmOptions.append(
+    speakersField,
+    languageField,
+    qualityField,
+    wordTsField,
+    fastModeField,
+  );
 
   const confirmActions = document.createElement("div");
   confirmActions.className = "confirm-actions";
@@ -512,7 +556,13 @@ export function createMeetingPage(
           : m.extras_installed === false
             ? t("meeting.unavailable.noExtras")
             : t("meeting.unavailable.default");
-      return { available: !!m.available, reason };
+      return {
+        available: !!m.available,
+        reason,
+        qualityTiers: Array.isArray(m.quality_tiers)
+          ? (m.quality_tiers as string[])
+          : undefined,
+      };
     });
 
   let lastResult: MeetingResult | null = null;
@@ -716,10 +766,10 @@ export function createMeetingPage(
     uploadForm.hidden = false;
   });
 
-  startBtn.addEventListener("click", () => {
+  startBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
     const file = selectedFile;
-    const submitOpts = buildSubmitOpts();
+    const submitOpts = await buildSubmitOpts();
     // Plumb the original filename into the upload so the backend's
     // auto-persist row carries the user-recognisable name in the
     // history sidebar, not a synthesised `meeting-<job_id>` label.
@@ -728,7 +778,7 @@ export function createMeetingPage(
     void startUpload(file, submitOpts);
   });
 
-  function buildSubmitOpts(): SubmitOptions {
+  async function buildSubmitOpts(): Promise<SubmitOptions> {
     const out: SubmitOptions = {};
     // Speakers
     const sel = SPEAKER_OPTIONS.find((o) => o.value === speakersSelect.value);
@@ -736,7 +786,7 @@ export function createMeetingPage(
     // Language
     const lang = languageSelect.value;
     if (lang === "custom") {
-      const entered = promptFn(t("meeting.language.customPrompt"), "");
+      const entered = await promptFn(t("meeting.language.customPrompt"), "");
       if (entered && /^[a-z]{2,3}$/i.test(entered.trim()))
         out.language = entered.trim().toLowerCase();
     } else if (lang !== "auto") {
@@ -748,6 +798,11 @@ export function createMeetingPage(
     // applies unless the user opted in. Matches the wordTs serialisation
     // pattern in meeting-api.ts.
     if (fastModeInput.checked) out.fast = true;
+    // Diarization quality — only meaningful when the selector is offered
+    // (balanced tier installed) and the non-default tier is chosen.
+    if (!qualityField.hidden && qualitySelect.value === "balanced") {
+      out.quality = "balanced";
+    }
     return out;
   }
 
@@ -937,12 +992,12 @@ export function createMeetingPage(
   viewDetailBtn.addEventListener("click", () => switchViewMode("detail"));
   updateViewToggleState();
 
-  function renameSpeaker(rawSpeaker: string): void {
+  async function renameSpeaker(
+    rawSpeaker: string,
+    anchor: HTMLElement,
+  ): Promise<void> {
     const current = displaySpeakerName(rawSpeaker);
-    const next = promptFn(
-      t("meeting.speaker.renamePrompt", { speaker: rawSpeaker }),
-      current === rawSpeaker ? "" : current,
-    );
+    const next = await editFn(anchor, current === rawSpeaker ? "" : current);
     if (next === null) return;
     const trimmed = next.trim();
     if (trimmed === "" || trimmed === rawSpeaker) {
@@ -972,14 +1027,7 @@ export function createMeetingPage(
   // ------ Exports + reset ---------------------------------------------------
 
   function downloadBlob(filename: string, contents: string, mime: string) {
-    const blob = new Blob([contents], { type: mime });
-    const url = createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    void saveTextFile(filename, contents, mime);
   }
 
   /** Apply the active speakerNames map to every segment so exports carry
@@ -1088,10 +1136,10 @@ export function createMeetingPage(
 
   // ✏️ rename the currently-loaded meeting's title. PromptFn fallback
   // is the same pattern as `renameSpeaker` so vitest can stub it.
-  titleEdit.addEventListener("click", () => {
+  titleEdit.addEventListener("click", async () => {
     if (!activeJobId) return;
     const current = activeFilename;
-    const next = promptFn(t("meeting.title.renamePrompt"), current);
+    const next = await editFn(titleText, current);
     if (next === null) return;
     const trimmed = next.trim();
     if (trimmed === "" || trimmed === current) return;
@@ -1327,6 +1375,10 @@ export function createMeetingPage(
         fileInput.disabled = true;
         uploadLabel.classList.add("disabled");
         startBtn.disabled = true;
+      }
+      // Offer the quality choice only when a second tier is installed.
+      if (info.qualityTiers?.includes("balanced")) {
+        qualityField.hidden = false;
       }
     })
     .catch(() => {});
