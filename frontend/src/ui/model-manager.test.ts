@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ModelManager } from "./model-manager";
+import { resetClientFetch, setClientFetch } from "../api/client";
 
 interface RowSpec {
   name: string;
@@ -38,29 +39,32 @@ function modelsResponse(active: string, loaded: boolean, rows: RowSpec[]) {
 
 type FetchHandler = (url: string, init?: RequestInit) => unknown;
 
+// The migrated ModelManager talks to the shared `openapi-fetch` client, which
+// builds a full `Request` and calls ONE injectable `fetch`. Tests stub that
+// seam (`setClientFetch`) and assert on the emitted `Request` (URL + method) —
+// the same route/method guarantee the old per-call `fetch` mock asserted.
 function mockFetch(handler: FetchHandler) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((input: string, init?: RequestInit) => {
-      calls.push({ url: String(input), init });
-      // Run the handler at fetch time, not lazily in json() — handlers carry
-      // side effects (loaded/installed flips) and not every caller reads the
-      // body (setActive skips json() on success).
-      const body = handler(String(input), init);
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve(body),
-      } as Response);
-    }),
-  );
+  const impl = vi.fn(async (input: Request) => {
+    const init: RequestInit = { method: input.method };
+    calls.push({ url: input.url, init });
+    // Run the handler at fetch time, not lazily in json() — handlers carry
+    // side effects (loaded/installed flips) and the response body is what the
+    // client parses.
+    const body = handler(input.url, init);
+    return new Response(JSON.stringify(body ?? {}), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  setClientFetch(impl as unknown as typeof fetch);
   return calls;
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  resetClientFetch();
   vi.useRealTimers();
 });
 
@@ -85,7 +89,7 @@ describe("ModelManager metadata", () => {
       ]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     const row = [...root.querySelectorAll<HTMLElement>(".model-row")].find(
       (r) => r.querySelector(".model-row-name")?.textContent?.includes("breeze"),
@@ -103,7 +107,7 @@ describe("ModelManager metadata", () => {
       ]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     const ratings = root.querySelector(".model-row-ratings")!;
     const groups = ratings.querySelectorAll(".model-rating");
@@ -122,7 +126,7 @@ describe("ModelManager metadata", () => {
       ]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     expect(root.querySelectorAll(".model-row")).toHaveLength(2); // default: 全部
     [...root.querySelectorAll<HTMLButtonElement>(".model-tab")]
@@ -140,7 +144,7 @@ describe("ModelManager action states", () => {
       modelsResponse("breeze", true, [{ name: "breeze", installed: true, runnable: true }]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     expect(actionText(root, "breeze")).toBe("Active");
   });
@@ -150,7 +154,7 @@ describe("ModelManager action states", () => {
       modelsResponse("breeze", false, [{ name: "breeze", installed: false, runnable: true }]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     const btn = root.querySelector<HTMLButtonElement>(".model-row-action button");
     expect(btn?.textContent).toBe("Download");
@@ -161,7 +165,7 @@ describe("ModelManager action states", () => {
       modelsResponse("breeze", false, [{ name: "breeze", installed: true, runnable: true }]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     const btn = root.querySelector<HTMLButtonElement>(".model-row-action button");
     expect(btn?.textContent).toBe("Load");
@@ -172,7 +176,7 @@ describe("ModelManager action states", () => {
       modelsResponse("other", true, [{ name: "breeze", installed: true, runnable: true }]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     const btn = root.querySelector<HTMLButtonElement>(".model-row-action button");
     expect(btn?.textContent).toBe("Set active");
@@ -183,7 +187,7 @@ describe("ModelManager action states", () => {
       modelsResponse("turbo", false, [{ name: "turbo", installed: false, runnable: false }]),
     );
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await flush();
     expect(actionText(root, "turbo")).toBe("Not supported");
   });
@@ -203,7 +207,7 @@ describe("ModelManager load flow", () => {
     });
     const root = mount();
     const onActiveChange = vi.fn();
-    new ModelManager(root, () => "http://x", { onActiveChange });
+    new ModelManager(root, { onActiveChange });
     await flush();
 
     root.querySelector<HTMLButtonElement>(".model-row-action button")!.click();
@@ -236,7 +240,7 @@ describe("ModelManager load flow", () => {
       ]);
     });
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await vi.advanceTimersByTimeAsync(0);
 
     root.querySelector<HTMLButtonElement>(".model-row-action button")!.click();
@@ -272,7 +276,7 @@ describe("ModelManager load flow", () => {
       ]);
     });
     const root = mount();
-    new ModelManager(root, () => "http://x");
+    new ModelManager(root);
     await vi.advanceTimersByTimeAsync(0);
 
     root.querySelector<HTMLButtonElement>(".model-row-action button")!.click();
@@ -299,7 +303,7 @@ describe("ModelManager load flow", () => {
     });
     const root = mount();
     const onDownloadStart = vi.fn();
-    new ModelManager(root, () => "http://x", { onDownloadStart });
+    new ModelManager(root, { onDownloadStart });
     await flush();
 
     root.querySelector<HTMLButtonElement>(".model-row-action button")!.click();
@@ -322,7 +326,7 @@ describe("ModelManager load flow", () => {
     });
     const root = mount();
     const onError = vi.fn();
-    new ModelManager(root, () => "http://x", { onError });
+    new ModelManager(root, { onError });
     await vi.advanceTimersByTimeAsync(0);
 
     root.querySelector<HTMLButtonElement>(".model-row-action button")!.click();
@@ -354,7 +358,7 @@ describe("ModelManager load flow", () => {
     });
     const root = mount();
     const onActiveChange = vi.fn();
-    new ModelManager(root, () => "http://x", { onActiveChange });
+    new ModelManager(root, { onActiveChange });
     await vi.advanceTimersByTimeAsync(0);
 
     // Fresh install: the active-named model shows Download.

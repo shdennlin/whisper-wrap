@@ -74,6 +74,8 @@ import {
 } from "./platform/surface";
 import { itemDisplayTitle, listItems } from "./library/items";
 import { wirePastePermissionHint } from "./ui/paste-permission-hint";
+import { client } from "./api/client";
+import { backendUrl } from "./api/backend-url";
 
 // Resolve locale before any component reads strings.
 loadLocale();
@@ -477,7 +479,6 @@ const settings0 = loadSettings();
 // call so Settings URL changes apply immediately) plus an error hook so
 // failed background writes surface as a toast instead of disappearing.
 const store = new HistoryStore({
-  backendUrl: () => loadSettings().backendUrl || window.location.origin,
   onError: (e, ctx) => {
     const msg = e instanceof Error ? e.message : String(e);
     toast(`⚠ history ${ctx.op} failed: ${msg}`);
@@ -567,9 +568,9 @@ const appShell = mountAppShell(appRoot, {
     } else if (view.name === "models") {
       renderModels(container, {
         mount: (host) =>
-          new ModelManager(host, () => backendUrl(""), { onActiveChange: () => {} }),
+          new ModelManager(host, { onActiveChange: () => {} }),
         mountAux: (host) =>
-          new AuxModelManager(host, () => backendUrl(""), { onInstalled: () => {} }),
+          new AuxModelManager(host, { onInstalled: () => {} }),
       });
     } else if (view.name === "settings") {
       void renderSettings(container, {
@@ -604,13 +605,18 @@ const appShell = mountAppShell(appRoot, {
 
 // Shared by the done-view ✨AI 加工 modal so it reads the one /actions registry.
 const fetchAiActions = async (): Promise<ActionsResponse> => {
-  const r = await fetch(backendUrl("/actions"));
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const body = (await r.json()) as {
-    actions: ActionTemplate[];
-    categories?: Category[];
+  const { data, error, response } = await client.GET("/actions");
+  const status = response.status;
+  if (error || !data) throw new Error(`HTTP ${status}`);
+  // The contract types `/actions` arrays as `unknown[]` (their elements are
+  // `serde_json::Value` in core, deliberately not over-typed). Map to the
+  // frontend Action/Category shapes at this boundary — a contract-loose array
+  // mapping, NOT a documented dynamic-exception response cast (those live in
+  // `src/api/ai-config.ts`).
+  return {
+    actions: (data.actions ?? []) as ActionTemplate[],
+    categories: (data.categories ?? []) as Category[],
   };
-  return { actions: body.actions ?? [], categories: body.categories ?? [] };
 };
 
 // The just-captured item + AI model, fed to the done-view AI picker modal.
@@ -707,7 +713,10 @@ settingsModal.addEventListener("click", (e) => {
 
 // ---- Health monitor --------------------------------------------------------
 const healthMonitor = new HealthMonitor({
-  url: backendUrl("/status"),
+  // Raw URL: HealthMonitor owns its own fetch; its GET /status probe is routed
+  // through the generated client inside health-monitor.ts (task 2.6). Here we
+  // only collapse the base-URL source onto the canonical `backendUrl()`.
+  url: `${backendUrl()}/status`,
   onStateChange: (state) => {
     backendIndicator.setState(state);
     const disabled = state !== "ok";
@@ -725,12 +734,10 @@ healthMonitor.start();
 // ---- LLM indicator (one-shot fetch of /status to surface the AI model) -----
 // Doesn't need to poll — the active Gemini model is set at server startup and
 // never changes at runtime. One read per page load is enough.
-void fetch(backendUrl("/status"))
-  .then((r) => (r.ok ? r.json() : null))
-  .then((body) => {
-    const gemini = body?.gemini as
-      | { configured?: boolean; model?: string }
-      | undefined;
+void client
+  .GET("/status")
+  .then(({ data }) => {
+    const gemini = data?.gemini;
     if (!gemini) return;
     // Cached for the done-view ✨AI 加工 modal (openAiActionModal reads it).
     aiModelStatus = { configured: !!gemini.configured, model: gemini.model };
@@ -744,9 +751,7 @@ void fetch(backendUrl("/status"))
 // ---- First-run gate --------------------------------------------------------
 // A fresh install has no model weights; the engine boots with model.loaded
 // false. Block the shell behind a download gate until a model is active.
-void maybeShowFirstRunGate(
-  () => loadSettings().backendUrl || window.location.origin,
-);
+void maybeShowFirstRunGate();
 
 // ---- Global ⌥Space shortcut (desktop-global-hotkey) ------------------------
 // Desktop only: the Rust shell registers ⌥Space and emits `quick-record` when
@@ -846,9 +851,12 @@ document.addEventListener("visibilitychange", () => {
 // SSE stream (universal) and a desktop Tauri event the overlay emits on save.
 
 // Backend SSE — a no-op where EventSource is unavailable, so startup never throws.
+// EXEMPT from the generated JSON client (design "Streaming, SSE, and binary
+// engine calls stay off the generated client"): this stays on `EventSource`;
+// only its base URL collapses onto the canonical `backendUrl()`.
 subscribeSessionEvents({
   onChange: () => rec.scheduleLiveRefresh(),
-  url: backendUrl("/v1/sessions/events"),
+  url: `${backendUrl()}/v1/sessions/events`,
 });
 // Desktop fast-path — null (no-op) in a plain browser with no Tauri bridge.
 tauriListen(LIBRARY_CHANGED_EVENT, () => rec.scheduleLiveRefresh());
@@ -898,11 +906,6 @@ function isTouchDevice(): boolean {
     return false;
   }
   return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
-}
-
-function backendUrl(path: string): string {
-  const base = loadSettings().backendUrl || window.location.origin;
-  return base.replace(/\/$/, "") + path;
 }
 
 function micPermissionModal(detail: string): void {

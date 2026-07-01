@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuxModelManager } from "./aux-model-manager";
+import { resetClientFetch, setClientFetch } from "../api/client";
 
 // label/description now come from i18n (keyed by id), not the API. The list
 // only carries id + status fields; the rows derive their text from the i18n
@@ -19,24 +20,36 @@ function jsonResponse(body: unknown, ok = true): Response {
 
 describe("AuxModelManager", () => {
   let root: HTMLElement;
+  // The migrated manager talks to the shared `openapi-fetch` client's ONE
+  // injectable `fetch`. Tests keep expressing intent as `fetchMock(url, init)`
+  // returning a lightweight `{ ok, status, json }` shape; the seam adapter
+  // below translates the emitted `Request` into that call and re-wraps the
+  // result as a real `Response` the client can parse.
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     root = document.createElement("div");
     document.body.appendChild(root);
     fetchMock = vi.fn(async () => jsonResponse(LIST));
-    vi.stubGlobal("fetch", fetchMock);
+    setClientFetch((async (input: Request) => {
+      const pseudo = (await fetchMock(input.url, { method: input.method })) as Response;
+      const body = await pseudo.json();
+      return new Response(JSON.stringify(body ?? {}), {
+        status: pseudo.status ?? (pseudo.ok ? 200 : 500),
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch);
   });
   afterEach(() => {
     root.remove();
     for (const el of document.querySelectorAll(".modal-prompt-overlay")) el.remove();
-    vi.unstubAllGlobals();
+    resetClientFetch();
   });
 
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
   it("groups models by stage and shows install status", async () => {
-    new AuxModelManager(root, () => "");
+    new AuxModelManager(root);
     await flush();
     const groups = root.querySelectorAll(".aux-stage-group");
     expect(groups).toHaveLength(2); // diarize + vad
@@ -53,7 +66,7 @@ describe("AuxModelManager", () => {
   });
 
   it("shows descriptions, a Recommended badge for the fast tier, and the pick-one note", async () => {
-    new AuxModelManager(root, () => "");
+    new AuxModelManager(root);
     await flush();
     const fast = root.querySelector('.model-row[data-id="diarize-embedding-fast"]')!;
     expect(fast.querySelector(".model-chip-recommended")!.textContent).toBe("Recommended");
@@ -75,14 +88,14 @@ describe("AuxModelManager", () => {
     fetchMock.mockImplementation(
       async () => ({ ok: false, status: 404, json: async () => ({}) }) as Response,
     );
-    new AuxModelManager(root, () => "");
+    new AuxModelManager(root);
     await flush();
     expect(root.querySelector(".aux-models-note")).toBeTruthy();
     expect(root.querySelectorAll(".aux-stage-group")).toHaveLength(0);
   });
 
   it("shows a Remove button only on installed models", async () => {
-    new AuxModelManager(root, () => "");
+    new AuxModelManager(root);
     await flush();
     const installed = root.querySelector('.model-row[data-id="diarize-embedding-fast"]')!;
     expect(installed.querySelector(".model-btn-remove")!.textContent).toBe("Remove");
@@ -96,7 +109,7 @@ describe("AuxModelManager", () => {
       calls.push({ url, method: init?.method });
       return jsonResponse(LIST);
     });
-    new AuxModelManager(root, () => "");
+    new AuxModelManager(root);
     await flush();
     root
       .querySelector<HTMLButtonElement>('.model-row[data-id="diarize-embedding-fast"] .model-btn-remove')!
@@ -121,7 +134,7 @@ describe("AuxModelManager", () => {
       return jsonResponse({ id: "diarize-segmentation", status: "downloading", downloaded_bytes: 3_000_000, total_bytes: 6_000_000 });
     });
 
-    new AuxModelManager(root, () => "");
+    new AuxModelManager(root);
     await flush();
     const btn = root.querySelector<HTMLButtonElement>('.model-row[data-id="diarize-segmentation"] .model-btn')!;
     btn.click();

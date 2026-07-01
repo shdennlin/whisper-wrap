@@ -3,6 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderDetail } from "./detail-view";
 import type { Run, RunKind } from "../library/runs-api";
 import type { SessionFull } from "../storage/history-api-client";
+import { resetClientFetch, setClientFetch } from "../api/client";
+
+/** A JSON Response for the client's injectable `fetch` seam. */
+function jsonResp(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 function run(p: Partial<Run> & { id: string; kind: RunKind; status: Run["status"] }): Run {
   return {
@@ -44,6 +53,7 @@ describe("renderDetail", () => {
     // The AI picker modal mounts on document.body, outside `container`.
     for (const el of document.querySelectorAll(".ai-modal-overlay")) el.remove();
     history.replaceState(null, "", "#/");
+    resetClientFetch();
   });
 
   it("groups runs by kind and selects the latest", async () => {
@@ -377,6 +387,61 @@ describe("renderDetail", () => {
 
     expect(deleteItem).toHaveBeenCalledWith("i");
     expect(window.location.hash).toBe("#/library");
+  });
+
+  it("defaultLoadAiStatus routes GET /status through the generated client", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResp({
+        ai: { configured: true, provider: "gemini", endpoint: "http://e", model: "m" },
+      }),
+    );
+    setClientFetch(fetchMock as unknown as typeof fetch);
+
+    // Omit loadAiStatus so the default (client GET /status) runs; inject the
+    // other loaders so /status is the only client call this render makes.
+    await renderDetail(container, "i", {
+      loadRuns: async () => [run({ id: "t1", kind: "transcribe", status: "done" })],
+      loadAudio: noAudio,
+      loadSession: async () => null,
+    });
+
+    const statusReq = fetchMock.mock.calls
+      .map((c) => (c as unknown[])[0] as Request)
+      .find((r) => new URL(r.url).pathname === "/status");
+    expect(statusReq).toBeTruthy();
+    expect(statusReq!.method).toBe("GET");
+  });
+
+  it("defaultLoadActions routes GET /actions through the generated client", async () => {
+    const fetchMock = vi.fn(async (input: Request) => {
+      const path = new URL(input.url).pathname;
+      if (path === "/actions") {
+        return jsonResp({
+          actions: [{ id: "sum", label: "Summary", template: "摘要：{transcript}" }],
+          categories: [],
+        });
+      }
+      // /status for the default AI-status probe.
+      return jsonResp({ ai: { configured: false, provider: "", endpoint: "", model: "" } });
+    });
+    setClientFetch(fetchMock as unknown as typeof fetch);
+
+    // Omit loadActions + loadAiStatus so both defaults (client) are exercised.
+    await renderDetail(container, "i", {
+      loadRuns: async () => [run({ id: "t1", kind: "transcribe", status: "done" })],
+      loadAudio: noAudio,
+      loadSession: async () => null,
+    });
+
+    container.querySelector<HTMLButtonElement>('.stage-btn[data-kind="ai"]')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const actionsReq = fetchMock.mock.calls
+      .map((c) => c[0] as Request)
+      .find((r) => new URL(r.url).pathname === "/actions");
+    expect(actionsReq?.method).toBe("GET");
+    // The chip rendered from the client-loaded registry.
+    expect(document.querySelector('.actions-chip[data-action-id="sum"]')).toBeTruthy();
   });
 
   it("does not delete when the confirm modal is cancelled", async () => {

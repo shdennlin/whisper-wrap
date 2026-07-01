@@ -1,11 +1,14 @@
 /**
- * Thin fetch wrappers for the meeting analysis endpoints.
+ * Thin wrappers for the meeting-analysis job endpoints, on the generated
+ * openapi-fetch client (fe-api-client-codegen, task 2.2).
  *
- * Both functions throw on HTTP errors; the caller is responsible for
- * translating thrown errors into UI state. The polling interval is enforced
- * by `pollUntilDone`.
+ * `submitMeeting`/`fetchJobStatus` throw on HTTP errors; the caller translates
+ * thrown errors into UI state. The polling interval is enforced by
+ * `pollUntilDone`.
  */
 
+import { client } from "../api/client";
+import type { components } from "../api/generated/openapi";
 import type { JobStatusResponse } from "./types";
 
 export interface SubmitOptions {
@@ -36,57 +39,94 @@ export interface SubmitOptions {
   quality?: "fast" | "balanced";
 }
 
-export interface JobHandle {
-  job_id: string;
-  status_url: string;
+/** Job descriptor returned by `POST /transcribe/meeting` — the generated
+ *  contract type (`{ job_id, status_url }`). */
+export type JobHandle = components["schemas"]["SubmitResponse"];
+
+/** Serialize the structured meeting error surfaced to the user.
+ *
+ *  The meeting submit/poll/cancel routes return an ad-hoc
+ *  `{ detail: { error, reason } }` body (an OBJECT — NOT the `{ detail: string }`
+ *  `ApiErrorBody`). `openapi-fetch` has already parsed it into `error`, but its
+ *  generated type for these routes is open/loose (the contract documents no
+ *  error schema), so we preserve the whole structured payload rather than
+ *  collapsing it to a string (design "Error responses"). */
+function describeMeetingError(error: unknown): string {
+  if (error == null) return "";
+  if (typeof error === "string") return error;
+  return JSON.stringify(error);
 }
 
 export async function submitMeeting(
   file: File,
   opts: SubmitOptions = {},
 ): Promise<JobHandle> {
-  const params = new URLSearchParams();
-  if (opts.language) params.set("language", opts.language);
+  // The generated contract only documents `filename`/`quality`/`model` for this
+  // route, but the engine also accepts the diarization/ASR tuning params below.
+  // We build the full query and cast it so the request is byte-identical to the
+  // pre-codegen one; openapi-fetch serializes every key regardless of the type.
+  const query: Record<string, string> = {};
+  if (opts.language) query.language = opts.language;
   if (opts.numSpeakers !== undefined)
-    params.set("num_speakers", String(opts.numSpeakers));
+    query.num_speakers = String(opts.numSpeakers);
   if (opts.minSpeakers !== undefined)
-    params.set("min_speakers", String(opts.minSpeakers));
+    query.min_speakers = String(opts.minSpeakers);
   if (opts.maxSpeakers !== undefined)
-    params.set("max_speakers", String(opts.maxSpeakers));
+    query.max_speakers = String(opts.maxSpeakers);
   // Backend default is true. Only explicitly pass false so the URL stays
   // short and a future backend default change is honoured by clients that
   // haven't opted in.
   if (opts.enableWordTimestamps === false)
-    params.set("enable_word_timestamps", "false");
+    query.enable_word_timestamps = "false";
   else if (opts.enableWordTimestamps === true)
-    params.set("enable_word_timestamps", "true");
+    query.enable_word_timestamps = "true";
   // Same opt-in pattern as enableWordTimestamps: only send when true, so a
   // future backend default change to fast-on-everywhere is honoured.
-  if (opts.fast === true) params.set("fast", "true");
+  if (opts.fast === true) query.fast = "true";
   // Backend default is fast — only send the non-default tier.
-  if (opts.quality === "balanced") params.set("quality", "balanced");
-  if (opts.filename) params.set("filename", opts.filename);
+  if (opts.quality === "balanced") query.quality = "balanced";
+  if (opts.filename) query.filename = opts.filename;
 
-  const url = `/transcribe/meeting${params.toString() ? `?${params}` : ""}`;
-  const resp = await fetch(url, {
-    method: "POST",
-    body: file,
+  const { data, error, response } = await client.POST("/transcribe/meeting", {
+    // Cast narrows our full query bag to the documented `filename`/`quality`/
+    // `model` subset the generated type exposes; the extra engine-accepted keys
+    // ride along (openapi-fetch serializes every key).
+    params: { query: query as { filename?: string; quality?: string } },
+    // MULTIPART/RAW ESCAPE HATCH (design "Binary and multipart request bodies"):
+    // the contract types this request body as a byte array (`number[]`). We send
+    // the raw File verbatim with its own Content-Type via an identity
+    // `bodySerializer` + a narrow cast — openapi-fetch would otherwise
+    // JSON-serialize it.
+    body: file as unknown as number[],
+    bodySerializer: (b) => b as unknown as File,
     headers: { "Content-Type": file.type || "application/octet-stream" },
   });
-  if (!resp.ok) {
-    throw new Error(`Submit failed (${resp.status}): ${await resp.text()}`);
+  if (!response.ok || !data) {
+    throw new Error(
+      `Submit failed (${response.status}): ${describeMeetingError(error)}`,
+    );
   }
-  return resp.json();
+  return data;
 }
 
 export async function fetchJobStatus(
   statusUrl: string,
 ): Promise<JobStatusResponse> {
-  const resp = await fetch(statusUrl);
-  if (!resp.ok) {
-    throw new Error(`Poll failed (${resp.status}): ${await resp.text()}`);
+  // `statusUrl` is `/transcribe/meeting/<job_id>` (from SubmitResponse.status_url
+  // or built the same way from a job id); extract the id for the typed path.
+  const id = statusUrl.split("/").pop() ?? "";
+  const { data, error, response } = await client.GET(
+    "/transcribe/meeting/{id}",
+    { params: { path: { id } } },
+  );
+  if (!response.ok || !data) {
+    throw new Error(
+      `Poll failed (${response.status}): ${describeMeetingError(error)}`,
+    );
   }
-  return resp.json();
+  // `result` is dynamic (`unknown`) in the contract; the narrowed
+  // JobStatusResponse carries the concrete MeetingResult the renderer needs.
+  return data as JobStatusResponse;
 }
 
 export async function pollUntilDone(
@@ -122,7 +162,9 @@ export async function pollUntilDone(
 export async function cancelMeeting(jobId: string): Promise<void> {
   // Fire-and-forget: any error is non-fatal. The UI has already reset.
   try {
-    await fetch(`/transcribe/meeting/${jobId}`, { method: "DELETE" });
+    await client.DELETE("/transcribe/meeting/{id}", {
+      params: { path: { id: jobId } },
+    });
   } catch {
     // Network error during cancel — best-effort, silent.
   }

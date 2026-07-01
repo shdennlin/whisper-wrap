@@ -4,13 +4,14 @@
  * pure helper still in this module.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   HistoryStore,
   formatSessionDuration,
   sessionDurationMs,
   type SessionRecord,
 } from "./history-store";
+import { setClientFetch, resetClientFetch } from "../api/client";
 
 describe("formatSessionDuration", () => {
   it("shows tenths-of-second under one minute", () => {
@@ -83,11 +84,21 @@ describe("sessionDurationMs", () => {
 });
 
 describe("HistoryStore (API-backed)", () => {
+  // The store now calls the shared generated client. Its transport goes
+  // through one injectable `fetch` (design "Preserve the test seam") which we
+  // stub here; assertions read the emitted `Request` (method / URL / body).
+  // The client's middleware sets the origin from `backendUrl()` (same-origin
+  // `location.origin` in the test env), so URL assertions check the pathname
+  // + query, not a hard-coded origin.
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     fetchMock = vi.fn();
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    setClientFetch(fetchMock as unknown as typeof fetch);
+  });
+
+  afterEach(() => {
+    resetClientFetch();
   });
 
   function mockJson(body: unknown, status = 200): Response {
@@ -97,8 +108,13 @@ describe("HistoryStore (API-backed)", () => {
     });
   }
 
+  /** The `Request` the client emitted on its Nth call. */
+  function reqAt(i: number): Request {
+    return fetchMock.mock.calls[i][0] as Request;
+  }
+
   function makeStore(): HistoryStore {
-    return new HistoryStore({ backendUrl: () => "http://test" });
+    return new HistoryStore();
   }
 
   it("prime() populates the cache with one GET /v1/sessions", async () => {
@@ -124,8 +140,7 @@ describe("HistoryStore (API-backed)", () => {
     await store.prime();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [calledUrl] = fetchMock.mock.calls[0];
-    expect(String(calledUrl)).toMatch(/\/v1\/sessions\?limit=/);
+    expect(reqAt(0).url).toMatch(/\/v1\/sessions\?limit=/);
 
     const list = store.list();
     expect(list).toHaveLength(1);
@@ -158,9 +173,8 @@ describe("HistoryStore (API-backed)", () => {
     // Let the background POST resolve.
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [calledUrl, init] = fetchMock.mock.calls[0];
-    expect(String(calledUrl)).toBe("http://test/v1/sessions");
-    expect((init as RequestInit).method).toBe("POST");
+    expect(new URL(reqAt(0).url).pathname).toBe("/v1/sessions");
+    expect(reqAt(0).method).toBe("POST");
   });
 
   it("appendFinal waits for the in-flight startSession POST before its own request", async () => {
@@ -202,16 +216,14 @@ describe("HistoryStore (API-backed)", () => {
     // blocking it on the create POST.
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0][0])).toBe("http://test/v1/sessions");
+    expect(new URL(reqAt(0).url).pathname).toBe("/v1/sessions");
 
     // Release create — now appendFinal SHALL fire its POST.
     resolveCreate(createBody);
     await finalPromise;
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(String(fetchMock.mock.calls[1][0])).toBe(
-      `http://test/v1/sessions/${id}/finals`,
-    );
+    expect(new URL(reqAt(1).url).pathname).toBe(`/v1/sessions/${id}/finals`);
     expect(store.list().find((s) => s.id === id)!.finals).toHaveLength(1);
   });
 
@@ -235,7 +247,6 @@ describe("HistoryStore (API-backed)", () => {
     fetchMock.mockResolvedValueOnce(mockJson({ detail: "broken" }, 500));
     const errors: { op: string; sessionId?: string }[] = [];
     const store = new HistoryStore({
-      backendUrl: () => "http://test",
       onError: (_e, ctx) => errors.push(ctx),
     });
     store.__setCacheForTests([
@@ -287,8 +298,8 @@ describe("HistoryStore (API-backed)", () => {
       { id: "s", started_at: 0, ended_at: null, finals: [], action_runs: [] },
     ]);
     await store.stopSession("s");
-    const [, init] = fetchMock.mock.calls[0];
-    const body = JSON.parse(String((init as RequestInit).body));
+    expect(reqAt(0).method).toBe("PATCH");
+    const body = await reqAt(0).clone().json();
     expect(body).toHaveProperty("ended_at");
     expect(body).toHaveProperty("duration_ms");
     expect(store.list()[0].ended_at).not.toBeNull();
@@ -311,9 +322,8 @@ describe("HistoryStore (API-backed)", () => {
     ]);
     await store.uploadSessionAudio("s", new Blob([new Uint8Array([1, 2, 3, 4])]), "audio/webm");
     expect(store.list()[0].audio_saved).toBe(true);
-    const [calledUrl, init] = fetchMock.mock.calls[0];
-    expect(String(calledUrl)).toBe("http://test/v1/sessions/s/audio");
-    expect((init as RequestInit).method).toBe("POST");
+    expect(new URL(reqAt(0).url).pathname).toBe("/v1/sessions/s/audio");
+    expect(reqAt(0).method).toBe("POST");
   });
 
   it("bulkClearAudio DELETEs /v1/sessions/audio and flips audio_saved off", async () => {

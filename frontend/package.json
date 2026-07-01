@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "gen:api": "bun run scripts/gen-api.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run --environment happy-dom",
@@ -21,10 +22,14 @@
     "@vitest/web-worker": "^2.1.5",
     "fake-indexeddb": "^6.2.5",
     "happy-dom": "^15.11.6",
+    "openapi-typescript": "^7.13.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vite-plugin-pwa": "^0.21.1",
     "vitest": "^2.1.5",
     "workbox-window": "^7.3.0"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
   }
 }

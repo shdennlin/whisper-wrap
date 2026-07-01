@@ -31,6 +31,8 @@ import { formatDuration } from "../util/format-duration";
 import { MIN_USABLE_DURATION_MS, type HistoryStore } from "../storage/history-store";
 import { navigateToView } from "../routing/view-route";
 import { type RecordingLayer } from "../ui/recording-view";
+import { client } from "../api/client";
+import { backendUrl } from "../api/backend-url";
 
 /**
  * Injected collaborators for {@link createRecordingController}. The first six
@@ -689,14 +691,20 @@ export function createRecordingController(
     // log=false: the PWA owns its own session lifecycle via /v1/sessions/*.
     // External API consumers (Shortcut, curl) default to log=true so they
     // also appear in the history view.
-    const r = await fetch(backendUrl("/transcribe?log=false"), {
-      method: "POST",
+    const { data, error, response } = await client.POST("/transcribe", {
+      params: { query: { log: false } },
+      // Binary escape hatch (design "Binary and multipart request bodies need a
+      // bodySerializer + a body-type cast"): the contract types this request
+      // body as a byte array (`number[]`) and openapi-fetch would JSON-serialize
+      // it. Send the `Blob` verbatim via an identity `bodySerializer` and cast
+      // `body` to the generated `number[]` request type. Request-body escape
+      // hatch only — it does not weaken response typing.
+      body: blob as unknown as number[],
+      bodySerializer: () => blob,
       headers: { "content-type": mimeType || "application/octet-stream" },
-      body: blob,
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const body = (await r.json()) as { text: string };
-    return body.text ?? "";
+    if (error || !data) throw new Error(`HTTP ${response.status}`);
+    return data.text ?? "";
   }
 
   // ---- Live library refresh (live-library-push) ----------------------------
@@ -736,7 +744,14 @@ export function createRecordingController(
     const session = store.list().find((s) => s.id === currentSessionId);
     if (!session || session.ended_at !== null) return;
     const ended_at = Date.now();
-    fetch(backendUrl(`/v1/sessions/${currentSessionId}`), {
+    // TRANSPORT EXEMPTION — this one call stays on synchronous native `fetch`,
+    // NOT the generated client. openapi-fetch's request middleware defers the
+    // actual `fetch` by a microtask; during `pagehide` the document can be torn
+    // down before that microtask runs, dropping the request even with
+    // `keepalive`. Firing `fetch` synchronously here maximises unload delivery.
+    // Same-origin, so the `engine_token` cookie still rides; `keepalive: true`
+    // keeps the request alive past unload.
+    void fetch(`${backendUrl()}/v1/sessions/${currentSessionId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -768,11 +783,6 @@ export function createRecordingController(
     b.type = "button";
     b.textContent = label;
     return b;
-  }
-
-  function backendUrl(path: string): string {
-    const base = loadSettings().backendUrl || window.location.origin;
-    return base.replace(/\/$/, "") + path;
   }
 
   function formatBriefDuration(ms: number): string {

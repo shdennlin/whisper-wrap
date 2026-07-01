@@ -1,58 +1,41 @@
 /**
- * Thin fetch wrappers around the backend `/v1/sessions` REST API.
+ * Thin wrappers around the backend `/v1/sessions` REST API.
  *
- * Each function takes `backendUrl` first (so callers can pin against
- * `loadSettings().backendUrl` without smuggling it through closures), the
- * endpoint inputs second, returns the typed response or throws on non-2xx.
+ * These call the single generated `openapi-fetch` client
+ * (fe-api-client-codegen, task 2.1). The base URL is no longer threaded
+ * through a `backendUrl` first-arg — the client's request middleware injects
+ * it from the canonical `backendUrl()` per call, so every function takes only
+ * its endpoint inputs. Path/params/request-body/response are checked at build
+ * time against the generated contract; each function throws `HistoryApiError`
+ * on a non-2xx response so the HistoryStore's existing failure handling is
+ * unchanged.
  *
  * Intentionally NO retry / caching / batching. That's the HistoryStore's
  * job — this module is just the HTTP transport layer.
  */
 
+import { client } from "../api/client";
+import type { components } from "../api/generated/openapi";
+import { backendUrl } from "../api/backend-url";
 import type { SessionFinal, SessionRecord } from "./history-store";
 
 export type CaptureMode = "batch" | "live";
 
-export interface SessionDigest {
-  id: string;
-  started_at: number;
-  ended_at: number | null;
-  mode: CaptureMode;
-  audio_path: string | null;
-  audio_mime_type: string | null;
-  audio_size_bytes: number | null;
-  duration_ms: number | null;
-  // Item metadata (item-metadata backend). Optional so older/partial responses
-  // still typecheck; the backend returns them on current rows.
-  title?: string | null;
-  starred?: boolean;
-  project?: string | null;
-  category?: string | null;
-}
-
-export interface SessionFull extends SessionDigest {
-  finals: { session_id: string; ord: number; text: string; start_ms: number | null; end_ms: number | null; kind: string | null }[];
-  action_runs: { id: number; session_id: string; action_id: string; prompt: string; answer: string; ran_at: number; model_used: string | null; succeeded: boolean }[];
-}
-
-export interface SessionListResponse {
-  // GET /v1/sessions returns full sessions (finals + action_runs eagerly
-  // loaded) so list rows can render previews and char counts on first paint.
-  sessions: SessionFull[];
-  next_before_ms: number | null;
-}
-
-export interface AudioMeta {
-  audio_path: string;
-  audio_size_bytes: number;
-  audio_mime_type: string;
-}
+/**
+ * Full session detail as returned by `GET/POST/PATCH /v1/sessions(/{id})`.
+ * The generated contract now owns this shape (was a hand-written
+ * `SessionDigest`/`SessionFull` pair); re-exported under the same name so
+ * consumers (`detail-view.ts`, `items.ts`) keep importing it from here.
+ */
+export type SessionFull = components["schemas"]["SessionFull"];
 
 /**
  * Shape consumed by HistoryPanel's `getAudio` callback. Mirrors the old
  * IndexedDB record so consumers don't need to change. `duration_ms` SHALL
  * be populated by the caller (main.ts looks it up from the session cache)
  * so the waveform player can size its time axis and drag-to-scrub math.
+ *
+ * NOT a wire type — the contract does not model it, so it stays hand-written.
  */
 export interface StoredAudio {
   session_id: string;
@@ -63,10 +46,6 @@ export interface StoredAudio {
   stored_at: number;
 }
 
-export interface BulkAudioClearResponse {
-  deleted_count: number;
-}
-
 export class HistoryApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
@@ -75,148 +54,126 @@ export class HistoryApiError extends Error {
   }
 }
 
-function url(backendUrl: string, path: string): string {
-  return `${backendUrl.replace(/\/$/, "")}${path}`;
-}
-
-async function ensureOk(r: Response): Promise<Response> {
-  if (!r.ok) {
-    let detail = "";
-    try {
-      detail = JSON.stringify(await r.clone().json());
-    } catch {
-      detail = await r.clone().text();
-    }
-    throw new HistoryApiError(
-      `HTTP ${r.status} ${detail || r.statusText}`,
-      r.status,
-    );
-  }
-  return r;
+/** Build a `HistoryApiError` from openapi-fetch's `{ error, response }`.
+ *  Sessions errors are all `ApiErrorBody` (`{detail:string}`) — surface the
+ *  detail like the old `ensureOk` did, falling back to the status text. */
+function apiError(
+  error: components["schemas"]["ApiErrorBody"] | undefined,
+  response: Response,
+): HistoryApiError {
+  const detail = error?.detail ?? "";
+  return new HistoryApiError(
+    `HTTP ${response.status} ${detail || response.statusText}`,
+    response.status,
+  );
 }
 
 export async function listSessions(
-  backendUrl: string,
   opts: { limit?: number; before_ms?: number } = {},
-): Promise<SessionListResponse> {
-  const params = new URLSearchParams();
-  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
-  if (opts.before_ms !== undefined)
-    params.set("before_ms", String(opts.before_ms));
-  const qs = params.toString();
-  const r = await fetch(url(backendUrl, `/v1/sessions${qs ? `?${qs}` : ""}`));
-  await ensureOk(r);
-  return r.json();
+): Promise<components["schemas"]["SessionListResponse"]> {
+  const query: { limit?: number; before_ms?: number } = {};
+  if (opts.limit !== undefined) query.limit = opts.limit;
+  if (opts.before_ms !== undefined) query.before_ms = opts.before_ms;
+  const { data, error, response } = await client.GET("/v1/sessions", {
+    params: { query },
+  });
+  if (error) throw apiError(error, response);
+  return data;
 }
 
-export async function getSession(
-  backendUrl: string,
-  sessionId: string,
-): Promise<SessionFull | null> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}`));
-  if (r.status === 404) return null;
-  await ensureOk(r);
-  return r.json();
+export async function getSession(sessionId: string): Promise<SessionFull | null> {
+  const { data, error, response } = await client.GET("/v1/sessions/{id}", {
+    params: { path: { id: sessionId } },
+  });
+  if (response.status === 404) return null;
+  if (error) throw apiError(error, response);
+  return data;
 }
 
 export async function createSession(
-  backendUrl: string,
   body: { id: string; started_at: number; mode: CaptureMode },
 ): Promise<SessionFull> {
-  const r = await fetch(url(backendUrl, "/v1/sessions"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  await ensureOk(r);
-  return r.json();
+  const { data, error, response } = await client.POST("/v1/sessions", { body });
+  if (error) throw apiError(error, response);
+  return data;
 }
 
 export async function patchSession(
-  backendUrl: string,
   sessionId: string,
-  body: Partial<{
-    ended_at: number;
-    duration_ms: number;
-    audio_path: string;
-    audio_mime_type: string;
-    audio_size_bytes: number;
-    // Item metadata (item-metadata): renamable / starrable / organisable.
-    title: string;
-    starred: boolean;
-    project: string;
-    category: string;
-  }>,
+  body: components["schemas"]["SessionPatch"],
 ): Promise<SessionFull> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}`), {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+  const { data, error, response } = await client.PATCH("/v1/sessions/{id}", {
+    params: { path: { id: sessionId } },
+    body,
   });
-  await ensureOk(r);
-  return r.json();
+  if (error) throw apiError(error, response);
+  return data;
 }
 
-export async function deleteSession(
-  backendUrl: string,
-  sessionId: string,
-): Promise<void> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}`), {
-    method: "DELETE",
+export async function deleteSession(sessionId: string): Promise<void> {
+  const { error, response } = await client.DELETE("/v1/sessions/{id}", {
+    params: { path: { id: sessionId } },
   });
-  if (r.status === 404) return; // idempotent delete
-  await ensureOk(r);
+  if (response.status === 404) return; // idempotent delete
+  if (error) throw apiError(error, response);
 }
 
 export async function appendFinalToApi(
-  backendUrl: string,
   sessionId: string,
   body: SessionFinal & { kind?: string | null },
 ): Promise<void> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}/finals`), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+  const { error, response } = await client.POST("/v1/sessions/{id}/finals", {
+    params: { path: { id: sessionId } },
+    body,
   });
-  await ensureOk(r);
+  if (error) throw apiError(error, response);
 }
 
 export async function uploadAudio(
-  backendUrl: string,
   sessionId: string,
   blob: Blob,
   mimeType: string,
-): Promise<AudioMeta> {
+): Promise<components["schemas"]["AudioUploadResponse"]> {
   const form = new FormData();
   form.append("file", new Blob([blob], { type: mimeType }), `audio${extFromMime(mimeType)}`);
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}/audio`), {
-    method: "POST",
-    body: form,
+  const { data, error, response } = await client.POST("/v1/sessions/{id}/audio", {
+    params: { path: { id: sessionId } },
+    // Multipart escape hatch (design "Binary and multipart request bodies
+    // need a bodySerializer + a body-type cast"): the contract types this
+    // request body as a byte array (`number[]`) and openapi-fetch would
+    // JSON-serialize it. We instead send the `FormData` verbatim via an
+    // identity `bodySerializer` so the browser sets the multipart boundary,
+    // and cast `body` to the generated `number[]` request type. This is a
+    // request-body escape hatch only; it does not weaken response typing.
+    body: form as unknown as number[],
+    bodySerializer: () => form,
   });
-  await ensureOk(r);
-  return r.json();
+  if (error) throw apiError(error, response);
+  return data;
 }
 
 export async function getAudio(
-  backendUrl: string,
   sessionId: string,
 ): Promise<{ blob: Blob; mime_type: string } | null> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/${sessionId}/audio`));
+  // Binary stream — stays on native `fetch` (design "binary engine calls
+  // stay off the generated JSON client"). Base URL still collapses onto the
+  // canonical `backendUrl()` so no per-call threading remains.
+  const r = await fetch(`${backendUrl()}/v1/sessions/${sessionId}/audio`);
   if (r.status === 404) return null;
-  await ensureOk(r);
+  if (!r.ok) {
+    throw new HistoryApiError(`HTTP ${r.status} ${r.statusText}`, r.status);
+  }
   const mime = r.headers.get("content-type") || "application/octet-stream";
   const blob = await r.blob();
   return { blob, mime_type: mime };
 }
 
-export async function bulkClearAudio(
-  backendUrl: string,
-): Promise<BulkAudioClearResponse> {
-  const r = await fetch(url(backendUrl, `/v1/sessions/audio`), {
-    method: "DELETE",
-  });
-  await ensureOk(r);
-  return r.json();
+export async function bulkClearAudio(): Promise<
+  components["schemas"]["BulkClearAudioResponse"]
+> {
+  const { data, error, response } = await client.DELETE("/v1/sessions/audio");
+  if (error) throw apiError(error, response);
+  return data;
 }
 
 function extFromMime(mime: string): string {

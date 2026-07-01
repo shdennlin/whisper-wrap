@@ -18,39 +18,17 @@
 
 import { modalConfirm } from "./modal-prompt";
 import { t } from "../i18n";
+import { client } from "../api/client";
+import type { components } from "../api/generated/openapi";
 
-interface ModelRow {
-  name: string;
-  description: string | null;
-  license: string | null;
-  size?: string | null;
-  languages?: string[];
-  recommended?: boolean;
-  speed?: number | null;
-  accuracy?: number | null;
-  formats: string[];
-  installed: boolean;
-  runnable: boolean;
-}
-
-interface ModelsResponse {
-  active: string;
-  /** Whether the active model's weights are actually loaded in the engine.
-   *  On a fresh install the active *name* resolves but nothing is loaded. */
-  loaded: boolean;
-  models: ModelRow[];
-}
-
-interface DownloadStatus {
-  name: string;
-  status: "idle" | "downloading" | "done" | "error" | "cancelled";
-  downloaded_bytes?: number;
-  total_bytes?: number | null;
-  error?: string | null;
-  installed?: boolean;
-}
-
-type GetBackendUrl = () => string;
+/** Registry row (`GET /models` element) — supersedes the hand-written `ModelRow`. */
+type ModelEntry = components["schemas"]["ModelEntry"];
+/**
+ * `GET /models/download/{name}` progress body — an untagged `oneOf` (utoipa):
+ * an Installed arm (`installed` flag) or a Progress arm (byte counters +
+ * `error`). Narrowed per field by an `in`-guard on the arm's own key.
+ */
+type DownloadStatusResponse = components["schemas"]["DownloadStatusResponse"];
 
 export interface ModelManagerHooks {
   /** A model was activated (weights loaded server-side). */
@@ -70,12 +48,11 @@ export class ModelManager {
   /** Last-seen /models snapshot — drives the auto-load-after-download flow. */
   private activeName = "";
   private activeLoaded = false;
-  private models: ModelRow[] = [];
+  private models: ModelEntry[] = [];
   private tab: "all" | "recommended" = "all";
 
   constructor(
     private readonly root: HTMLElement,
-    private readonly getBackendUrl: GetBackendUrl,
     private readonly hooks: ModelManagerHooks = {},
   ) {
     this.root.classList.add("model-manager");
@@ -87,25 +64,18 @@ export class ModelManager {
     this.polling.clear();
   }
 
-  private url(path: string): string {
-    return `${this.getBackendUrl()}${path}`;
-  }
-
   private async refresh(): Promise<void> {
-    let data: ModelsResponse;
     try {
-      const resp = await fetch(this.url("/models"));
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      data = (await resp.json()) as ModelsResponse;
+      const { data, error, response } = await client.GET("/models");
+      if (error || !data) throw new Error(`HTTP ${response.status}`);
+      this.activeName = data.active;
+      this.activeLoaded = data.loaded === true;
+      this.models = data.models;
+      this.renderView();
     } catch (err) {
       this.root.textContent = "";
       this.renderError(t("model.loadError", { error: String(err) }));
-      return;
     }
-    this.activeName = data.active;
-    this.activeLoaded = data.loaded === true;
-    this.models = data.models;
-    this.renderView();
   }
 
   /** Render the tab bar + the filtered rows (re-run on tab switch, no refetch). */
@@ -146,7 +116,7 @@ export class ModelManager {
     this.hooks.onError?.(message);
   }
 
-  private renderRow(m: ModelRow, isActive: boolean): HTMLElement {
+  private renderRow(m: ModelEntry, isActive: boolean): HTMLElement {
     const row = document.createElement("div");
     row.className = "model-row";
     row.dataset.name = m.name;
@@ -198,7 +168,7 @@ export class ModelManager {
     return row;
   }
 
-  private renderAction(m: ModelRow, isActive: boolean): HTMLElement {
+  private renderAction(m: ModelEntry, isActive: boolean): HTMLElement {
     const slot = document.createElement("div");
     slot.className = "model-row-action";
 
@@ -237,13 +207,10 @@ export class ModelManager {
     });
     if (!ok) return;
     try {
-      const resp = await fetch(this.url(`/models/${encodeURIComponent(name)}`), {
-        method: "DELETE",
+      const { error, response } = await client.DELETE("/models/{name}", {
+        params: { path: { name } },
       });
-      if (!resp.ok) {
-        const body = (await resp.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(body.detail ?? `HTTP ${resp.status}`);
-      }
+      if (error) throw new Error(error.detail ?? `HTTP ${response.status}`);
       await this.refresh();
     } catch (err) {
       this.renderError(t("model.removeFailed", { error: String(err) }));
@@ -294,15 +261,10 @@ export class ModelManager {
     // immediate feedback instead of a seemingly dead button.
     this.markBusy(name, t("model.loading"));
     try {
-      const resp = await fetch(this.url("/models/active"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+      const { error, response } = await client.POST("/models/active", {
+        body: { name },
       });
-      if (!resp.ok) {
-        const body = (await resp.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(body.detail ?? `HTTP ${resp.status}`);
-      }
+      if (error) throw new Error(error.detail ?? `HTTP ${response.status}`);
       this.hooks.onActiveChange?.();
       await this.refresh();
     } catch (err) {
@@ -312,15 +274,10 @@ export class ModelManager {
 
   private async download(name: string): Promise<void> {
     try {
-      const resp = await fetch(this.url("/models/download"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+      const { error, response } = await client.POST("/models/download", {
+        body: { name },
       });
-      if (!resp.ok) {
-        const body = (await resp.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(body.detail ?? `HTTP ${resp.status}`);
-      }
+      if (error) throw new Error(error.detail ?? `HTTP ${response.status}`);
       this.hooks.onDownloadStart?.();
       this.startPolling(name);
     } catch (err) {
@@ -333,8 +290,8 @@ export class ModelManager {
     // and flips the job to "cancelled" — the regular poll picks that up
     // and flips the row back to Download.
     try {
-      await fetch(this.url(`/models/download/${encodeURIComponent(name)}`), {
-        method: "DELETE",
+      await client.DELETE("/models/download/{name}", {
+        params: { path: { name } },
       });
     } catch {
       // transient — the poll keeps reflecting server truth either way
@@ -349,22 +306,33 @@ export class ModelManager {
   }
 
   private async pollOnce(name: string): Promise<void> {
-    let status: DownloadStatus;
+    let status: DownloadStatusResponse | undefined;
     try {
-      const resp = await fetch(this.url(`/models/download/${encodeURIComponent(name)}`));
-      status = (await resp.json()) as DownloadStatus;
+      const res = await client.GET("/models/download/{name}", {
+        params: { path: { name } },
+      });
+      status = res.data;
     } catch {
-      return; // transient; keep polling
+      return; // transient network error; keep polling
     }
+    if (!status) {
+      // Non-OK poll (e.g. 404 no active download) — stop and reconcile from list.
+      this.stopPolling(name);
+      await this.refresh();
+      return;
+    }
+    // Narrow the download-status oneOf per field: `downloaded_bytes`/`total_bytes`
+    // live only on the Progress arm, so an `in`-guard on each key selects it.
     if (status.status === "downloading") {
-      this.markDownloading(name, status.downloaded_bytes ?? null, status.total_bytes ?? null);
+      const bytes = "downloaded_bytes" in status ? status.downloaded_bytes : null;
+      const total = "total_bytes" in status ? (status.total_bytes ?? null) : null;
+      this.markDownloading(name, bytes, total);
       return;
     }
     this.stopPolling(name);
     if (status.status === "error") {
-      this.renderError(
-        t("model.downloadFailedNamed", { name, error: status.error ?? "unknown" }),
-      );
+      const detail = "error" in status ? (status.error ?? "unknown") : "unknown";
+      this.renderError(t("model.downloadFailedNamed", { name, error: detail }));
       return;
     }
     if (status.status === "cancelled") {

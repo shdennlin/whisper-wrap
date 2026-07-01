@@ -69,7 +69,7 @@ function sessionToItem(s: SessionFull): Item {
     project: s.project ?? null,
     category: s.category ?? null,
     createdAt: s.started_at,
-    durationMs: s.duration_ms,
+    durationMs: s.duration_ms ?? null,
     preview: sessionPreview(s.finals),
   };
 }
@@ -99,11 +99,10 @@ export interface ListItemsOpts {
 /** Fetch sessions + meetings and merge them into one newest-first item list.
  *  A failure on either source degrades to the other rather than blanking. */
 export async function listItems(opts: ListItemsOpts = {}): Promise<Item[]> {
-  const backendUrl = opts.backendUrl ?? "";
   const limit = opts.limit ?? 100;
 
   const [sessions, meetings] = await Promise.all([
-    listSessions(backendUrl, { limit })
+    listSessions({ limit })
       .then((r) => r.sessions)
       .catch(() => []),
     listMeetings({ limit })

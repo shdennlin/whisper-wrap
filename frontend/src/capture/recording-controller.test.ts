@@ -13,6 +13,7 @@ import {
   type RecordingControllerDeps,
 } from "./recording-controller";
 import type { RecordingLayer } from "../ui/recording-view";
+import { resetClientFetch, setClientFetch } from "../api/client";
 
 // Each controller registers a `window` pagehide listener; track every one so
 // afterEach can dispose them and keep the global window free of cross-test
@@ -182,27 +183,34 @@ function makeDeps(
   };
 }
 
+// The single `fetch` the generated client calls (design "Preserve the test
+// seam"). Both engine calls in this controller — POST /transcribe and the
+// The batch-upload POST /transcribe routes through the generated client, so we
+// stub its `fetch` seam. (The pagehide PATCH is a transport exemption on native
+// `fetch` — those tests stub `globalThis.fetch` directly.)
+let clientFetchMock: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   h.captureSessions.length = 0;
   h.liveTimeouts.length = 0;
   h.liveSinks.length = 0;
   localStorage.clear();
-  // Mock fetch for uploadForTranscription + the pagehide PATCH.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ text: "hello" }),
-    }),
+  // Real Response so openapi-fetch can read headers + parse JSON.
+  clientFetchMock = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ text: "hello" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
   );
+  setClientFetch(clientFetchMock as unknown as typeof fetch);
 });
 
 afterEach(() => {
   // Dispose every controller so its window pagehide listener is removed and
   // does not leak into the next test.
   while (liveControllers.length) liveControllers.pop()!.dispose();
-  vi.unstubAllGlobals();
+  resetClientFetch();
   vi.clearAllMocks();
 });
 
@@ -301,14 +309,24 @@ describe("createRecordingController", () => {
     ]);
     const rec = makeController(deps);
     await rec.start();
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockClear();
+    // The pagehide PATCH is a TRANSPORT EXEMPTION: it fires synchronously on
+    // native `fetch` (not the client), so unload timing can't drop it. Stub the
+    // global `fetch` and assert on the (url, init) it receives.
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     window.dispatchEvent(new Event("pagehide"));
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    expect(String(url)).toContain("/v1/sessions/sess-1");
-    expect((init as RequestInit).method).toBe("PATCH");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]! as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toContain("/v1/sessions/sess-1");
+    expect(init.method).toBe("PATCH");
+    expect(init.keepalive).toBe(true);
+    const body = JSON.parse(init.body as string);
+    expect(typeof body.ended_at).toBe("number");
+    vi.unstubAllGlobals();
   });
 
   it("removes the pagehide listener on dispose()", async () => {
@@ -319,9 +337,12 @@ describe("createRecordingController", () => {
     const rec = makeController(deps);
     await rec.start();
     rec.dispose();
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockClear();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     window.dispatchEvent(new Event("pagehide"));
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

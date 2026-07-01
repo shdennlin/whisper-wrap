@@ -42,6 +42,7 @@ import { modalConfirm } from "./modal-prompt";
 import { toast } from "./toast";
 import { t, type StringKey } from "../i18n";
 import { WaveformPlayer, type PlayerInput } from "./waveform-player";
+import { client } from "../api/client";
 
 const KINDS: RunKind[] = ["transcribe", "diarize", "ai"];
 
@@ -67,7 +68,7 @@ async function defaultDeleteItem(itemId: string): Promise<void> {
   const items = await listItems();
   const item = items.find((i) => i.id === itemId);
   if (item?.kind === "meeting") await deleteMeeting(itemId);
-  else await deleteSession("", itemId);
+  else await deleteSession(itemId);
 }
 
 export interface AiStatus {
@@ -99,23 +100,27 @@ export interface DetailDeps {
 }
 
 async function defaultLoadActions(): Promise<ActionsResponse> {
-  const r = await fetch("/actions");
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const body = (await r.json()) as {
-    actions?: ActionTemplate[];
-    categories?: Category[];
+  const { data, error, response } = await client.GET("/actions");
+  const status = response.status;
+  if (error || !data) throw new Error(`HTTP ${status}`);
+  // The contract types `/actions` arrays as `unknown[]` (their elements are
+  // `serde_json::Value` in core, deliberately not over-typed). Map to the
+  // frontend Action/Category shapes at this boundary. This is a contract-loose
+  // array mapping, NOT one of the documented dynamic-exception response casts
+  // (those live in `src/api/ai-config.ts`).
+  return {
+    actions: (data.actions ?? []) as ActionTemplate[],
+    categories: (data.categories ?? []) as Category[],
   };
-  return { actions: body.actions ?? [], categories: body.categories ?? [] };
 }
 
 async function defaultLoadAiStatus(): Promise<AiStatus> {
-  const r = await fetch("/status");
-  const d = (await r.json()) as { ai?: AiStatus };
-  return d.ai ?? { configured: false, provider: "", endpoint: "" };
+  const { data } = await client.GET("/status");
+  return data?.ai ?? { configured: false, provider: "", endpoint: "" };
 }
 
 async function defaultLoadAudio(itemId: string): Promise<Blob> {
-  const audio = await getAudio("", itemId);
+  const audio = await getAudio(itemId);
   if (!audio) throw new Error("no audio stored for item");
   return audio.blob;
 }
@@ -232,7 +237,7 @@ export async function renderDetail(
   const deleteItem = deps.deleteItem ?? defaultDeleteItem;
   const loadActions = deps.loadActions ?? defaultLoadActions;
   const loadSession =
-    deps.loadSession ?? ((id: string) => getSession("", id).catch(() => null));
+    deps.loadSession ?? ((id: string) => getSession(id).catch(() => null));
 
   container.replaceChildren();
   container.classList.add("detail-view");

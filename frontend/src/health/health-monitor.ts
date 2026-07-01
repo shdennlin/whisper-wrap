@@ -12,16 +12,21 @@
  * so consumers can disable/enable the record buttons without flicker.
  */
 
+import { client } from "../api/client";
+
 export type HealthState = "checking" | "ok" | "down";
 
 export const DEFAULT_HEALTH_INTERVAL_MS = 30_000;
 
 export interface HealthMonitorOptions {
-  url: string;
+  /**
+   * Retained for construction-call compatibility; the probe path is fixed to
+   * `GET /status` and its origin comes from the client's base-URL middleware
+   * (`backendUrl()`), so this value is no longer read.
+   */
+  url?: string;
   intervalMs?: number;
   onStateChange: (state: HealthState) => void;
-  /** Override fetch (used by tests). Defaults to globalThis.fetch. */
-  fetchImpl?: typeof fetch;
 }
 
 export class HealthMonitor {
@@ -79,11 +84,17 @@ export class HealthMonitor {
     this.inFlight?.abort();
     const controller = new AbortController();
     this.inFlight = controller;
-    const fetchFn = this.opts.fetchImpl ?? fetch;
     try {
-      const res = await fetchFn(this.opts.url, { signal: controller.signal });
+      // Liveness only: route the probe through the generated client so it
+      // shares the one transport/base-URL/auth path. `/status` is typed JSON,
+      // but we read only `response.ok` — the typed body is not consumed. A
+      // non-OK HTTP status surfaces via `response`; a network/abort failure
+      // rejects and is handled below.
+      const { response } = await client.GET("/status", {
+        signal: controller.signal,
+      });
       if (controller.signal.aborted) return;
-      this.setState(res.ok ? "ok" : "down");
+      this.setState(response.ok ? "ok" : "down");
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
       this.setState("down");

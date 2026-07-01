@@ -5,14 +5,34 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { maybeShowFirstRunGate, isModelLoaded } from "./first-run-gate";
 
+/** The `/status` liveness probe now routes through the generated client (which
+ * calls `globalThis.fetch` by default), while the un-migrated ModelManager still
+ * calls `globalThis.fetch` directly — so stubbing `globalThis.fetch` covers
+ * both. openapi-fetch needs a real `Response` (it reads headers + parses JSON),
+ * and receives a `Request` object as its single argument, so extract the URL
+ * from either shape. */
+function reqUrl(input: string | Request): string {
+  return typeof input === "string" ? input : input.url;
+}
+
+/** openapi-fetch calls `fetch` with a single `Request` (method lives on it, not
+ * in an `init` arg), so read the method from the Request when present. */
+function reqMethod(input: string | Request, init?: RequestInit): string {
+  return typeof input === "string" ? (init?.method ?? "GET") : input.method;
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function mockFetch(handler: (url: string) => unknown) {
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: string) =>
-      Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve(handler(String(input))),
-      } as Response),
+    vi.fn((input: string | Request) =>
+      Promise.resolve(jsonResponse(handler(reqUrl(input)))),
     ),
   );
 }
@@ -27,15 +47,15 @@ const gate = () => document.querySelector('[data-testid="first-run-gate"]');
 describe("first-run gate", () => {
   it("isModelLoaded reflects status.model.loaded", async () => {
     mockFetch(() => ({ model: { loaded: true } }));
-    expect(await isModelLoaded("http://x")).toBe(true);
+    expect(await isModelLoaded()).toBe(true);
 
     mockFetch(() => ({ model: { loaded: false } }));
-    expect(await isModelLoaded("http://x")).toBe(false);
+    expect(await isModelLoaded()).toBe(false);
   });
 
   it("does NOT show the gate when a model is already loaded", async () => {
     mockFetch(() => ({ model: { loaded: true } }));
-    const shown = await maybeShowFirstRunGate(() => "http://x");
+    const shown = await maybeShowFirstRunGate();
     expect(shown).toBe(false);
     expect(gate()).toBeNull();
   });
@@ -46,7 +66,7 @@ describe("first-run gate", () => {
         ? { model: { loaded: false } }
         : { active: "", models: [] }, // ModelManager's GET /models
     );
-    const shown = await maybeShowFirstRunGate(() => "http://x");
+    const shown = await maybeShowFirstRunGate();
     expect(shown).toBe(true);
     expect(gate()).not.toBeNull();
     expect(gate()!.querySelector(".model-manager")).not.toBeNull();
@@ -59,18 +79,18 @@ describe("first-run gate", () => {
     let loaded = false;
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: string, init?: RequestInit) => {
-        const url = String(input);
+      vi.fn((input: string | Request, init?: RequestInit) => {
+        const url = reqUrl(input);
         let body: unknown;
         if (url.endsWith("/status")) {
           body = { model: { loaded } };
-        } else if (url.endsWith("/models/download") && init?.method === "POST") {
+        } else if (url.endsWith("/models/download") && reqMethod(input, init) === "POST") {
           downloading = true;
           body = { name: "breeze", status: "downloading" };
         } else if (url.includes("/models/download/")) {
           installed = downloading;
           body = { name: "breeze", status: downloading ? "done" : "idle" };
-        } else if (url.endsWith("/models/active") && init?.method === "POST") {
+        } else if (url.endsWith("/models/active") && reqMethod(input, init) === "POST") {
           loaded = true;
           body = { active: "breeze", swapped: true };
         } else {
@@ -89,12 +109,12 @@ describe("first-run gate", () => {
             ],
           };
         }
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(body) } as Response);
+        return Promise.resolve(jsonResponse(body));
       }),
     );
 
     const onReady = vi.fn();
-    await maybeShowFirstRunGate(() => "http://x", onReady);
+    await maybeShowFirstRunGate(onReady);
     await vi.advanceTimersByTimeAsync(0);
 
     const bgBtn = gate()!.querySelector<HTMLButtonElement>(".first-run-bg");
@@ -111,7 +131,10 @@ describe("first-run gate", () => {
     expect(gate()).toBeNull();
 
     // Poll tick: done → auto-activate → ready lands as a toast, no reload.
+    // The poll + auto-activate now run through the openapi-fetch client, which
+    // adds several await hops per request; drain them before asserting.
     await vi.advanceTimersByTimeAsync(2000);
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0);
     expect(onReady).not.toHaveBeenCalled();
     expect(document.querySelector(".toast")).not.toBeNull();
   });
@@ -121,12 +144,12 @@ describe("first-run gate", () => {
     let downloading = false;
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: string, init?: RequestInit) => {
-        const url = String(input);
+      vi.fn((input: string | Request, init?: RequestInit) => {
+        const url = reqUrl(input);
         let body: unknown;
         if (url.endsWith("/status")) {
           body = { model: { loaded: false } };
-        } else if (url.endsWith("/models/download") && init?.method === "POST") {
+        } else if (url.endsWith("/models/download") && reqMethod(input, init) === "POST") {
           downloading = true;
           body = { name: "breeze", status: "downloading" };
         } else if (url.includes("/models/download/")) {
@@ -149,12 +172,12 @@ describe("first-run gate", () => {
             ],
           };
         }
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(body) } as Response);
+        return Promise.resolve(jsonResponse(body));
       }),
     );
 
     const onReady = vi.fn();
-    await maybeShowFirstRunGate(() => "http://x", onReady);
+    await maybeShowFirstRunGate(onReady);
     await vi.advanceTimersByTimeAsync(0);
 
     gate()!.querySelector<HTMLButtonElement>(".model-row-action button")!.click();
@@ -163,7 +186,9 @@ describe("first-run gate", () => {
     expect(gate()).toBeNull();
 
     // Poll tick → error while backgrounded → action toast, not silence.
+    // Drain the openapi-fetch client's await hops before asserting the toast.
     await vi.advanceTimersByTimeAsync(2000);
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0);
     const toastNode = document.querySelector(".toast");
     expect(toastNode?.textContent).toContain("network died");
 
@@ -176,16 +201,13 @@ describe("first-run gate", () => {
   it("treats an unreachable backend as needs-setup (shows the gate)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: string) =>
-        String(input).endsWith("/status")
+      vi.fn((input: string | Request) =>
+        reqUrl(input).endsWith("/status")
           ? Promise.reject(new Error("offline"))
-          : Promise.resolve({
-              ok: true,
-              json: () => Promise.resolve({ active: "", models: [] }),
-            } as Response),
+          : Promise.resolve(jsonResponse({ active: "", models: [] })),
       ),
     );
-    const shown = await maybeShowFirstRunGate(() => "http://x");
+    const shown = await maybeShowFirstRunGate();
     expect(shown).toBe(true);
     expect(gate()).not.toBeNull();
   });

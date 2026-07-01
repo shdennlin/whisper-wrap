@@ -18,5 +18,9 @@
     "allowImportingTsExtensions": false
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "vite.config.ts"],
-  "exclude": ["node_modules", "../app/static/app"]
+  "exclude": [
+    "node_modules",
+    "../app/static/app",
+    "src/api/generated.drift.test.ts"
+  ]
 }

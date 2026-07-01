@@ -11,19 +11,17 @@
 import { ModelManager } from "./model-manager";
 import { toast, toastWithAction } from "./toast";
 import { t } from "../i18n";
-
-interface StatusResponse {
-  model?: { loaded?: boolean };
-}
+import { client } from "../api/client";
 
 /** True only when the engine reports a loaded model. Any error → false (treat
- *  as "needs setup" rather than crashing the boot path). */
-export async function isModelLoaded(base: string): Promise<boolean> {
+ *  as "needs setup" rather than crashing the boot path). The base URL is
+ *  resolved by the client's request middleware (the canonical `backendUrl()`),
+ *  so this no longer threads a base — matching the pre-codegen closure. */
+export async function isModelLoaded(): Promise<boolean> {
   try {
-    const resp = await fetch(`${base}/status`);
-    if (!resp.ok) return false;
-    const body = (await resp.json()) as StatusResponse;
-    return body.model?.loaded === true;
+    const { data, response } = await client.GET("/status");
+    if (!response.ok || !data) return false;
+    return data.model?.loaded === true;
   } catch {
     return false;
   }
@@ -31,18 +29,14 @@ export async function isModelLoaded(base: string): Promise<boolean> {
 
 /** Show the gate iff no model is loaded. Returns true when the gate was shown. */
 export async function maybeShowFirstRunGate(
-  getBackendUrl: () => string,
   onReady: () => void = () => window.location.reload(),
 ): Promise<boolean> {
-  if (await isModelLoaded(getBackendUrl())) return false;
-  showFirstRunGate(getBackendUrl, onReady);
+  if (await isModelLoaded()) return false;
+  showFirstRunGate(onReady);
   return true;
 }
 
-export function showFirstRunGate(
-  getBackendUrl: () => string,
-  onReady: () => void,
-): HTMLElement {
+export function showFirstRunGate(onReady: () => void): HTMLElement {
   const overlay = document.createElement("div");
   overlay.className = "first-run-overlay";
   overlay.dataset.testid = "first-run-gate";
@@ -86,7 +80,7 @@ export function showFirstRunGate(
     // loaded by now — confirm, then hand over to the app. Foreground: re-init
     // cleanly via reload. Background: the user is already mid-session in the
     // main page, so a toast beats yanking the page out from under them.
-    if (await isModelLoaded(getBackendUrl())) {
+    if (await isModelLoaded()) {
       manager?.dispose();
       overlay.remove();
       if (background) {
@@ -97,14 +91,14 @@ export function showFirstRunGate(
     }
   };
 
-  manager = new ModelManager(managerHost, getBackendUrl, {
+  manager = new ModelManager(managerHost, {
     onActiveChange: () => {
       void onActiveChange();
     },
     onDownloadStart: () => {
       bgBtn.hidden = false;
     },
-    onError: (message) => {
+    onError: (message: string) => {
       // While backgrounded the gate (and its inline error) is invisible —
       // re-surface the failure as a toast whose action brings the gate back.
       if (!background) return;

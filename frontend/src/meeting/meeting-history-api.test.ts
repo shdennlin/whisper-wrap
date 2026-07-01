@@ -1,8 +1,9 @@
 /**
  * @vitest-environment happy-dom
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resetClientFetch, setClientFetch } from "../api/client";
 import {
   createMeeting,
   deleteMeeting,
@@ -19,120 +20,99 @@ const SAMPLE_RESULT: MeetingResult = {
   segments: [{ speaker: "SPEAKER_00", start: 0, end: 5, text: "hi" }],
 };
 
-let originalFetch: typeof globalThis.fetch;
+// The migrated module routes through the shared openapi-fetch client; we stub
+// the client's ONE `fetch` seam and assert on the emitted Request (method, URL,
+// body) — the design's "Preserve the test seam" replacement for the old
+// per-call global `fetch` stub.
+let requests: Request[];
+
+function stub(body: unknown, status = 200) {
+  setClientFetch(async (input) => {
+    requests.push(input as Request);
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  });
+}
 
 beforeEach(() => {
-  originalFetch = globalThis.fetch;
+  requests = [];
 });
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
+afterEach(() => resetClientFetch());
 
-function mockResponse(body: unknown, init?: { ok?: boolean; status?: number }) {
-  return {
-    ok: init?.ok ?? true,
-    status: init?.status ?? 200,
-    text: async () => JSON.stringify(body),
-    json: async () => body,
-  } as unknown as Response;
-}
+const sampleRow = (over: Record<string, unknown> = {}) => ({
+  id: "x",
+  created_at: 100,
+  filename: "f.m4a",
+  duration_seconds: 5,
+  language: "en",
+  speakers_count: 1,
+  result: SAMPLE_RESULT,
+  speaker_names: {},
+  starred: false,
+  status: "done",
+  ...over,
+});
 
 describe("meeting-history-api", () => {
   it("listMeetings serialises limit + before_ms into query params", async () => {
-    const fn = vi.fn(async (..._args: [string, RequestInit?]) =>
-      mockResponse({ meetings: [], next_before_ms: null }),
-    );
-    globalThis.fetch = fn as unknown as typeof fetch;
+    stub({ meetings: [], next_before_ms: null });
     await listMeetings({ limit: 50, before_ms: 1234 });
-    expect(fn.mock.calls[0][0]).toContain("limit=50");
-    expect(fn.mock.calls[0][0]).toContain("before_ms=1234");
+    const url = new URL(requests[0].url);
+    expect(url.pathname).toBe("/v1/meetings");
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(url.searchParams.get("before_ms")).toBe("1234");
   });
 
   it("listMeetings omits the query string when no opts supplied", async () => {
-    const fn = vi.fn(async (..._args: [string, RequestInit?]) =>
-      mockResponse({ meetings: [], next_before_ms: null }),
-    );
-    globalThis.fetch = fn as unknown as typeof fetch;
+    stub({ meetings: [], next_before_ms: null });
     await listMeetings();
-    expect(fn.mock.calls[0][0]).toBe("/v1/meetings");
+    const url = new URL(requests[0].url);
+    expect(url.pathname).toBe("/v1/meetings");
+    expect(url.search).toBe("");
   });
 
   it("getMeeting returns null on 404 (vs throwing)", async () => {
-    const fn = vi.fn(async (..._args: [string, RequestInit?]) =>
-      mockResponse({ detail: "meeting not found" }, { ok: false, status: 404 }),
-    );
-    globalThis.fetch = fn as unknown as typeof fetch;
+    stub({ detail: "meeting not found" }, 404);
     const out = await getMeeting("missing");
     expect(out).toBeNull();
+    expect(new URL(requests[0].url).pathname).toBe("/v1/meetings/missing");
   });
 
   it("getMeeting throws on non-404 errors", async () => {
-    const fn = vi.fn(async (..._args: [string, RequestInit?]) =>
-      mockResponse({ detail: "boom" }, { ok: false, status: 500 }),
-    );
-    globalThis.fetch = fn as unknown as typeof fetch;
+    stub({ detail: "boom" }, 500);
     await expect(getMeeting("any")).rejects.toThrow(/HTTP 500/);
   });
 
   it("createMeeting POSTs JSON body and returns the row", async () => {
-    // Typed signature on vi.fn so `fn.mock.calls[0][1]` infers as
-    // RequestInit | undefined instead of an empty tuple.
-    const fn = vi.fn(
-      async (..._args: [string, RequestInit?]) =>
-        mockResponse({
-          id: "x",
-          created_at: 100,
-          filename: "f.m4a",
-          duration_seconds: 5,
-          language: "en",
-          speakers_count: 1,
-          result: SAMPLE_RESULT,
-          speaker_names: {},
-          status: "done",
-        }),
-    );
-    globalThis.fetch = fn as unknown as typeof fetch;
+    stub(sampleRow());
     const out = await createMeeting({
       id: "x",
       filename: "f.m4a",
       result: SAMPLE_RESULT,
     });
     expect(out.id).toBe("x");
-    expect(fn.mock.calls[0][0]).toBe("/v1/meetings");
-    const init = fn.mock.calls[0][1]!;
-    expect(init.method).toBe("POST");
-    expect(init.body as string).toContain('"id":"x"');
+    const req = requests[0];
+    expect(new URL(req.url).pathname).toBe("/v1/meetings");
+    expect(req.method).toBe("POST");
+    expect(await req.clone().text()).toContain('"id":"x"');
   });
 
   it("patchMeetingSpeakerNames sends only the speaker_names field", async () => {
-    const fn = vi.fn(
-      async (..._args: [string, RequestInit?]) =>
-        mockResponse({
-          id: "x",
-          created_at: 0,
-          filename: "f",
-          duration_seconds: null,
-          language: null,
-          speakers_count: null,
-          result: SAMPLE_RESULT,
-          speaker_names: { SPEAKER_00: "Alice" },
-          status: "done",
-        }),
-    );
-    globalThis.fetch = fn as unknown as typeof fetch;
+    stub(sampleRow({ speaker_names: { SPEAKER_00: "Alice" } }));
     await patchMeetingSpeakerNames("x", { SPEAKER_00: "Alice" });
-    const init = fn.mock.calls[0][1]!;
-    expect(init.method).toBe("PATCH");
-    expect(init.body).toBe(
+    const req = requests[0];
+    expect(req.method).toBe("PATCH");
+    expect(new URL(req.url).pathname).toBe("/v1/meetings/x");
+    expect(await req.clone().text()).toBe(
       JSON.stringify({ speaker_names: { SPEAKER_00: "Alice" } }),
     );
   });
 
   it("deleteMeeting tolerates 404 (idempotent contract)", async () => {
-    const fn = vi.fn(async () =>
-      mockResponse({}, { ok: false, status: 404 }),
-    );
-    globalThis.fetch = fn as typeof fetch;
+    stub({}, 404);
     await expect(deleteMeeting("missing")).resolves.toBeUndefined();
+    expect(requests[0].method).toBe("DELETE");
   });
 });

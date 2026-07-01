@@ -27,7 +27,7 @@ export interface LibraryDeps {
 }
 
 async function defaultToggleStar(item: Item, starred: boolean): Promise<void> {
-  if (item.kind === "session") await patchSession("", item.id, { starred });
+  if (item.kind === "session") await patchSession(item.id, { starred });
   else await patchMeetingMeta(item.id, { starred });
 }
 

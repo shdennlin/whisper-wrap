@@ -1,9 +1,20 @@
 /**
  * @vitest-environment happy-dom
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetClientFetch, setClientFetch } from "../api/client";
 import { createMeetingPage } from "./meeting-page";
 import type { MeetingResult } from "./types";
+
+// The migrated page routes its /status, /actions, /ask, and meeting-job calls
+// through the shared openapi-fetch client; network-asserting tests stub the
+// client's ONE `fetch` seam and route by the emitted Request.
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 const SAMPLE_RESULT: MeetingResult = {
   language: "en",
@@ -24,6 +35,8 @@ beforeEach(() => {
   // "detail" via the toggle or call switchToDetail() before asserting.
   window.localStorage.removeItem("whisper-wrap.meeting-view-mode.v1");
 });
+
+afterEach(() => resetClientFetch());
 
 function mountAvailable() {
   const page = createMeetingPage({
@@ -342,83 +355,79 @@ describe("createMeetingPage — quality tiers", () => {
     expect(qualityField().hidden).toBe(true);
   });
 
+  // Route the page's client calls: capture meeting-submit POSTs, answer the
+  // mount-time /actions + /v1/meetings prime, and satisfy the poll + audio
+  // upload so the flow completes.
+  function stubSubmit(submitReqs: Request[]): void {
+    setClientFetch(async (input) => {
+      const req = input as Request;
+      const path = new URL(req.url).pathname;
+      if (path === "/actions") return json({ actions: [], categories: [] });
+      if (path.startsWith("/v1/meetings")) {
+        if (req.method === "POST")
+          return json({
+            audio_path: "a",
+            audio_mime_type: "audio/wav",
+            audio_size_bytes: 2,
+          });
+        return json({ meetings: [], next_before_ms: null });
+      }
+      if (req.method === "POST" && path === "/transcribe/meeting") {
+        submitReqs.push(req);
+        return json({ job_id: "j1", status_url: "/transcribe/meeting/j1" }, 202);
+      }
+      if (path.startsWith("/transcribe/meeting/"))
+        return json({
+          status: "done",
+          progress: 1,
+          stage: "complete",
+          result: SAMPLE_RESULT,
+        });
+      return json({});
+    });
+  }
+
   it("shows the quality select when balanced is installed and submits quality=balanced", async () => {
-    const urls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: string, init?: RequestInit) => {
-        const url = String(input);
-        if (init?.method === "POST") urls.push(url);
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve(
-              url.startsWith("/transcribe/meeting")
-                ? { job_id: "j1", status_url: "/transcribe/meeting/j1" }
-                : { meetings: [] },
-            ),
-          text: () => Promise.resolve(""),
-        } as Response);
-      }),
+    const submitReqs: Request[] = [];
+    stubSubmit(submitReqs);
+    mountWithTiers(["fast", "balanced"]);
+    await flush();
+    expect(qualityField().hidden).toBe(false);
+
+    const select = qualityField().querySelector<HTMLSelectElement>("select")!;
+    expect(select.value).toBe("fast"); // default
+    select.value = "balanced";
+
+    document
+      .querySelector<HTMLButtonElement>(".meeting-confirm .btn-primary")!
+      .click();
+    await flush();
+    await flush();
+
+    expect(submitReqs).toHaveLength(1);
+    expect(new URL(submitReqs[0].url).searchParams.get("quality")).toBe(
+      "balanced",
     );
-    try {
-      mountWithTiers(["fast", "balanced"]);
-      await flush();
-      expect(qualityField().hidden).toBe(false);
-
-      const select = qualityField().querySelector<HTMLSelectElement>("select")!;
-      expect(select.value).toBe("fast"); // default
-      select.value = "balanced";
-
-      document
-        .querySelector<HTMLButtonElement>(".meeting-confirm .btn-primary")!
-        .click();
-      await flush();
-      await flush();
-
-      const submit = urls.find((u) => u.startsWith("/transcribe/meeting"));
-      expect(submit).toContain("quality=balanced");
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
   it("submits quality=balanced when balanced is the ONLY installed tier (no manual pick)", async () => {
-    const urls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((input: string, init?: RequestInit) => {
-        const url = String(input);
-        if (init?.method === "POST") urls.push(url);
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve(
-              url.startsWith("/transcribe/meeting")
-                ? { job_id: "j1", status_url: "/transcribe/meeting/j1" }
-                : { meetings: [] },
-            ),
-          text: () => Promise.resolve(""),
-        } as Response);
-      }),
+    const submitReqs: Request[] = [];
+    stubSubmit(submitReqs);
+    // Only the balanced embedding is installed (fast absent).
+    mountWithTiers(["balanced"]);
+    await flush();
+
+    // Upload as-is — the user never touches a quality dropdown.
+    document
+      .querySelector<HTMLButtonElement>(".meeting-confirm .btn-primary")!
+      .click();
+    await flush();
+    await flush();
+
+    expect(submitReqs).toHaveLength(1);
+    expect(new URL(submitReqs[0].url).searchParams.get("quality")).toBe(
+      "balanced",
     );
-    try {
-      // Only the balanced embedding is installed (fast absent).
-      mountWithTiers(["balanced"]);
-      await flush();
-
-      // Upload as-is — the user never touches a quality dropdown.
-      document
-        .querySelector<HTMLButtonElement>(".meeting-confirm .btn-primary")!
-        .click();
-      await flush();
-      await flush();
-
-      const submit = urls.find((u) => u.startsWith("/transcribe/meeting"));
-      expect(submit).toContain("quality=balanced");
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 });
 
@@ -542,18 +551,36 @@ describe("createMeetingPage — fast mode", () => {
       value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
       configurable: true,
     });
-    const fetchFn = vi.fn(
-      async (..._args: unknown[]) =>
-        ({
-          ok: true,
-          json: async () => ({
-            job_id: "fast-1",
-            status_url: "/transcribe/meeting/fast-1",
-          }),
-        }) as unknown as Response,
-    );
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = fetchFn as unknown as typeof fetch;
+    const submitReqs: Request[] = [];
+    setClientFetch(async (input) => {
+      const req = input as Request;
+      const path = new URL(req.url).pathname;
+      if (path === "/actions") return json({ actions: [], categories: [] });
+      if (path.startsWith("/v1/meetings")) {
+        if (req.method === "POST")
+          return json({
+            audio_path: "a",
+            audio_mime_type: "audio/wav",
+            audio_size_bytes: 2,
+          });
+        return json({ meetings: [], next_before_ms: null });
+      }
+      if (req.method === "POST" && path === "/transcribe/meeting") {
+        submitReqs.push(req);
+        return json(
+          { job_id: "fast-1", status_url: "/transcribe/meeting/fast-1" },
+          202,
+        );
+      }
+      if (path.startsWith("/transcribe/meeting/"))
+        return json({
+          status: "done",
+          progress: 1,
+          stage: "complete",
+          result: SAMPLE_RESULT,
+        });
+      return json({});
+    });
     try {
       mountWithFile();
       // Default-on for Mac; just click Start.
@@ -563,17 +590,11 @@ describe("createMeetingPage — fast mode", () => {
       startBtn.click();
       // Drain one tick so the fetch resolves.
       await new Promise((r) => setTimeout(r, 5));
-      expect(fetchFn).toHaveBeenCalled();
-      // The page now mounts an ActionsBar on construction, which fires
-      // a `GET /actions` BEFORE the user uploads. Pick the meeting
-      // submit call by URL prefix instead of assuming it's call #0.
-      const submitCall = fetchFn.mock.calls.find((c) =>
-        typeof c[0] === "string" && c[0].startsWith("/transcribe/meeting"),
-      );
-      expect(submitCall).toBeDefined();
-      expect(submitCall![0] as string).toContain("fast=true");
+      // The page mounts an ActionsBar (GET /actions) + primes history (GET
+      // /v1/meetings) on construction; the submit is captured separately.
+      expect(submitReqs).toHaveLength(1);
+      expect(new URL(submitReqs[0].url).searchParams.get("fast")).toBe("true");
     } finally {
-      globalThis.fetch = originalFetch;
       Object.defineProperty(navigator, "userAgent", {
         value: origUA,
         configurable: true,
@@ -584,58 +605,48 @@ describe("createMeetingPage — fast mode", () => {
 
 describe("createMeetingPage — upload flow", () => {
   it("polls until done and renders the final result", async () => {
-    const responses = [
-      {
-        ok: true,
-        json: async () => ({
-          job_id: "abc",
-          status_url: "/transcribe/meeting/abc",
-        }),
-      },
-      {
-        ok: true,
-        json: async () => ({
-          status: "running",
-          progress: 0.4,
-          stage: "align",
-          result: null,
-        }),
-      },
-      {
-        ok: true,
-        json: async () => ({
-          status: "done",
-          progress: 1.0,
-          stage: "complete",
-          result: SAMPLE_RESULT,
-        }),
-      },
-    ];
-    const fetchFn = vi.fn(async (...args: unknown[]) => {
-      // Route by URL so out-of-band calls fired at page mount don't
-      // eat one of the meeting-flow responses:
-      //   - /actions      → ActionsBar.load() on mount
-      //   - /v1/meetings  → prime() pulls history sidebar
-      const url = args[0] as string;
-      if (url === "/actions") {
-        return {
-          ok: true,
-          json: async () => ({ actions: [], categories: [] }),
-        } as unknown as Response;
+    // Route by the emitted Request so out-of-band calls fired at page mount
+    // don't eat a meeting-flow response:
+    //   - /actions      → ActionsBar.load() on mount
+    //   - /v1/meetings  → prime() pulls history sidebar (+ audio-upload POST)
+    const meetingReqs: Request[] = [];
+    let pollCount = 0;
+    setClientFetch(async (input) => {
+      const req = input as Request;
+      const path = new URL(req.url).pathname;
+      if (path === "/actions") return json({ actions: [], categories: [] });
+      if (path.startsWith("/v1/meetings")) {
+        if (req.method === "POST")
+          return json({
+            audio_path: "a",
+            audio_mime_type: "audio/wav",
+            audio_size_bytes: 2,
+          });
+        return json({ meetings: [], next_before_ms: null });
       }
-      if (url.startsWith("/v1/meetings")) {
-        return {
-          ok: true,
-          json: async () => ({ meetings: [], next_before_ms: null }),
-        } as unknown as Response;
+      if (req.method === "POST" && path === "/transcribe/meeting") {
+        meetingReqs.push(req);
+        return json(
+          { job_id: "abc", status_url: "/transcribe/meeting/abc" },
+          202,
+        );
       }
-      return responses.shift() as unknown as Response;
+      if (req.method === "GET" && path.startsWith("/transcribe/meeting/")) {
+        meetingReqs.push(req);
+        pollCount += 1;
+        return json(
+          pollCount === 1
+            ? { status: "running", progress: 0.4, stage: "align", result: null }
+            : {
+                status: "done",
+                progress: 1.0,
+                stage: "complete",
+                result: SAMPLE_RESULT,
+              },
+        );
+      }
+      return json({});
     });
-    // submitMeeting / pollUntilDone use the global fetch directly; for an
-    // end-to-end page test we stub it here. The page's `fetchFn` opt is only
-    // used by `fetchStatus`'s default impl, which we override below.
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = fetchFn as unknown as typeof fetch;
 
     const page = createMeetingPage({
       fetchStatus: async () => ({ available: true }),
@@ -670,27 +681,19 @@ describe("createMeetingPage — upload flow", () => {
       if (document.querySelectorAll(".chat-turn").length > 0) break;
     }
 
-    try {
-      // SAMPLE_RESULT has SPEAKER_00 / SPEAKER_01 / SPEAKER_00 — chat
-      // mode collapses consecutive same-speaker segments into one turn,
-      // but here every consecutive pair has a speaker change, so 3
-      // turns survive unchanged.
-      expect(document.querySelectorAll(".chat-turn")).toHaveLength(3);
-      // The meeting flow itself emits exactly 3 calls: submit +
-      // 2 status polls. There's an additional /actions call from the
-      // AI Enhance mount, so we filter by URL prefix instead of
-      // asserting exact total call count.
-      const meetingCalls = fetchFn.mock.calls.filter((c) =>
-        typeof c[0] === "string" && (c[0] as string).startsWith("/transcribe/meeting"),
-      );
-      expect(meetingCalls).toHaveLength(3);
-      // Submit URL first, then two polls of the status URL.
-      expect(
-        (meetingCalls[0][0] as string).startsWith("/transcribe/meeting"),
-      ).toBe(true);
-      expect(meetingCalls[1][0]).toBe("/transcribe/meeting/abc");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    // SAMPLE_RESULT has SPEAKER_00 / SPEAKER_01 / SPEAKER_00 — chat
+    // mode collapses consecutive same-speaker segments into one turn,
+    // but here every consecutive pair has a speaker change, so 3
+    // turns survive unchanged.
+    expect(document.querySelectorAll(".chat-turn")).toHaveLength(3);
+    // The meeting flow itself emits exactly 3 calls: submit + 2 status polls.
+    // The /actions + /v1/meetings mount calls are routed separately, so
+    // meetingReqs holds only the meeting-job requests.
+    expect(meetingReqs).toHaveLength(3);
+    // Submit path first, then two polls of the status URL.
+    expect(new URL(meetingReqs[0].url).pathname).toBe("/transcribe/meeting");
+    expect(new URL(meetingReqs[1].url).pathname).toBe(
+      "/transcribe/meeting/abc",
+    );
   });
 });

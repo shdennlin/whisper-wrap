@@ -7,81 +7,71 @@
  * the stored key"; the caller is responsible for sending `""` rather than the
  * masked hint when the user leaves the key field blank.
  *
- * Every method is `fetch`-injectable so vitest can stub the network without a
- * real server.
+ * Transport + the swappable test `fetch` seam live in the shared generated
+ * client (`./client`); this module composes calls onto it. It no longer takes
+ * a per-call `fetchImpl` — tests stub the client's ONE `fetch` (`setClientFetch`)
+ * and assert on the emitted `Request`.
  */
 
+import { client } from "./client";
+import type { components } from "./generated/openapi";
+
+/** Provider ids the UI offers (the wire `provider` is a plain string). */
 export type AiProvider = "gemini" | "openai-compatible";
 
-/** Masked config returned by `GET` / `PUT` — never carries the raw key. */
-export interface AiConfigView {
-  provider: AiProvider;
-  baseUrl: string;
-  model: string;
-  keySet: boolean;
-  keyHint: string;
-  systemPromptSet: boolean;
-}
+// The old hand-written `AiConfigView` / `AiConfigUpdate` / `AiTestResult`
+// interfaces are deleted; these names now derive from the generated contract
+// types so field names/types cannot drift from the engine's schema. They are
+// re-exported under the same names so existing consumers keep resolving them
+// from this module.
+export type AiConfigView = components["schemas"]["AiConfigView"];
+export type AiTestResult = components["schemas"]["AiTestResult"];
+// The engine accepts a partial update (every field optional on the wire), but
+// the AI-provider form always submits provider/baseUrl/model/apiKey together —
+// so we keep those required on the frontend's update type (matching the deleted
+// hand-written interface) while sourcing the field types from the contract.
+export type AiConfigUpdate = components["schemas"]["AiConfigUpdate"] &
+  Required<
+    Pick<components["schemas"]["AiConfigUpdate"], "baseUrl" | "model" | "apiKey">
+  >;
 
-/** Body sent to `PUT /config/ai`. Empty `apiKey` keeps the stored key. */
-export interface AiConfigUpdate {
-  provider: AiProvider;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  systemPrompt?: string;
-}
-
-/** Candidate config used for model discovery / connection test (no persist). */
-export interface AiConfigProbe {
-  provider: AiProvider;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-}
-
+/**
+ * Result of the AI-provider model passthrough (`GET /config/ai/models`).
+ *
+ * The ONE hand-kept response shape in this module: `engine-response-typing`
+ * documents the model passthrough as a dynamic exception, so the generated
+ * contract leaves its 200 body open (`content?: never`). The call site casts
+ * the open response to this shape — see `listAiModels`.
+ */
 export interface AiModelsResult {
   models: string[];
   error: string | null;
 }
 
-export interface AiTestResult {
-  ok: boolean;
-  error: string | null;
+/** Candidate config used for model discovery / connection test (no persist). */
+interface AiConfigProbe {
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
 }
-
-/** A `fetch`-compatible function; defaults to the global `fetch`. */
-export type FetchLike = typeof fetch;
-
-function resolveFetch(f?: FetchLike): FetchLike {
-  if (f) return f;
-  if (typeof fetch === "function") return fetch;
-  throw new Error("no fetch available");
-}
-
-const JSON_HEADERS = { "content-type": "application/json" } as const;
 
 /** GET the resolved config with the key masked. */
-export async function getAiConfig(fetchImpl?: FetchLike): Promise<AiConfigView> {
-  const f = resolveFetch(fetchImpl);
-  const r = await f("/config/ai");
-  if (!r.ok) throw new Error(`get ai config failed: ${r.status}`);
-  return (await r.json()) as AiConfigView;
+export async function getAiConfig(): Promise<AiConfigView> {
+  const { data, response } = await client.GET("/config/ai");
+  if (!response.ok || !data) {
+    throw new Error(`get ai config failed: ${response.status}`);
+  }
+  return data;
 }
 
 /** Save the config + swap the live client; returns the new masked view. */
-export async function putAiConfig(
-  update: AiConfigUpdate,
-  fetchImpl?: FetchLike,
-): Promise<AiConfigView> {
-  const f = resolveFetch(fetchImpl);
-  const r = await f("/config/ai", {
-    method: "PUT",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(update),
-  });
-  if (!r.ok) throw new Error(`save ai config failed: ${r.status}`);
-  return (await r.json()) as AiConfigView;
+export async function putAiConfig(update: AiConfigUpdate): Promise<AiConfigView> {
+  const { data, response } = await client.PUT("/config/ai", { body: update });
+  if (!response.ok || !data) {
+    throw new Error(`save ai config failed: ${response.status}`);
+  }
+  return data;
 }
 
 /**
@@ -89,32 +79,39 @@ export async function putAiConfig(
  * as `{ models: [], error }` (a 200, never a thrown error) so the UI can keep
  * offering custom free-text entry.
  */
-export async function listAiModels(
-  probe: AiConfigProbe,
-  fetchImpl?: FetchLike,
-): Promise<AiModelsResult> {
-  const f = resolveFetch(fetchImpl);
-  const params = new URLSearchParams({
-    provider: probe.provider,
-    baseUrl: probe.baseUrl,
-    apiKey: probe.apiKey,
+export async function listAiModels(probe: AiConfigProbe): Promise<AiModelsResult> {
+  const { data, response } = await client.GET("/config/ai/models", {
+    params: {
+      query: {
+        provider: probe.provider,
+        baseUrl: probe.baseUrl,
+        apiKey: probe.apiKey,
+      },
+    },
   });
-  const r = await f(`/config/ai/models?${params.toString()}`);
-  if (!r.ok) throw new Error(`list ai models failed: ${r.status}`);
-  return (await r.json()) as AiModelsResult;
+  if (!response.ok) {
+    throw new Error(`list ai models failed: ${response.status}`);
+  }
+  // DYNAMIC EXCEPTION (design "Cast only the documented dynamic exceptions"):
+  // `GET /config/ai/models` is the AI-provider passthrough — the generated
+  // contract leaves its 200 body open (`content?: never`), so `data` is untyped
+  // here. This is the one local response assertion allowed in this module: cast
+  // the open response to the hand-kept models-result shape.
+  return data as unknown as AiModelsResult;
 }
 
 /** Validate a candidate config with one minimal request (does not persist). */
-export async function testAiConfig(
-  probe: AiConfigProbe,
-  fetchImpl?: FetchLike,
-): Promise<AiTestResult> {
-  const f = resolveFetch(fetchImpl);
-  const r = await f("/config/ai/test", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(probe),
+export async function testAiConfig(probe: AiConfigProbe): Promise<AiTestResult> {
+  const { data, response } = await client.POST("/config/ai/test", {
+    body: {
+      provider: probe.provider,
+      baseUrl: probe.baseUrl,
+      model: probe.model,
+      apiKey: probe.apiKey,
+    },
   });
-  if (!r.ok) throw new Error(`test ai config failed: ${r.status}`);
-  return (await r.json()) as AiTestResult;
+  if (!response.ok || !data) {
+    throw new Error(`test ai config failed: ${response.status}`);
+  }
+  return data;
 }

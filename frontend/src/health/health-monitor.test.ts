@@ -1,22 +1,29 @@
+/**
+ * HealthMonitor tests.
+ *
+ * The monitor no longer takes a `fetchImpl`; its `GET /status` probe routes
+ * through the shared generated client. Tests stub the client's ONE `fetch`
+ * (`setClientFetch`) instead of injecting a per-instance fetch. `/status`
+ * returns JSON, so stub responses carry a JSON body (the probe reads only
+ * `response.ok`).
+ */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetClientFetch, setClientFetch } from "../api/client";
 import { HealthMonitor, type HealthState } from "./health-monitor";
 
-function makeFetchStub(
-  responses: (Response | Error)[],
-): { fn: typeof fetch; calls: number } {
-  let i = 0;
-  const calls = { n: 0 };
-  const fn = (async () => {
-    calls.n++;
-    const r = responses[i++ % responses.length];
-    if (r instanceof Error) throw r;
-    return r;
-  }) as unknown as typeof fetch;
-  return { fn, calls: 0 } as unknown as { fn: typeof fetch; calls: number };
+/** A JSON Response for the client's injectable `fetch` seam. */
+function jsonResp(status: number, body: unknown = { status: "ok" }): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 async function flushMicrotasks(): Promise<void> {
-  for (let i = 0; i < 6; i++) await Promise.resolve();
+  // A few extra ticks over the pre-migration count: routing through
+  // openapi-fetch adds internal `await`s (request build + body parse).
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 describe("HealthMonitor", () => {
@@ -28,14 +35,14 @@ describe("HealthMonitor", () => {
   });
 
   afterEach(() => {
+    resetClientFetch();
     vi.useRealTimers();
   });
 
   it("fires onStateChange to 'ok' after a successful initial check", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("ok", { status: 200 }));
-    const m = new HealthMonitor({ url: "/status", onStateChange: onState, fetchImpl });
+    const fetchMock = vi.fn(async () => jsonResp(200));
+    setClientFetch(fetchMock as unknown as typeof fetch);
+    const m = new HealthMonitor({ onStateChange: onState });
     m.start();
     await flushMicrotasks();
     expect(onState).toHaveBeenCalledWith("ok");
@@ -44,10 +51,11 @@ describe("HealthMonitor", () => {
   });
 
   it("reports 'down' when the fetch rejects", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockRejectedValue(new TypeError("Failed to fetch"));
-    const m = new HealthMonitor({ url: "/status", onStateChange: onState, fetchImpl });
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    setClientFetch(fetchMock as unknown as typeof fetch);
+    const m = new HealthMonitor({ onStateChange: onState });
     m.start();
     await flushMicrotasks();
     expect(onState).toHaveBeenCalledWith("down");
@@ -55,10 +63,9 @@ describe("HealthMonitor", () => {
   });
 
   it("reports 'down' when the response is a non-2xx status", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("oops", { status: 503 }));
-    const m = new HealthMonitor({ url: "/status", onStateChange: onState, fetchImpl });
+    const fetchMock = vi.fn(async () => jsonResp(503, { detail: "oops" }));
+    setClientFetch(fetchMock as unknown as typeof fetch);
+    const m = new HealthMonitor({ onStateChange: onState });
     m.start();
     await flushMicrotasks();
     expect(onState).toHaveBeenCalledWith("down");
@@ -66,14 +73,11 @@ describe("HealthMonitor", () => {
   });
 
   it("does not fire onStateChange when the state is unchanged across two checks", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("ok", { status: 200 }));
+    const fetchMock = vi.fn(async () => jsonResp(200));
+    setClientFetch(fetchMock as unknown as typeof fetch);
     const m = new HealthMonitor({
-      url: "/status",
       onStateChange: onState,
       intervalMs: 1_000,
-      fetchImpl,
     });
     m.start();
     await flushMicrotasks();
@@ -85,15 +89,14 @@ describe("HealthMonitor", () => {
   });
 
   it("re-checks on the interval timer", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("ok", { status: 200 }))
-      .mockResolvedValueOnce(new Response("nope", { status: 502 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResp(200))
+      .mockResolvedValueOnce(jsonResp(502, { detail: "nope" }));
+    setClientFetch(fetchMock as unknown as typeof fetch);
     const m = new HealthMonitor({
-      url: "/status",
       onStateChange: onState,
       intervalMs: 1_000,
-      fetchImpl,
     });
     m.start();
     await flushMicrotasks();
@@ -104,15 +107,14 @@ describe("HealthMonitor", () => {
   });
 
   it("checkNow() returns the resolved state without waiting for the timer", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("ok", { status: 200 }))
-      .mockResolvedValueOnce(new Response("err", { status: 500 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResp(200))
+      .mockResolvedValueOnce(jsonResp(500, { detail: "err" }));
+    setClientFetch(fetchMock as unknown as typeof fetch);
     const m = new HealthMonitor({
-      url: "/status",
       onStateChange: onState,
       intervalMs: 60_000,
-      fetchImpl,
     });
     m.start();
     await flushMicrotasks();
@@ -123,15 +125,14 @@ describe("HealthMonitor", () => {
   });
 
   it("re-checks when the tab visibility changes to 'visible'", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response("err", { status: 500 }))
-      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResp(500, { detail: "err" }))
+      .mockResolvedValueOnce(jsonResp(200));
+    setClientFetch(fetchMock as unknown as typeof fetch);
     const m = new HealthMonitor({
-      url: "/status",
       onStateChange: onState,
       intervalMs: 60_000,
-      fetchImpl,
     });
     m.start();
     await flushMicrotasks();
@@ -148,14 +149,11 @@ describe("HealthMonitor", () => {
   });
 
   it("stop() clears the interval and removes the visibility listener", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("ok", { status: 200 }));
+    const fetchMock = vi.fn(async () => jsonResp(200));
+    setClientFetch(fetchMock as unknown as typeof fetch);
     const m = new HealthMonitor({
-      url: "/status",
       onStateChange: onState,
       intervalMs: 1_000,
-      fetchImpl,
     });
     m.start();
     await flushMicrotasks();
@@ -164,10 +162,6 @@ describe("HealthMonitor", () => {
     vi.advanceTimersByTime(5_000);
     await flushMicrotasks();
     expect(onState).not.toHaveBeenCalled();
-    expect(fetchImpl).toHaveBeenCalledTimes(1); // only the initial check
+    expect(fetchMock).toHaveBeenCalledTimes(1); // only the initial check
   });
 });
-
-// Suppress unused warning for makeFetchStub which would be useful if we want
-// shared response sequences across tests.
-void makeFetchStub;

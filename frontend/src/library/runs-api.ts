@@ -2,34 +2,55 @@
  * Frontend runs client (fe-item-detail-runs). Wraps the backend run surface:
  * list an item's runs, read one, drive a stage to completion. Mirrors the
  * job-status contract + the per-run result snapshot.
+ *
+ * Migrated onto the generated `openapi-fetch` client (fe-api-client-codegen,
+ * task 2.3): path, params, and request body are typed against the generated
+ * contract, and `{ error, response }` drives the non-OK branch. The run
+ * record's `result` field is the single documented dynamic exception — the
+ * contract types it open (`unknown`), so it is asserted to the hand-kept
+ * `RunResult` snapshot type at the one normalize boundary (`toRun`). Every
+ * other field flows from the generated `RunRecord` type directly.
  */
+import { client } from "../api/client";
+import type { components } from "../api/generated/openapi";
 
-export type RunStatus = "queued" | "running" | "done" | "error" | "cancelled";
-export type RunKind = "transcribe" | "diarize" | "ai";
+export type RunStatus = components["schemas"]["RunStatus"];
+export type RunKind = components["schemas"]["RunKind"];
+export type RunOrigin = components["schemas"]["RunOrigin"];
+
 /**
- * Provenance of a run in the unified listing (unify-run-ledger): `stage` is a
- * real ledger run; `capture`/`legacy` are read-only runs the backend
- * synthesizes from a session's finals / legacy action_runs. Absent is treated
- * as `stage` (an older engine omits the field).
+ * The run's immutable result snapshot, or null. Its shape is stage-dependent
+ * (transcribe turns vs. an AI answer), so the contract — and this hand-kept
+ * type — leaves it open; consumers narrow it at their read site.
  */
-export type RunOrigin = "stage" | "capture" | "legacy";
+export type RunResult = unknown | null;
 
-export interface Run {
-  id: string;
-  item_id: string;
-  kind: RunKind;
-  model: string | null;
-  status: RunStatus;
-  progress: number;
-  stage: string | null;
-  result_ref: string | null;
-  error: string | null;
-  created_at: number;
-  updated_at: number;
-  /** Immutable per-run result snapshot, or null. */
-  result: unknown | null;
-  /** Provenance; absent → treat as `stage` (synthesized runs are read-only). */
+/**
+ * A run's job-status record. Every field is the generated `RunRecord` contract
+ * type except:
+ *   - `origin` is relaxed to optional — an older engine may omit it, in which
+ *     case it is treated as `stage` (synthesized runs are read-only).
+ *   - `result` is the hand-kept `RunResult` (the documented dynamic exception).
+ */
+export type Run = Omit<components["schemas"]["RunRecord"], "origin" | "result"> & {
   origin?: RunOrigin;
+  result: RunResult;
+};
+
+/**
+ * Normalize a generated `RunRecord` into the module's `Run`. This is the ONE
+ * dynamic-exception boundary: the run-record `result` field is typed open
+ * (`unknown`) by the contract, so it is asserted here to the hand-kept
+ * `RunResult` snapshot type (design "Cast only the documented dynamic
+ * exceptions"). Every other field flows through untouched.
+ */
+function toRun(record: components["schemas"]["RunRecord"]): Run {
+  return {
+    ...record,
+    // Run-record `result` dynamic exception: the contract leaves `result`
+    // open/unknown; normalize to the hand-kept nullable snapshot shape.
+    result: (record.result ?? null) as RunResult,
+  };
 }
 
 /** True when a run is a read-only synthesized run (no re-run / delete). */
@@ -43,16 +64,19 @@ export function isTerminal(status: RunStatus): boolean {
 
 /** Every run recorded against an item (oldest first). */
 export async function listItemRuns(itemId: string): Promise<Run[]> {
-  const r = await fetch(`/items/${encodeURIComponent(itemId)}/runs`);
-  if (!r.ok) throw new Error(`list runs failed: ${r.status}`);
-  const d = (await r.json()) as { runs: Run[] };
-  return d.runs;
+  const { data, error, response } = await client.GET("/items/{id}/runs", {
+    params: { path: { id: itemId } },
+  });
+  if (error || !data) throw new Error(`list runs failed: ${response.status}`);
+  return data.runs.map(toRun);
 }
 
 export async function getRun(runId: string): Promise<Run> {
-  const r = await fetch(`/runs/${encodeURIComponent(runId)}`);
-  if (!r.ok) throw new Error(`get run failed: ${r.status}`);
-  return (await r.json()) as Run;
+  const { data, error, response } = await client.GET("/runs/{id}", {
+    params: { path: { id: runId } },
+  });
+  if (error || !data) throw new Error(`get run failed: ${response.status}`);
+  return toRun(data);
 }
 
 export interface StageOpts {
@@ -61,27 +85,41 @@ export interface StageOpts {
   prompt?: string;
 }
 
+/** Throw on a non-OK stage response; otherwise return the new run id. */
+function stageRunId(
+  data: components["schemas"]["RunAccepted"] | undefined,
+  error: unknown,
+  response: Response,
+  kind: RunKind,
+): string {
+  if (error || !data) throw new Error(`stage ${kind} failed: ${response.status}`);
+  return data.run_id;
+}
+
 /** Start a stage on an item; resolves to the new run id. */
 export async function runStage(
   itemId: string,
   kind: RunKind,
   opts: StageOpts = {},
 ): Promise<string> {
-  const params = new URLSearchParams();
-  if (opts.model) params.set("model", opts.model);
-  if (opts.quality) params.set("quality", opts.quality);
-  const qs = params.toString();
-  const url = `/items/${encodeURIComponent(itemId)}/${kind}${qs ? `?${qs}` : ""}`;
-
-  const init: RequestInit = { method: "POST" };
-  if (kind === "ai") {
-    init.headers = { "content-type": "application/json" };
-    init.body = JSON.stringify({ prompt: opts.prompt ?? "" });
+  const path = { id: itemId };
+  if (kind === "transcribe") {
+    const { data, error, response } = await client.POST("/items/{id}/transcribe", {
+      params: { path, query: opts.model ? { model: opts.model } : {} },
+    });
+    return stageRunId(data, error, response, kind);
   }
-  const r = await fetch(url, init);
-  if (!r.ok) throw new Error(`stage ${kind} failed: ${r.status}`);
-  const d = (await r.json()) as { run_id: string };
-  return d.run_id;
+  if (kind === "diarize") {
+    const { data, error, response } = await client.POST("/items/{id}/diarize", {
+      params: { path, query: opts.quality ? { quality: opts.quality } : {} },
+    });
+    return stageRunId(data, error, response, kind);
+  }
+  const { data, error, response } = await client.POST("/items/{id}/ai", {
+    params: { path, query: opts.model ? { model: opts.model } : {} },
+    body: { prompt: opts.prompt ?? "" },
+  });
+  return stageRunId(data, error, response, kind);
 }
 
 /** Poll a run to a terminal state, reporting each update. */

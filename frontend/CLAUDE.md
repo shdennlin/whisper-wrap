@@ -58,7 +58,9 @@ you edit `foo.ts`, its `foo.test.ts` is your regression net; run it.
 
 `src/capture/` recording pipeline (recorder, listen-socket, mode-store) ·
 `src/library/` items/runs/session-events · `src/meeting/` meeting mode ·
-`src/api/` engine API clients (incl. `ai-config.ts`) · `src/storage/` history client/store ·
+`src/api/` engine API layer — the **generated typed client** (`client.ts` over
+`src/api/generated/`, from the contract) that every domain module calls; don't hand-write
+`fetch` to engine routes · `src/storage/` history client/store ·
 `src/platform/` **WKWebView abstraction + Capability Registry** (see guardrails) ·
 `src/health/` · `src/i18n/` · `src/theme/` · `src/export/` · `src/util/` · `src/types/`.
 
@@ -118,6 +120,10 @@ you edit `foo.ts`, its `foo.test.ts` is your regression net; run it.
   Interactive explorer under `make dev`: **`http://localhost:12000/docs`** (the
   engine's own port, **dev builds only** — not Vite's `:5173`). Overview:
   [`../docs/API.md`](../docs/API.md).
+  The frontend's engine client is **generated** from that contract
+  (`src/api/generated/`) and consumed via `src/api/client.ts` — call
+  `client.GET/POST(...)`, never hand-write `fetch`. After a contract change run
+  `bun run gen:api` to regenerate; a vitest drift guard fails if it's stale.
 - Frontend architecture decisions, designer collaboration model, open/closed boundary →
   the private umbrella's frontend-engineering notes.
 - Manual verification walkthrough → [`CHECKLIST.md`](./CHECKLIST.md).

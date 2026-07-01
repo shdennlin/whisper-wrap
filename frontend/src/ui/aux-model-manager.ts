@@ -11,31 +11,17 @@
 
 import { modalConfirm } from "./modal-prompt";
 import { t, type StringKey } from "../i18n";
+import { client } from "../api/client";
+import type { components } from "../api/generated/openapi";
 
-interface AuxModelRow {
-  id: string;
-  /** "diarize" | "vad". */
-  stage: string;
-  size_bytes: number;
-  required: boolean;
-  recommended?: boolean;
-  installed: boolean;
-}
-
-interface AuxModelsResponse {
-  models: AuxModelRow[];
-}
-
-interface AuxDownloadStatus {
-  id: string;
-  status: "idle" | "downloading" | "done" | "error" | "cancelled";
-  downloaded_bytes?: number;
-  total_bytes?: number | null;
-  error?: string | null;
-  installed?: boolean;
-}
-
-type GetBackendUrl = () => string;
+/** One `GET /aux-models` catalogue row — supersedes the hand-written `AuxModelRow`. */
+type AuxModelEntry = components["schemas"]["AuxModelEntry"];
+/**
+ * `GET /aux-models/download/{id}` progress body — an untagged `oneOf`: an
+ * Installed arm (`installed` flag) or a Progress arm (byte counters + `error`),
+ * narrowed per field by an `in`-guard on the arm's own key.
+ */
+type AuxDownloadStatusResponse = components["schemas"]["AuxDownloadStatusResponse"];
 
 export interface AuxModelManagerHooks {
   /** A download finished and a model became installed (e.g. to re-check
@@ -79,7 +65,6 @@ export class AuxModelManager {
 
   constructor(
     private readonly root: HTMLElement,
-    private readonly getBackendUrl: GetBackendUrl,
     private readonly hooks: AuxModelManagerHooks = {},
   ) {
     this.root.classList.add("model-manager", "aux-model-manager");
@@ -91,34 +76,31 @@ export class AuxModelManager {
     this.polling.clear();
   }
 
-  private url(path: string): string {
-    return `${this.getBackendUrl()}${path}`;
-  }
-
   private async refresh(): Promise<void> {
     this.root.textContent = "";
-    let data: AuxModelsResponse;
+    let data: components["schemas"]["AuxListResponse"];
     try {
-      const resp = await fetch(this.url("/aux-models"));
+      const { data: body, error, response } = await client.GET("/aux-models");
+      const status = response.status;
       // 404 = engine predates the /aux-models endpoint. Don't vanish silently
       // (that just looks like a missing feature) — tell the user to relaunch,
       // which was the actual cause of "講者分離 模型沒有顯示".
-      if (resp.status === 404) {
+      if (status === 404) {
         const note = document.createElement("p");
         note.className = "aux-models-note";
         note.textContent = t("aux.relaunchNote");
         this.root.appendChild(note);
         return;
       }
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      data = (await resp.json()) as AuxModelsResponse;
+      if (error || !body) throw new Error(`HTTP ${status}`);
+      data = body;
     } catch (err) {
       this.renderError(t("aux.listError", { error: String(err) }));
       return;
     }
     // Group by stage, preserving catalogue order within each.
     const stages: string[] = [];
-    const byStage = new Map<string, AuxModelRow[]>();
+    const byStage = new Map<string, AuxModelEntry[]>();
     for (const m of data.models) {
       if (!byStage.has(m.stage)) {
         byStage.set(m.stage, []);
@@ -152,7 +134,7 @@ export class AuxModelManager {
     this.hooks.onError?.(message);
   }
 
-  private renderRow(m: AuxModelRow): HTMLElement {
+  private renderRow(m: AuxModelEntry): HTMLElement {
     const row = document.createElement("div");
     row.className = "model-row";
     row.dataset.id = m.id;
@@ -191,7 +173,7 @@ export class AuxModelManager {
     return row;
   }
 
-  private renderAction(m: AuxModelRow): HTMLElement {
+  private renderAction(m: AuxModelEntry): HTMLElement {
     const slot = document.createElement("div");
     slot.className = "model-row-action";
     if (m.installed) {
@@ -209,13 +191,10 @@ export class AuxModelManager {
     const ok = await modalConfirm(t("aux.removeConfirm", { label }), { okLabel: t("aux.remove") });
     if (!ok) return;
     try {
-      const resp = await fetch(this.url(`/aux-models/${encodeURIComponent(id)}`), {
-        method: "DELETE",
+      const { error, response } = await client.DELETE("/aux-models/{id}", {
+        params: { path: { id } },
       });
-      if (!resp.ok) {
-        const body = (await resp.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(body.detail ?? `HTTP ${resp.status}`);
-      }
+      if (error) throw new Error(error.detail ?? `HTTP ${response.status}`);
       this.hooks.onInstalled?.();
       await this.refresh();
     } catch (err) {
@@ -241,15 +220,10 @@ export class AuxModelManager {
 
   private async download(id: string): Promise<void> {
     try {
-      const resp = await fetch(this.url("/aux-models/download"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
+      const { error, response } = await client.POST("/aux-models/download", {
+        body: { id },
       });
-      if (!resp.ok) {
-        const body = (await resp.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(body.detail ?? `HTTP ${resp.status}`);
-      }
+      if (error) throw new Error(error.detail ?? `HTTP ${response.status}`);
       this.startPolling(id);
     } catch (err) {
       this.renderError(t("aux.downloadStartFailed", { error: String(err) }));
@@ -258,8 +232,8 @@ export class AuxModelManager {
 
   private async cancelDownload(id: string): Promise<void> {
     try {
-      await fetch(this.url(`/aux-models/download/${encodeURIComponent(id)}`), {
-        method: "DELETE",
+      await client.DELETE("/aux-models/download/{id}", {
+        params: { path: { id } },
       });
     } catch {
       // transient — the poll reflects server truth either way
@@ -274,24 +248,38 @@ export class AuxModelManager {
   }
 
   private async pollOnce(id: string): Promise<void> {
-    let status: AuxDownloadStatus;
+    let status: AuxDownloadStatusResponse | undefined;
     try {
-      const resp = await fetch(this.url(`/aux-models/download/${encodeURIComponent(id)}`));
-      status = (await resp.json()) as AuxDownloadStatus;
+      const res = await client.GET("/aux-models/download/{id}", {
+        params: { path: { id } },
+      });
+      status = res.data;
     } catch {
-      return; // transient; keep polling
+      return; // transient network error; keep polling
     }
+    if (!status) {
+      // Non-OK poll — stop and reconcile from the list.
+      this.stopPolling(id);
+      await this.refresh();
+      return;
+    }
+    // Narrow the download-status oneOf per field: byte counters + `error` live
+    // only on the Progress arm, `installed` only on the Installed arm.
     if (status.status === "downloading") {
-      this.markDownloading(id, status.downloaded_bytes ?? null, status.total_bytes ?? null);
+      const bytes = "downloaded_bytes" in status ? status.downloaded_bytes : null;
+      const total = "total_bytes" in status ? (status.total_bytes ?? null) : null;
+      this.markDownloading(id, bytes, total);
       return;
     }
     this.stopPolling(id);
     if (status.status === "error") {
-      this.renderError(t("aux.downloadFailed", { id, error: status.error ?? t("aux.unknownError") }));
+      const detail = "error" in status ? (status.error ?? t("aux.unknownError")) : t("aux.unknownError");
+      this.renderError(t("aux.downloadFailed", { id, error: detail }));
       return;
     }
     // done / cancelled / installed → reload so the row reflects truth.
-    if (status.status === "done" || status.installed) this.hooks.onInstalled?.();
+    const installed = "installed" in status ? status.installed : false;
+    if (status.status === "done" || installed) this.hooks.onInstalled?.();
     await this.refresh();
   }
 

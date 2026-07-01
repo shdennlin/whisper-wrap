@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["src/**/*.ts", "vite.config.ts"]
+    "includes": ["src/**/*.ts", "vite.config.ts", "!src/api/generated/**"]
   },
   "formatter": {
     "enabled": true,

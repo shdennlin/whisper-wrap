@@ -125,7 +125,6 @@ export interface SessionRecord {
 }
 
 export interface HistoryStoreOptions {
-  backendUrl: () => string;
   /** Called when a background API write fails. Receives the error + which
    *  session it was for. Use to surface a toast / log so silent failures
    *  don't leave the cache out of sync. */
@@ -143,7 +142,7 @@ export class HistoryStore {
    *  WS final doesn't race ahead and hit a 404 ("session not found"). */
   private pendingCreate = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly opts: HistoryStoreOptions = { backendUrl: () => "" }) {}
+  constructor(private readonly opts: HistoryStoreOptions = {}) {}
 
   /** Resolve once the create POST for this id has settled (success or
    *  failure). No-op if create already completed. Failures are swallowed
@@ -161,7 +160,7 @@ export class HistoryStore {
   /** Initial fetch — call once at startup before the history panel renders. */
   async prime(): Promise<void> {
     try {
-      const r = await listSessions(this.opts.backendUrl(), {
+      const r = await listSessions({
         limit: this.retention,
       });
       this.cache = r.sessions.map(sessionFromDigest);
@@ -189,7 +188,7 @@ export class HistoryStore {
     this.cache = [record, ...this.cache];
     // Track the POST so session-scoped writes (appendFinal, etc.) can wait
     // for it to land before issuing their own requests against /{id}.
-    const p = createSession(this.opts.backendUrl(), { id, started_at, mode })
+    const p = createSession({ id, started_at, mode })
       .catch((e) => this.opts.onError?.(e, { op: "startSession", sessionId: id }));
     this.pendingCreate.set(
       id,
@@ -205,7 +204,7 @@ export class HistoryStore {
     }
     await this.awaitCreate(id);
     try {
-      await appendFinalToApi(this.opts.backendUrl(), id, final);
+      await appendFinalToApi(id, final);
       session.finals.push(final);
     } catch (e) {
       this.opts.onError?.(e, { op: "appendFinal", sessionId: id });
@@ -221,7 +220,7 @@ export class HistoryStore {
     await this.awaitCreate(id);
     const ended_at = Date.now();
     try {
-      await patchSession(this.opts.backendUrl(), id, {
+      await patchSession(id, {
         ended_at,
         duration_ms: ended_at - session.started_at,
       });
@@ -236,7 +235,7 @@ export class HistoryStore {
     const previous = this.cache;
     this.cache = this.cache.filter((s) => s.id !== id);
     try {
-      await deleteSessionApi(this.opts.backendUrl(), id);
+      await deleteSessionApi(id);
     } catch (e) {
       // Roll back the cache so the UI re-renders consistently.
       this.cache = previous;
@@ -271,7 +270,7 @@ export class HistoryStore {
   ): Promise<void> {
     await this.awaitCreate(id);
     try {
-      const meta = await uploadAudio(this.opts.backendUrl(), id, blob, mimeType);
+      const meta = await uploadAudio(id, blob, mimeType);
       const session = this.cache.find((s) => s.id === id);
       if (session) {
         session.audio_saved = !!meta.audio_path;
@@ -284,7 +283,7 @@ export class HistoryStore {
 
   /** Bulk clear all audio files via backend; mark cache rows as unsaved. */
   async bulkClearAudio(): Promise<number> {
-    const r = await bulkClearAudio(this.opts.backendUrl());
+    const r = await bulkClearAudio();
     for (const s of this.cache) {
       s.audio_saved = false;
     }
@@ -307,7 +306,7 @@ function sessionFromDigest(d: SessionFull | {
   return {
     id: d.id,
     started_at: d.started_at,
-    ended_at: d.ended_at,
+    ended_at: d.ended_at ?? null,
     finals: full
       ? full.finals.map((f) => ({
           text: f.text,

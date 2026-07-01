@@ -56,6 +56,7 @@ import {
 } from "./meeting-api";
 import { speakerColorMap } from "./speaker-colors";
 import type { JobStatusResponse, MeetingResult, Segment } from "./types";
+import { client } from "../api/client";
 
 export interface StatusInfo {
   available: boolean;
@@ -72,7 +73,6 @@ export interface MeetingPageHandle {
 }
 
 export interface MeetingPageOptions {
-  fetchFn?: typeof fetch;
   createObjectURL?: (file: File | Blob) => string;
   fetchStatus?: () => Promise<StatusInfo>;
   pollIntervalMs?: number;
@@ -531,7 +531,6 @@ export function createMeetingPage(
 
   // ------ State -------------------------------------------------------------
 
-  const fetchFn = opts.fetchFn ?? fetch;
   const defaultCreateObjectURL: (file: File | Blob) => string =
     typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
       ? URL.createObjectURL.bind(URL)
@@ -540,22 +539,19 @@ export function createMeetingPage(
   const fetchStatus =
     opts.fetchStatus ??
     (async () => {
-      const resp = await fetchFn("/status");
-      const body = await resp.json();
-      const m = body?.meeting ?? {};
-      const reason = m.available
+      const { data } = await client.GET("/status");
+      const m = data?.meeting;
+      const reason = m?.available
         ? undefined
-        : m.hf_token_configured === false
+        : m?.hf_token_configured === false
           ? t("meeting.unavailable.noToken")
-          : m.extras_installed === false
+          : m?.extras_installed === false
             ? t("meeting.unavailable.noExtras")
             : t("meeting.unavailable.default");
       return {
-        available: !!m.available,
+        available: !!m?.available,
         reason,
-        qualityTiers: Array.isArray(m.quality_tiers)
-          ? (m.quality_tiers as string[])
-          : undefined,
+        qualityTiers: m?.quality_tiers,
       };
     });
 
@@ -1402,28 +1398,29 @@ export function createMeetingPage(
   const meetingActions = new ActionsBar({
     root: aiActionsHost,
     fetchActions: async () => {
-      const r = await fetchFn("/actions");
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const body = (await r.json()) as {
-        actions: ActionTemplate[];
-        categories?: Category[];
-      };
+      const { data, response } = await client.GET("/actions");
+      if (!response.ok || !data) throw new Error(`HTTP ${response.status}`);
+      // The contract keeps /actions' `actions`/`categories` as dynamic
+      // serde_json::Value arrays (typed `unknown[]`); cast to the ActionsBar
+      // element types.
       return {
-        actions: body.actions ?? [],
-        categories: body.categories ?? [],
+        actions: (data.actions ?? []) as ActionTemplate[],
+        categories: (data.categories ?? []) as Category[],
       } satisfies ActionsResponse;
     },
     postAsk: async (prompt) => {
       // log=false: Meeting Mode runs are ephemeral (Out of scope per
       // plan); not piped into the /v1/sessions history store. Each
       // chip-click is a one-shot Gemini call.
-      const r = await fetchFn("/ask?log=false", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: prompt }),
+      const { data, response } = await client.POST("/ask", {
+        params: { query: { log: false } },
+        // The /ask contract types the request body as a byte array (it also
+        // accepts audio); the non-stream text path sends a JSON `{ text }`
+        // body, so we cast it. openapi-fetch JSON-serializes it by default.
+        body: { text: prompt } as unknown as number[],
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return (await r.json()) as { answer: string };
+      if (!response.ok || !data) throw new Error(`HTTP ${response.status}`);
+      return { answer: data.answer };
     },
     onAnswer: (run) => {
       aiAnswerBody.textContent = run.answer;

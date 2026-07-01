@@ -1,8 +1,9 @@
 /**
  * @vitest-environment happy-dom
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resetClientFetch, setClientFetch } from "../api/client";
 import {
   clearHistory,
   loadHistory,
@@ -21,30 +22,27 @@ const SAMPLE_RESULT: MeetingResult = {
 
 const LEGACY_KEY = "whisper-wrap.meeting-history.v1";
 
-let originalFetch: typeof globalThis.fetch;
+// history-store persists through `meeting-history-api`, which now routes through
+// the shared openapi-fetch client. We stub the client's ONE `fetch` seam and
+// route by the emitted Request (method + pathname) — the "Preserve the test
+// seam" replacement for the old global `fetch` stub.
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 beforeEach(() => {
-  originalFetch = globalThis.fetch;
   clearHistory();
   localStorage.clear();
 });
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
-function mockJson(body: unknown) {
-  return {
-    ok: true,
-    status: 200,
-    text: async () => JSON.stringify(body),
-    json: async () => body,
-  } as unknown as Response;
-}
+afterEach(() => resetClientFetch());
 
 describe("prime + legacy migration", () => {
   it("seeds the cache from /v1/meetings when backend has rows", async () => {
-    globalThis.fetch = vi.fn(async () =>
-      mockJson({
+    setClientFetch(async () =>
+      json({
         meetings: [
           {
             id: "abc",
@@ -55,12 +53,13 @@ describe("prime + legacy migration", () => {
             speakers_count: 2,
             result: SAMPLE_RESULT,
             speaker_names: {},
+            starred: false,
             status: "done",
           },
         ],
         next_before_ms: null,
       }),
-    ) as typeof fetch;
+    );
     await prime();
     const cache = loadHistory();
     expect(cache).toHaveLength(1);
@@ -89,46 +88,33 @@ describe("prime + legacy migration", () => {
     );
 
     const createCalls: unknown[] = [];
-    const fetchFn = vi.fn(async (...args: unknown[]) => {
-      const url = args[0] as string;
-      const init = args[1] as RequestInit | undefined;
-      if (url === "/v1/meetings" && init?.method === "POST") {
-        createCalls.push(JSON.parse(init.body as string));
-        return mockJson({
-          id: "old1",
-          created_at: 1000,
-          filename: "old.m4a",
-          duration_seconds: 30,
-          language: "en",
-          speakers_count: 1,
-          result: SAMPLE_RESULT,
-          speaker_names: {},
-          status: "done",
-        });
+    const migratedRow = {
+      id: "old1",
+      created_at: 1000,
+      filename: "old.m4a",
+      duration_seconds: 30,
+      language: "en",
+      speakers_count: 1,
+      result: SAMPLE_RESULT,
+      speaker_names: {},
+      starred: false,
+      status: "done",
+    };
+    setClientFetch(async (input) => {
+      const req = input as Request;
+      const path = new URL(req.url).pathname;
+      if (path === "/v1/meetings" && req.method === "POST") {
+        createCalls.push(JSON.parse(await req.clone().text()));
+        return json(migratedRow, 201);
       }
       // First listMeetings call: empty. Second listMeetings (post-
       // migration refresh): include the migrated row.
       const after = createCalls.length > 0;
-      return mockJson({
-        meetings: after
-          ? [
-              {
-                id: "old1",
-                created_at: 1000,
-                filename: "old.m4a",
-                duration_seconds: 30,
-                language: "en",
-                speakers_count: 1,
-                result: SAMPLE_RESULT,
-                speaker_names: {},
-                status: "done",
-              },
-            ]
-          : [],
+      return json({
+        meetings: after ? [migratedRow] : [],
         next_before_ms: null,
       });
     });
-    globalThis.fetch = fetchFn as typeof fetch;
 
     await prime();
 
@@ -160,14 +146,14 @@ describe("prime + legacy migration", () => {
       ]),
     );
 
-    const fetchFn = vi.fn(async (...args: unknown[]) => {
-      const init = args[1] as RequestInit | undefined;
-      if (init?.method === "POST") {
+    setClientFetch(async (input) => {
+      const req = input as Request;
+      if (req.method === "POST") {
         throw new Error(
           "no POST should fire — backend already has rows, migration skipped",
         );
       }
-      return mockJson({
+      return json({
         meetings: [
           {
             id: "remote",
@@ -178,13 +164,13 @@ describe("prime + legacy migration", () => {
             speakers_count: 3,
             result: SAMPLE_RESULT,
             speaker_names: {},
+            starred: false,
             status: "done",
           },
         ],
         next_before_ms: null,
       });
     });
-    globalThis.fetch = fetchFn as typeof fetch;
 
     await prime();
 
@@ -196,13 +182,13 @@ describe("prime + legacy migration", () => {
 
   it("recordHistory persists to backend and prepends to the cache", async () => {
     let posted: unknown = null;
-    globalThis.fetch = vi.fn(async (...args: unknown[]) => {
-      const url = args[0] as string;
-      const init = args[1] as RequestInit | undefined;
-      if (url === "/v1/meetings" && init?.method === "POST") {
-        posted = JSON.parse(init.body as string);
+    setClientFetch(async (input) => {
+      const req = input as Request;
+      const path = new URL(req.url).pathname;
+      if (path === "/v1/meetings" && req.method === "POST") {
+        posted = JSON.parse(await req.clone().text());
       }
-      return mockJson({
+      return json({
         id: "new",
         created_at: 100,
         filename: "n.m4a",
@@ -211,9 +197,10 @@ describe("prime + legacy migration", () => {
         speakers_count: 1,
         result: SAMPLE_RESULT,
         speaker_names: {},
+        starred: false,
         status: "done",
       });
-    }) as typeof fetch;
+    });
 
     const entry: HistoryEntry = {
       job_id: "new",
