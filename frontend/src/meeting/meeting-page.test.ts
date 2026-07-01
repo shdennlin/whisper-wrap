@@ -598,7 +598,7 @@ describe("createMeetingPage — upload flow", () => {
         pollCount += 1;
         return json(
           pollCount === 1
-            ? { status: "running", progress: 0.4, stage: "align", result: null }
+            ? { status: "running", progress: 0.4, stage: "asr", result: null }
             : {
                 status: "done",
                 progress: 1.0,

@@ -3,7 +3,7 @@
  *
  * Composes: upload zone → confirm card (filename + duration + speakers
  * dropdown + language dropdown + Start/Change) →
- * 4-step stepper with per-stage progress + elapsed/estimated remaining →
+ * 3-step stepper with per-stage progress + elapsed/estimated remaining →
  * speaker-coloured transcript with rename-on-hover + click-to-seek +
  * speaker-aware exports (SRT/VTT/TXT/JSON) → Recent analyses sidebar.
  *
@@ -94,7 +94,7 @@ export interface MeetingPageOptions {
 
 // --- Stage model -------------------------------------------------------------
 
-type StageKey = "upload" | "asr" | "align" | "diarize";
+type StageKey = "upload" | "asr" | "diarize";
 interface StageDef {
   key: StageKey;
   labelKey: StringKey;
@@ -104,7 +104,6 @@ interface StageDef {
 const STAGES: StageDef[] = [
   { key: "upload", labelKey: "meeting.stepper.upload", hintKey: "meeting.stepper.upload.hint", ratio: 0 },
   { key: "asr", labelKey: "meeting.stepper.asr", hintKey: "meeting.stepper.asr.hint", ratio: 0.05 },
-  { key: "align", labelKey: "meeting.stepper.align", hintKey: "meeting.stepper.align.hint", ratio: 0.1 },
   { key: "diarize", labelKey: "meeting.stepper.diarize", hintKey: "meeting.stepper.diarize.hint", ratio: 0.2 },
 ];
 type StepState = "pending" | "active" | "complete";
@@ -816,7 +815,7 @@ export function createMeetingPage(
             completeAll();
             return;
           }
-          if (stage === "asr" || stage === "align" || stage === "diarize") {
+          if (stage === "asr" || stage === "diarize") {
             activateStage(stage);
           }
         },
