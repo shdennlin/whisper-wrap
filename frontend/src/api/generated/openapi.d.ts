@@ -2259,13 +2259,6 @@ export interface operations {
                  *     the active engine — the v2 behavior.
                  */
                 model?: string;
-                /**
-                 * @description Opt-in whisper word-level timestamps. When `true`, the ASR pass emits
-                 *     `Segment::words` so the meeting view gets per-word click-to-seek (v2
-                 *     parity, via whisper.cpp token times). Absent/`false` keeps the faster
-                 *     segment-only path. The PWA's word-timestamps toggle drives this.
-                 */
-                enable_word_timestamps?: boolean;
             };
             header?: never;
             path?: never;

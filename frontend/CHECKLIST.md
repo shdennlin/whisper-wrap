@@ -43,19 +43,6 @@ engine 會在 API_PORT 12000 直接 serve `/app/`。
 4. ✓ 下載一個 `.srt` 檔（檔名 `meeting.srt`），內容為合法 SRT（逗號 `,` 毫秒
    分隔、cue 之間空一行，每段帶講者標籤）。
 
-## Word timestamps / 逐字 click-to-seek（Meeting 模式）
-
-> 會議轉寫可選「字級時間戳」（前端 toggle → 送 `enable_word_timestamps=true` →
-> 引擎用 whisper token 時間算 `Segment::words`，v2 parity）。開啟後轉寫的每個字
-> 都可點、跳到該字的音訊時間。重設計 UI 時**別把逐字可點的 span 弄丟**。
-
-1. 在「錄會議」上傳設定裡勾選字級時間戳（word timestamps），上傳會議音檔，
-   等待分析完成。
-2. ✓ 轉寫的每個字包在可點的 `.segment-word` span 裡（`data-start` = 該字開始
-   時間）；點某個字，播放器 seek 到那個時間。
-3. ✓ 不勾時（預設 off，較快的 segment-only 路徑）：轉寫只到段落層級，字不可
-   單獨點擊。
-
 ## Offline shell
 
 1. PWA 載入後，停掉 engine（在跑 `make dev`／`make server` 的終端按 `Ctrl-C`）。
