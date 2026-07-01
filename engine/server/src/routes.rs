@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::extract::{Multipart, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use whisper_wrap_core::asr::TranscribeResult;
 use whisper_wrap_core::postprocess::{filter_empty_transcription, FilterDecision};
@@ -182,6 +182,25 @@ fn default_language() -> String {
     "auto".into()
 }
 
+/// Success body of `POST /transcribe`. Two wire shapes descend from one struct:
+/// the empty/filtered case serializes to exactly `{ "text": "" }` (language and
+/// segments omitted via `skip_serializing_if`), and the kept case adds
+/// `language` and `segments`. `segments` is kept as `Vec<serde_json::Value>`
+/// because the element (`whisper_wrap_core::asr::Segment`) implements
+/// `Serialize` but not `ToSchema` and lives in the core crate — typing it here
+/// would require touching core, so the shape is preserved without over-typing.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct TranscribeResponse {
+    /// Transcribed text (empty string when filtered/empty).
+    text: String,
+    /// Detected language — omitted in the empty/filtered case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    /// Timed segments — omitted in the empty/filtered case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    segments: Option<Vec<serde_json::Value>>,
+}
+
 #[utoipa::path(
     post,
     path = "/transcribe",
@@ -195,7 +214,7 @@ fn default_language() -> String {
         content = Vec<u8>
     ),
     responses(
-        (status = 200, description = "Transcription result — text plus timing/metadata (ad-hoc JSON object)."),
+        (status = 200, description = "Transcription result — text plus timing/metadata.", body = TranscribeResponse),
         (status = 400, description = "Empty or unreadable audio body, or missing multipart `file` field.", body = ApiErrorBody),
         (status = 413, description = "Audio exceeds the configured maximum file size.", body = ApiErrorBody),
         (status = 415, description = "Unsupported Content-Type or media format.", body = ApiErrorBody),
@@ -207,7 +226,7 @@ pub async fn transcribe(
     State(state): State<Arc<AppState>>,
     Query(q): Query<TranscribeQuery>,
     req: Request,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<TranscribeResponse>, ApiError> {
     let content_type = normalize_content_type(
         req.headers()
             .get("content-type")
@@ -271,14 +290,85 @@ pub async fn transcribe(
                 reason.as_str(),
                 result.text.len()
             );
-            Ok(Json(json!({ "text": "" })))
+            Ok(Json(TranscribeResponse {
+                text: String::new(),
+                language: None,
+                segments: None,
+            }))
         }
-        FilterDecision::Keep(text) => Ok(Json(json!({
-            "text": text,
-            "language": result.language,
-            "segments": result.segments,
-        }))),
+        FilterDecision::Keep(text) => {
+            let segments = result
+                .segments
+                .iter()
+                .map(|s| serde_json::to_value(s).expect("Segment is always serializable"))
+                .collect::<Vec<_>>();
+            Ok(Json(TranscribeResponse {
+                text,
+                language: Some(result.language),
+                segments: Some(segments),
+            }))
+        }
     }
+}
+
+/// Active-model sub-object of [`StatusResponse`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct StatusModel {
+    name: String,
+    path: String,
+    compute_type: String,
+    device: String,
+    /// false on a fresh install until `POST /models/active` loads weights.
+    loaded: bool,
+    /// Model load time; `null` until weights are loaded.
+    load_time_ms: Option<u128>,
+}
+
+/// Backend sub-object of [`StatusResponse`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct StatusBackend {
+    backend: String,
+    format: String,
+    /// Quantization label; `null` when the format carries none.
+    quant: Option<String>,
+}
+
+/// Legacy `gemini` sub-object of [`StatusResponse`] (back-compat).
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct StatusGemini {
+    configured: bool,
+    model: String,
+}
+
+/// AI-provider privacy indicator sub-object of [`StatusResponse`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct StatusAi {
+    configured: bool,
+    provider: String,
+    endpoint: String,
+    model: String,
+}
+
+/// Meeting/diarization availability sub-object of [`StatusResponse`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct StatusMeeting {
+    available: bool,
+    quality_tiers: Vec<String>,
+    hf_token_configured: bool,
+    extras_installed: bool,
+}
+
+/// Success body of `GET /status` — engine health + active-model snapshot.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct StatusResponse {
+    status: String,
+    version: String,
+    uptime_seconds: u64,
+    model: StatusModel,
+    backend: StatusBackend,
+    gemini: StatusGemini,
+    ai: StatusAi,
+    meeting: StatusMeeting,
 }
 
 #[utoipa::path(
@@ -286,62 +376,97 @@ pub async fn transcribe(
     path = "/status",
     tag = "system",
     security(()),
-    responses((status = 200, description = "Engine health + active-model snapshot (ad-hoc JSON). Token-exempt."))
+    responses((status = 200, description = "Engine health + active-model snapshot. Token-exempt.", body = StatusResponse))
 )]
-pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+pub async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
     let model = state.model_snapshot();
     let engine = state.engine_handle();
     let llm = state.llm();
-    Json(json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
-        "uptime_seconds": state.started.elapsed().as_secs(),
-        "model": {
-            "name": model.name,
-            "path": model.bin_path.to_string_lossy(),
-            "compute_type": "default",
-            "device": "auto",
+    Json(StatusResponse {
+        status: "ok".to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        uptime_seconds: state.started.elapsed().as_secs(),
+        model: StatusModel {
+            name: model.name,
+            path: model.bin_path.to_string_lossy().into_owned(),
+            compute_type: "default".to_owned(),
+            device: "auto".to_owned(),
             // false on a fresh install until POST /models/active loads weights;
             // the PWA's first-run gate keys off this.
-            "loaded": engine.is_some(),
-            "load_time_ms": engine.as_ref().map(|e| e.load_time_ms),
+            loaded: engine.is_some(),
+            load_time_ms: engine.as_ref().map(|e| e.load_time_ms),
         },
-        "backend": {
-            "backend": "whisper-rs",
-            "format": model.format,
-            "quant": model.quant,
+        backend: StatusBackend {
+            backend: "whisper-rs".to_owned(),
+            format: model.format.to_owned(),
+            quant: model.quant,
         },
         // v2 PWA reads `gemini`; kept for back-compat, now derived from the
         // active provider.
-        "gemini": { "configured": llm.configured(), "model": llm.model() },
+        gemini: StatusGemini {
+            configured: llm.configured(),
+            model: llm.model().to_owned(),
+        },
         // Privacy indicator (llm-provider-abstraction): which provider +
         // endpoint an AI run would send the transcript to. The key is never
         // exposed.
-        "ai": {
-            "configured": llm.configured(),
-            "provider": llm.provider_name(),
-            "endpoint": llm.endpoint(),
-            "model": llm.model(),
+        ai: StatusAi {
+            configured: llm.configured(),
+            provider: llm.provider_name().to_owned(),
+            endpoint: llm.endpoint().to_owned(),
+            model: llm.model().to_owned(),
         },
         // The PWA's Meeting page reads meeting.available off /status to
         // decide whether to show the upload UI. v3 needs no HF token and
         // no optional extras (sherpa-onnx diarization is built into the
         // binary), so availability is purely "are the ONNX models on
         // disk" — same gate the meeting endpoints enforce.
-        "meeting": {
+        meeting: StatusMeeting {
             // Need segmentation + AT LEAST ONE embedding (fast or balanced) —
             // the two embeddings are interchangeable quality tiers, not both
             // required.
-            "available": state.config.diarize_seg_model.is_file()
+            available: state.config.diarize_seg_model.is_file()
                 && (state.config.diarize_emb_model.is_file()
                     || state.config.diarize_emb_model_balanced.is_file()),
             // Installed diarization tiers ("fast"/"balanced") — the PWA's
             // quality dropdown only offers what's actually on disk.
-            "quality_tiers": crate::meeting::available_tiers(&state.config),
-            "hf_token_configured": true,
-            "extras_installed": true,
+            quality_tiers: crate::meeting::available_tiers(&state.config)
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            hf_token_configured: true,
+            extras_installed: true,
         },
-    }))
+    })
+}
+
+/// One entry in the [`DiscoveryResponse`] endpoint list.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct EndpointDescriptor {
+    method: String,
+    path: String,
+    description: String,
+}
+
+impl EndpointDescriptor {
+    fn new(method: &str, path: &str, description: &str) -> Self {
+        EndpointDescriptor {
+            method: method.to_owned(),
+            path: path.to_owned(),
+            description: description.to_owned(),
+        }
+    }
+}
+
+/// Success body of `GET /` — the hand-maintained API discovery document.
+///
+/// The wire shape is an object `{ "endpoints": [...] }`, so this is typed as a
+/// named object with an `endpoints` array property (NOT a top-level array — the
+/// live handler wraps the list under `endpoints`, and the wire shape is
+/// preserved byte-for-byte).
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct DiscoveryResponse {
+    endpoints: Vec<EndpointDescriptor>,
 }
 
 #[utoipa::path(
@@ -349,36 +474,242 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     path = "/",
     tag = "system",
     security(()),
-    responses((status = 200, description = "API discovery document — a hand-maintained list of top-level routes (ad-hoc JSON). Token-exempt."))
+    responses((status = 200, description = "API discovery document — a hand-maintained list of top-level routes. Token-exempt.", body = DiscoveryResponse))
 )]
-pub async fn discovery() -> Json<serde_json::Value> {
-    Json(json!({
-        "endpoints": [
-            {"method": "POST", "path": "/transcribe", "description": "Transcribe an audio body (multipart or raw)"},
-            {"method": "WS",   "path": "/listen",     "description": "Live captions over WebSocket (pcm_s16le frames)"},
-            {"method": "POST", "path": "/ask",        "description": "Audio or text question, Gemini answer (?stream=true for SSE)"},
-            {"method": "POST", "path": "/v1/audio/transcriptions", "description": "OpenAI-compatible transcription"},
-            {"method": "POST", "path": "/v1/audio/translations",   "description": "OpenAI-compatible translation (English out)"},
-            {"method": "GET",  "path": "/v1/models",  "description": "OpenAI-compatible model list"},
-            {"method": "GET",  "path": "/actions",    "description": "Prompt-action templates"},
-            {"method": "GET",  "path": "/models",     "description": "Registry models + installed status"},
-            {"method": "POST", "path": "/models/active", "description": "Hot-swap the active model"},
-            {"method": "GET",  "path": "/status",     "description": "Service health and model status"},
-            {"method": "GET",  "path": "/app/",       "description": "PWA static bundle"},
-            {"method": "GET",  "path": "/",           "description": "API discovery"},
-        ]
-    }))
+pub async fn discovery() -> Json<DiscoveryResponse> {
+    Json(DiscoveryResponse {
+        endpoints: vec![
+            EndpointDescriptor::new("POST", "/transcribe", "Transcribe an audio body (multipart or raw)"),
+            EndpointDescriptor::new("WS", "/listen", "Live captions over WebSocket (pcm_s16le frames)"),
+            EndpointDescriptor::new("POST", "/ask", "Audio or text question, Gemini answer (?stream=true for SSE)"),
+            EndpointDescriptor::new("POST", "/v1/audio/transcriptions", "OpenAI-compatible transcription"),
+            EndpointDescriptor::new("POST", "/v1/audio/translations", "OpenAI-compatible translation (English out)"),
+            EndpointDescriptor::new("GET", "/v1/models", "OpenAI-compatible model list"),
+            EndpointDescriptor::new("GET", "/actions", "Prompt-action templates"),
+            EndpointDescriptor::new("GET", "/models", "Registry models + installed status"),
+            EndpointDescriptor::new("POST", "/models/active", "Hot-swap the active model"),
+            EndpointDescriptor::new("GET", "/status", "Service health and model status"),
+            EndpointDescriptor::new("GET", "/app/", "PWA static bundle"),
+            EndpointDescriptor::new("GET", "/", "API discovery"),
+        ],
+    })
+}
+
+/// Success body of `GET /actions` — the prompt-action registry.
+///
+/// `actions` and `categories` are kept as `Vec<serde_json::Value>` because
+/// their element types (`whisper_wrap_core::actions::Action` / `Category`)
+/// implement `Serialize` but not `ToSchema` and live in the core crate; typing
+/// them here would require touching core, so the element shape is preserved
+/// without over-typing.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ActionsResponse {
+    actions: Vec<serde_json::Value>,
+    categories: Vec<serde_json::Value>,
 }
 
 #[utoipa::path(
     get,
     path = "/actions",
     tag = "system",
-    responses((status = 200, description = "The prompt-action registry (categories + actions) as ad-hoc JSON."))
+    responses((status = 200, description = "The prompt-action registry (categories + actions).", body = ActionsResponse))
 )]
-pub async fn actions(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(json!({
-        "actions": state.actions,
-        "categories": state.action_categories,
-    }))
+pub async fn actions(State(state): State<Arc<AppState>>) -> Json<ActionsResponse> {
+    Json(ActionsResponse {
+        actions: state
+            .actions
+            .iter()
+            .map(|a| serde_json::to_value(a).expect("Action is always serializable"))
+            .collect(),
+        categories: state
+            .action_categories
+            .iter()
+            .map(|c| serde_json::to_value(c).expect("Category is always serializable"))
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod response_wire_shape_tests {
+    //! Wire-shape guards: each typed success body SHALL serialize to the exact
+    //! JSON the handler produced before this retyping (a `serde_json::Value`
+    //! comparison, so key order is irrelevant but field names, casing, and
+    //! null-vs-omit are pinned).
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn transcribe_empty_case_serializes_to_text_only() {
+        let s = TranscribeResponse {
+            text: String::new(),
+            language: None,
+            segments: None,
+        };
+        // Empty/filtered case omits language + segments entirely.
+        assert_eq!(serde_json::to_value(&s).unwrap(), json!({ "text": "" }));
+    }
+
+    #[test]
+    fn transcribe_kept_case_serializes_full_shape() {
+        let s = TranscribeResponse {
+            text: "hello world".to_owned(),
+            language: Some("en".to_owned()),
+            segments: Some(vec![json!({ "text": "hello world", "start": 0.0, "end": 1.5 })]),
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "text": "hello world",
+                "language": "en",
+                "segments": [{ "text": "hello world", "start": 0.0, "end": 1.5 }],
+            })
+        );
+    }
+
+    #[test]
+    fn status_serializes_full_nested_shape_with_loaded_model() {
+        let s = StatusResponse {
+            status: "ok".to_owned(),
+            version: "3.1.4".to_owned(),
+            uptime_seconds: 42,
+            model: StatusModel {
+                name: "base".to_owned(),
+                path: "/models/base.bin".to_owned(),
+                compute_type: "default".to_owned(),
+                device: "auto".to_owned(),
+                loaded: true,
+                load_time_ms: Some(1234),
+            },
+            backend: StatusBackend {
+                backend: "whisper-rs".to_owned(),
+                format: "gguf".to_owned(),
+                quant: Some("q4_0".to_owned()),
+            },
+            gemini: StatusGemini {
+                configured: true,
+                model: "gemini-1.5".to_owned(),
+            },
+            ai: StatusAi {
+                configured: true,
+                provider: "gemini".to_owned(),
+                endpoint: "https://example.test".to_owned(),
+                model: "gemini-1.5".to_owned(),
+            },
+            meeting: StatusMeeting {
+                available: true,
+                quality_tiers: vec!["fast".to_owned(), "balanced".to_owned()],
+                hf_token_configured: true,
+                extras_installed: true,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "status": "ok",
+                "version": "3.1.4",
+                "uptime_seconds": 42,
+                "model": {
+                    "name": "base",
+                    "path": "/models/base.bin",
+                    "compute_type": "default",
+                    "device": "auto",
+                    "loaded": true,
+                    "load_time_ms": 1234,
+                },
+                "backend": {
+                    "backend": "whisper-rs",
+                    "format": "gguf",
+                    "quant": "q4_0",
+                },
+                "gemini": { "configured": true, "model": "gemini-1.5" },
+                "ai": {
+                    "configured": true,
+                    "provider": "gemini",
+                    "endpoint": "https://example.test",
+                    "model": "gemini-1.5",
+                },
+                "meeting": {
+                    "available": true,
+                    "quality_tiers": ["fast", "balanced"],
+                    "hf_token_configured": true,
+                    "extras_installed": true,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn status_fresh_install_emits_null_load_time_and_quant() {
+        // Fresh install: no engine loaded, no quant — both are plain `Option`
+        // (not skipped), so they MUST serialize as `null`, never be omitted.
+        let s = StatusResponse {
+            status: "ok".to_owned(),
+            version: "3.1.4".to_owned(),
+            uptime_seconds: 0,
+            model: StatusModel {
+                name: "base".to_owned(),
+                path: "/models/base.bin".to_owned(),
+                compute_type: "default".to_owned(),
+                device: "auto".to_owned(),
+                loaded: false,
+                load_time_ms: None,
+            },
+            backend: StatusBackend {
+                backend: "whisper-rs".to_owned(),
+                format: "gguf".to_owned(),
+                quant: None,
+            },
+            gemini: StatusGemini {
+                configured: false,
+                model: String::new(),
+            },
+            ai: StatusAi {
+                configured: false,
+                provider: "gemini".to_owned(),
+                endpoint: String::new(),
+                model: String::new(),
+            },
+            meeting: StatusMeeting {
+                available: false,
+                quality_tiers: vec![],
+                hf_token_configured: true,
+                extras_installed: true,
+            },
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["model"]["load_time_ms"], json!(null));
+        assert!(v["model"].as_object().unwrap().contains_key("load_time_ms"));
+        assert_eq!(v["backend"]["quant"], json!(null));
+        assert!(v["backend"].as_object().unwrap().contains_key("quant"));
+    }
+
+    #[test]
+    fn discovery_serializes_to_endpoints_object() {
+        let s = DiscoveryResponse {
+            endpoints: vec![EndpointDescriptor::new("GET", "/", "API discovery")],
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "endpoints": [
+                    { "method": "GET", "path": "/", "description": "API discovery" }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn actions_serializes_to_actions_and_categories() {
+        let s = ActionsResponse {
+            actions: vec![json!({ "id": "summarize", "label": "Summarize" })],
+            categories: vec![json!({ "id": "general", "label": "General" })],
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "actions": [{ "id": "summarize", "label": "Summarize" }],
+                "categories": [{ "id": "general", "label": "General" }],
+            })
+        );
+    }
 }

@@ -64,6 +64,16 @@ async fn decode_item_audio(state: &Arc<AppState>, path: &str) -> Result<Vec<f32>
         .map_err(|e| e.to_string())
 }
 
+/// The 202 run-accepted descriptor shared by every stage launcher: the opened
+/// run's id and the poll URL for its job-status contract (`GET /runs/{id}`).
+/// Wire shape: `{ "run_id": string, "status_url": string }` — field names map
+/// 1:1 to the JSON keys, so no `#[serde(rename)]` is needed.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct RunAccepted {
+    pub run_id: String,
+    pub status_url: String,
+}
+
 /// Open a run for a stage, return 202 with its id, and run `work` in a spawned
 /// task. `work` yields the result-JSON snapshot (closed `done`) or an error
 /// string (closed `error`). Shared by the transcribe / diarize / ai stages.
@@ -117,7 +127,10 @@ where
 
     (
         StatusCode::ACCEPTED,
-        Json(json!({ "run_id": run_id, "status_url": format!("/runs/{run_id}") })),
+        Json(RunAccepted {
+            status_url: format!("/runs/{run_id}"),
+            run_id,
+        }),
     )
         .into_response()
 }
@@ -136,7 +149,7 @@ pub struct ModelQuery {
     tag = "items",
     params(("id" = String, Path, description = "Item (session or meeting) id."), ModelQuery),
     responses(
-        (status = 202, description = "Transcription run accepted — returns the run descriptor; poll `GET /runs/{id}`."),
+        (status = 202, description = "Transcription run accepted — returns the run descriptor; poll `GET /runs/{id}`.", body = RunAccepted),
         (status = 404, description = "No item or stored audio for that id.", body = crate::routes::ApiErrorBody),
         (status = 409, description = "A transcription run is already in progress for the item.")
     )
@@ -299,7 +312,7 @@ pub struct QualityQuery {
     tag = "items",
     params(("id" = String, Path, description = "Item id."), QualityQuery),
     responses(
-        (status = 202, description = "Diarization run accepted."),
+        (status = 202, description = "Diarization run accepted.", body = RunAccepted),
         (status = 400, description = "Invalid quality tier."),
         (status = 404, description = "No item or stored audio for that id.", body = crate::routes::ApiErrorBody),
         (status = 409, description = "A diarization run is already in progress for the item.")
@@ -379,7 +392,7 @@ pub struct AiBody {
     params(("id" = String, Path, description = "Item id."), ModelQuery),
     request_body(content = AiBody, description = "The prompt to run against the item's transcript."),
     responses(
-        (status = 202, description = "AI run accepted."),
+        (status = 202, description = "AI run accepted.", body = RunAccepted),
         (status = 404, description = "No item for that id.", body = crate::routes::ApiErrorBody),
         (status = 409, description = "The item has no transcript yet, or an AI run is already in progress.")
     )
@@ -497,5 +510,20 @@ mod tests {
     fn transcript_text_none_without_runs_or_finals() {
         let db = db_with_session("empty", "s4", None);
         assert_eq!(transcript_text(&db, "s4"), None);
+    }
+
+    #[test]
+    fn run_accepted_serializes_to_wire_shape() {
+        // Pin the 202 descriptor byte-for-byte against the prior `json!()`
+        // output: exactly `{ "run_id", "status_url" }`, snake_case, no extras.
+        let accepted = RunAccepted {
+            run_id: "01ABC".into(),
+            status_url: "/runs/01ABC".into(),
+        };
+        let v = serde_json::to_value(&accepted).expect("serialize");
+        assert_eq!(
+            v,
+            serde_json::json!({ "run_id": "01ABC", "status_url": "/runs/01ABC" })
+        );
     }
 }

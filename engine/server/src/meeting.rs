@@ -235,6 +235,59 @@ fn availability(state: &AppState) -> Result<(), Response> {
         .into_response())
 }
 
+// ---------- typed success bodies ----------
+// These type ONLY the success payloads. The error paths keep their ad-hoc
+// `{detail: {error, reason}}` object shape (see design.md failure-modes note)
+// and are intentionally left as `json!()` values.
+
+/// 202 job descriptor returned by `POST /transcribe/meeting`.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct SubmitResponse {
+    /// Opaque job id — poll `status_url` for progress.
+    job_id: String,
+    /// Relative URL of the poll endpoint for this job.
+    status_url: String,
+}
+
+/// Terminal-error detail spliced into a poll response only when the job
+/// failed. Omitted entirely for pending/running/done/cancelled jobs.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct PollError {
+    /// Machine-readable error code (e.g. `asr_failed`, `diarize_failed`).
+    code: String,
+    /// Human-readable failure message.
+    message: String,
+}
+
+/// Job-status body returned by `GET /transcribe/meeting/{id}`. `result` is the
+/// per-kind analysis snapshot — `null` until the job is `done` — and is always
+/// present. `error` is present only for a failed job.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct PollResponse {
+    /// pending | running | done | error | cancelled.
+    status: String,
+    /// Fractional progress in `[0, 1]`.
+    progress: f64,
+    /// Current pipeline stage (asr | diarize | complete | failed | …).
+    stage: String,
+    /// Analysis result once `done`, otherwise `null` (always present).
+    result: Option<Value>,
+    /// Present only when `status == "error"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<PollError>,
+}
+
+/// 202 acknowledgement returned by `DELETE /transcribe/meeting/{id}`.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct CancelResponse {
+    /// Id of the job whose cancellation was requested.
+    job_id: String,
+    /// Always `"cancel_requested"`.
+    status: String,
+    /// Advisory note about cancellation latency.
+    note: String,
+}
+
 // ---------- endpoints ----------
 
 /// Query params on POST /transcribe/meeting. The PWA uploads the raw
@@ -267,7 +320,7 @@ pub struct SubmitQuery {
         content = Vec<u8>
     ),
     responses(
-        (status = 202, description = "Job accepted — returns a job descriptor `{id, status, …}`; poll `GET /transcribe/meeting/{id}` for progress."),
+        (status = 202, description = "Job accepted — returns a job descriptor; poll `GET /transcribe/meeting/{id}` for progress.", body = SubmitResponse),
         (status = 400, description = "Invalid quality tier or malformed upload (ad-hoc `{detail:{error,reason}}` body)."),
         (status = 413, description = "Audio exceeds the configured maximum file size."),
         (status = 415, description = "Unsupported Content-Type or media format.")
@@ -413,7 +466,10 @@ pub async fn submit(
 
     (
         StatusCode::ACCEPTED,
-        Json(json!({"job_id": job_id, "status_url": format!("/transcribe/meeting/{job_id}")})),
+        Json(SubmitResponse {
+            status_url: format!("/transcribe/meeting/{job_id}"),
+            job_id,
+        }),
     )
         .into_response()
 }
@@ -424,7 +480,7 @@ pub async fn submit(
     tag = "transcription",
     params(("id" = String, Path, description = "Meeting job id returned by the submit call.")),
     responses(
-        (status = 200, description = "Current job status and, when finished, the result (ad-hoc JSON)."),
+        (status = 200, description = "Current job status and, when finished, the result.", body = PollResponse),
         (status = 404, description = "No job with that id.")
     )
 )]
@@ -444,15 +500,16 @@ pub async fn poll(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<Str
         )
             .into_response();
     };
-    let mut payload = json!({
-        "status": job.status,
-        "progress": job.progress,
-        "stage": job.stage,
-        "result": job.result,
-    });
-    if let Some((code, message)) = &job.error {
-        payload["error"] = json!({"code": code, "message": message});
-    }
+    let payload = PollResponse {
+        status: job.status.to_string(),
+        progress: job.progress,
+        stage: job.stage.clone(),
+        result: job.result.clone(),
+        error: job.error.as_ref().map(|(code, message)| PollError {
+            code: code.clone(),
+            message: message.clone(),
+        }),
+    };
     Json(payload).into_response()
 }
 
@@ -462,7 +519,7 @@ pub async fn poll(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<Str
     tag = "transcription",
     params(("id" = String, Path, description = "Meeting job id to cancel.")),
     responses(
-        (status = 202, description = "Cancellation requested for an in-flight job."),
+        (status = 202, description = "Cancellation requested for an in-flight job.", body = CancelResponse),
         (status = 404, description = "No job with that id."),
         (status = 409, description = "Job already finished (done/error/cancelled).")
     )
@@ -489,11 +546,11 @@ pub async fn cancel(
     job.cancel_requested = true;
     (
         StatusCode::ACCEPTED,
-        Json(json!({
-            "job_id": id,
-            "status": "cancel_requested",
-            "note": "actual cancellation may take up to one pipeline stage to take effect",
-        })),
+        Json(CancelResponse {
+            job_id: id,
+            status: "cancel_requested".to_string(),
+            note: "actual cancellation may take up to one pipeline stage to take effect".to_string(),
+        }),
     )
         .into_response()
 }
@@ -756,4 +813,89 @@ async fn read_named_file(
         StatusCode::BAD_REQUEST,
         "Missing form field 'file'",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Wire-shape guards: each typed success body must serialize byte-identically
+    // to the pre-typing `json!()` payload the handler produced before.
+
+    #[test]
+    fn submit_response_wire_shape() {
+        let resp = SubmitResponse {
+            job_id: "job123".to_string(),
+            status_url: "/transcribe/meeting/job123".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&resp).unwrap(),
+            json!({"job_id": "job123", "status_url": "/transcribe/meeting/job123"})
+        );
+    }
+
+    // Poll WITHOUT the optional `error` field: the key must be omitted entirely,
+    // while `result` stays present as `null`.
+    #[test]
+    fn poll_response_omits_error_when_absent() {
+        let resp = PollResponse {
+            status: "running".to_string(),
+            progress: 0.55,
+            stage: "diarize".to_string(),
+            result: None,
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&resp).unwrap(),
+            json!({
+                "status": "running",
+                "progress": 0.55,
+                "stage": "diarize",
+                "result": null
+            })
+        );
+    }
+
+    // Poll WITH the optional `error` field (and a populated `result`): the
+    // spliced-in `{code, message}` object must match today's shape exactly.
+    #[test]
+    fn poll_response_includes_error_when_present() {
+        let resp = PollResponse {
+            status: "error".to_string(),
+            progress: 1.0,
+            stage: "failed".to_string(),
+            result: Some(json!({"language": "en"})),
+            error: Some(PollError {
+                code: "asr_failed".to_string(),
+                message: "boom".to_string(),
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&resp).unwrap(),
+            json!({
+                "status": "error",
+                "progress": 1.0,
+                "stage": "failed",
+                "result": {"language": "en"},
+                "error": {"code": "asr_failed", "message": "boom"}
+            })
+        );
+    }
+
+    #[test]
+    fn cancel_response_wire_shape() {
+        let resp = CancelResponse {
+            job_id: "job123".to_string(),
+            status: "cancel_requested".to_string(),
+            note: "actual cancellation may take up to one pipeline stage to take effect".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&resp).unwrap(),
+            json!({
+                "job_id": "job123",
+                "status": "cancel_requested",
+                "note": "actual cancellation may take up to one pipeline stage to take effect"
+            })
+        );
+    }
 }

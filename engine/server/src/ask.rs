@@ -10,7 +10,7 @@ use axum::extract::{Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use whisper_wrap_core::postprocess::{filter_empty_transcription, FilterDecision};
 
@@ -45,6 +45,18 @@ enum AskInput {
     Audio { body: Vec<u8>, suffix: String },
 }
 
+/// Non-streaming answer body of `POST /ask` (`stream=false`). `transcript`
+/// is the STT text for audio input and `null` for a text question — the key
+/// is always present, never omitted. The streaming (`stream=true`) branch is
+/// an SSE `text/event-stream` and is not described by this type.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AskResponse {
+    /// Transcript of the audio input, or `null` when the question was text.
+    transcript: Option<String>,
+    /// The LLM's answer to the question.
+    answer: String,
+}
+
 #[utoipa::path(
     post,
     path = "/ask",
@@ -60,7 +72,7 @@ enum AskInput {
     responses(
         (status = 200, description = "Answer. When `stream=true` the response is a \
             `text/event-stream` (SSE) of incremental `data:` chunks terminated by \
-            a final event; otherwise a single JSON answer object."),
+            a final event; otherwise a single JSON answer object.", body = AskResponse),
         (status = 400, description = "Empty or malformed body.", body = ApiErrorBody),
         (status = 415, description = "Unsupported Content-Type or media format.", body = ApiErrorBody),
         (status = 500, description = "Transcription or LLM failure.", body = ApiErrorBody),
@@ -214,7 +226,7 @@ async fn blocking_response(
             LlmError::Upstream(_) => ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()),
         })?;
 
-    Ok(Json(json!({ "transcript": transcript, "answer": answer })).into_response())
+    Ok(Json(AskResponse { transcript, answer }).into_response())
 }
 
 fn sse_event(event_type: &str, payload: serde_json::Value) -> Event {
@@ -268,4 +280,37 @@ fn stream_response(state: Arc<AppState>, q: AskQuery, input: AskInput) -> Respon
         yield Ok(sse_event("done", json!({"finish_reason": "stop"})));
     };
     Sse::new(stream).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Wire-shape guard: AskResponse must serialize byte-identically to the
+    // pre-typing `json!({ "transcript": ..., "answer": ... })` body, including
+    // emitting `transcript: null` (never omitting the key) for a text question.
+
+    #[test]
+    fn ask_response_audio_input_carries_transcript() {
+        let resp = AskResponse {
+            transcript: Some("hello world".to_string()),
+            answer: "the answer".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&resp).unwrap(),
+            json!({ "transcript": "hello world", "answer": "the answer" })
+        );
+    }
+
+    #[test]
+    fn ask_response_text_input_transcript_is_null() {
+        let resp = AskResponse {
+            transcript: None,
+            answer: "the answer".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&resp).unwrap(),
+            json!({ "transcript": null, "answer": "the answer" })
+        );
+    }
 }

@@ -378,6 +378,16 @@ pub struct TestBody {
     api_key: String,
 }
 
+/// Connectivity-test result for `POST /config/ai/test`. Wire shape is
+/// `{ "ok": bool, "error": string | null }`: `error` is always present and is
+/// `null` on success, so it is a plain `Option<String>` (emitted as `null`, not
+/// omitted) to match today's `json!()` output byte-for-byte.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct AiTestResult {
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
 /// `POST /config/ai/test` — build a transient client from the submitted body,
 /// do one minimal non-streaming `ask`, report `{ ok, error }`. Never persists.
 #[utoipa::path(
@@ -385,9 +395,9 @@ pub struct TestBody {
     path = "/config/ai/test",
     tag = "ai-config",
     request_body(content = TestBody, description = "Provider credentials/settings to test-connect against."),
-    responses((status = 200, description = "Connectivity test result `{ok, …}` (failures are reported in the body, not as a non-200 status)."))
+    responses((status = 200, description = "Connectivity test result `{ok, error}` (failures are reported in the body, not as a non-200 status).", body = AiTestResult))
 )]
-pub async fn test_config(Json(body): Json<TestBody>) -> Json<serde_json::Value> {
+pub async fn test_config(Json(body): Json<TestBody>) -> Json<AiTestResult> {
     let mut config = Config::from_env();
     config.llm_provider = Some(if body.provider == "openai" {
         "openai-compatible".into()
@@ -402,7 +412,7 @@ pub async fn test_config(Json(body): Json<TestBody>) -> Json<serde_json::Value> 
         let base = body.base_url.trim_end_matches('/');
         if !base.is_empty() {
             if let Err(e) = llm::validate_outbound_url(base).await {
-                return Json(json!({ "ok": false, "error": e }));
+                return Json(AiTestResult { ok: false, error: Some(e) });
             }
         }
         config.llm_base_url = Some(body.base_url.clone()).filter(|u| !u.is_empty());
@@ -411,7 +421,35 @@ pub async fn test_config(Json(body): Json<TestBody>) -> Json<serde_json::Value> 
     }
     let client = LlmClient::from_config(&config);
     match client.ask("ping", None).await {
-        Ok(_) => Json(json!({ "ok": true, "error": serde_json::Value::Null })),
-        Err(e) => Json(json!({ "ok": false, "error": e.to_string() })),
+        Ok(_) => Json(AiTestResult { ok: true, error: None }),
+        Err(e) => Json(AiTestResult { ok: false, error: Some(e.to_string()) }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins the `POST /config/ai/test` wire shape: `AiTestResult` must serialize
+    // byte-for-byte to the `json!()` the handler produced before it was typed.
+    #[test]
+    fn ai_test_result_success_matches_wire_shape() {
+        let got = serde_json::to_value(AiTestResult { ok: true, error: None }).unwrap();
+        // Success path emitted `{ "ok": true, "error": null }` — `error` is
+        // present as null, not omitted.
+        let expected = json!({ "ok": true, "error": serde_json::Value::Null });
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn ai_test_result_error_matches_wire_shape() {
+        let got = serde_json::to_value(AiTestResult {
+            ok: false,
+            error: Some("boom".to_string()),
+        })
+        .unwrap();
+        // Error path emitted `{ "ok": false, "error": "<message>" }`.
+        let expected = json!({ "ok": false, "error": "boom" });
+        assert_eq!(got, expected);
     }
 }

@@ -16,8 +16,7 @@ use std::sync::Arc;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 
 use crate::models::{copy_with_progress, CopyOutcome, DownloadJob};
 use crate::routes::ApiError;
@@ -88,36 +87,67 @@ fn dest_for(config: &whisper_wrap_core::Config, id: &str) -> Option<PathBuf> {
     })
 }
 
+/// One row of `GET /aux-models` — a catalogue entry plus its on-disk install
+/// state. Keys and types mirror the prior ad-hoc JSON exactly.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AuxModelEntry {
+    id: String,
+    stage: String,
+    size_bytes: u64,
+    required: bool,
+    recommended: bool,
+    installed: bool,
+}
+
+/// `GET /aux-models` success body: the fixed auxiliary-model catalogue with
+/// per-entry install state.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AuxListResponse {
+    models: Vec<AuxModelEntry>,
+}
+
 #[utoipa::path(
     get,
     path = "/aux-models",
     tag = "models",
     operation_id = "aux_models_list",
-    responses((status = 200, description = "Auxiliary (diarization + VAD) models with install state (ad-hoc JSON)."))
+    responses((status = 200, description = "Auxiliary (diarization + VAD) models with install state.", body = AuxListResponse))
 )]
-pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let models: Vec<_> = AUX_MODELS
+pub async fn list(State(state): State<Arc<AppState>>) -> Json<AuxListResponse> {
+    let models: Vec<AuxModelEntry> = AUX_MODELS
         .iter()
         .map(|m| {
             let installed = dest_for(&state.config, m.id)
                 .map(|p| p.is_file())
                 .unwrap_or(false);
-            json!({
-                "id": m.id,
-                "stage": m.stage,
-                "size_bytes": m.size_bytes,
-                "required": m.required,
-                "recommended": m.recommended,
-                "installed": installed,
-            })
+            AuxModelEntry {
+                id: m.id.to_string(),
+                stage: m.stage.to_string(),
+                size_bytes: m.size_bytes,
+                required: m.required,
+                recommended: m.recommended,
+                installed,
+            }
         })
         .collect();
-    Json(json!({ "models": models }))
+    Json(AuxListResponse { models })
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct AuxDownloadRequest {
     id: String,
+}
+
+/// `POST /aux-models/download` success body. Mirrors `models::DownloadResponse`
+/// but keyed by `id`: two states share the `id` + `status` discriminant — a
+/// `status = "done"` response carries `already_present: true`, a
+/// `status = "downloading"` response omits `already_present`.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AuxDownloadResponse {
+    id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    already_present: Option<bool>,
 }
 
 /// Start (or report an already-running) download. Returns immediately; poll
@@ -129,7 +159,7 @@ pub struct AuxDownloadRequest {
     operation_id = "aux_models_download",
     request_body(content = AuxDownloadRequest, description = "The auxiliary model id to download."),
     responses(
-        (status = 200, description = "Download started/queued (ad-hoc JSON with a progress handle)."),
+        (status = 200, description = "Download started/queued, or already present. `status = \"done\"` adds `already_present: true`; `status = \"downloading\"` omits it.", body = AuxDownloadResponse),
         (status = 404, description = "Unknown auxiliary model id.", body = crate::routes::ApiErrorBody),
         (status = 500, description = "Download setup failure.", body = crate::routes::ApiErrorBody)
     )
@@ -137,23 +167,29 @@ pub struct AuxDownloadRequest {
 pub async fn download(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AuxDownloadRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<AuxDownloadResponse>, ApiError> {
     let m = find(&req.id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("unknown aux model {}", req.id)))?;
     let dest = dest_for(&state.config, &req.id)
         .ok_or_else(|| ApiError::internal(format!("no dest for {}", req.id)))?;
 
     if dest.is_file() {
-        return Ok(Json(
-            json!({"id": req.id, "status": "done", "already_present": true}),
-        ));
+        return Ok(Json(AuxDownloadResponse {
+            id: req.id.clone(),
+            status: "done".to_string(),
+            already_present: Some(true),
+        }));
     }
 
     {
         let mut jobs = state.downloads.jobs.lock().expect("dl lock");
         if let Some(j) = jobs.get(&req.id) {
             if j.status == "downloading" {
-                return Ok(Json(json!({"id": req.id, "status": "downloading"})));
+                return Ok(Json(AuxDownloadResponse {
+                    id: req.id.clone(),
+                    status: "downloading".to_string(),
+                    already_present: None,
+                }));
             }
         }
         jobs.insert(req.id.clone(), DownloadJob::started());
@@ -164,7 +200,11 @@ pub async fn download(
     let url = m.url.to_string();
     tokio::task::spawn_blocking(move || run_aux_download(st, id, url, dest));
 
-    Ok(Json(json!({"id": req.id, "status": "downloading"})))
+    Ok(Json(AuxDownloadResponse {
+        id: req.id,
+        status: "downloading".to_string(),
+        already_present: None,
+    }))
 }
 
 fn run_aux_download(state: Arc<AppState>, id: String, url: String, dest: PathBuf) {
@@ -230,36 +270,79 @@ fn run_aux_download(state: Arc<AppState>, id: String, url: String, dest: PathBuf
     }
 }
 
+/// `GET /aux-models/download/{id}` progress body. Mirrors
+/// `models::DownloadStatusResponse` but keyed by `id`: two disjoint wire shapes
+/// → an untagged enum (utoipa emits a `oneOf`) so `installed` never mixes with
+/// the progress byte-counters.
+///
+/// - [`Installed`](Self::Installed) — weights on disk (`status = "done"`,
+///   `installed = true`) or nothing happening (`status = "idle"`,
+///   `installed = false`).
+/// - [`Progress`](Self::Progress) — a job's byte counters; `total_bytes` and
+///   `error` are emitted as `null` when unknown (never omitted).
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum AuxDownloadStatusResponse {
+    Installed {
+        id: String,
+        status: String,
+        installed: bool,
+    },
+    Progress {
+        id: String,
+        status: String,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+        error: Option<String>,
+    },
+}
+
 #[utoipa::path(
     get,
     path = "/aux-models/download/{id}",
     tag = "models",
     operation_id = "aux_models_download_status",
     params(("id" = String, Path, description = "Auxiliary model id whose download progress to read.")),
-    responses((status = 200, description = "Current download progress (ad-hoc JSON)."))
+    responses((status = 200, description = "Current download progress: an `installed` form (`status` \"done\"/\"idle\" + `installed`) or a `progress` form (byte counters).", body = AuxDownloadStatusResponse))
 )]
 pub async fn download_status(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
-) -> Json<serde_json::Value> {
+) -> Json<AuxDownloadStatusResponse> {
     // Installed-on-disk always wins (the job map is process-local).
     if dest_for(&state.config, &id)
         .map(|p| p.is_file())
         .unwrap_or(false)
     {
-        return Json(json!({"id": id, "status": "done", "installed": true}));
+        return Json(AuxDownloadStatusResponse::Installed {
+            id,
+            status: "done".to_string(),
+            installed: true,
+        });
     }
     let jobs = state.downloads.jobs.lock().expect("dl lock");
     match jobs.get(&id) {
-        Some(j) => Json(json!({
-            "id": id,
-            "status": j.status,
-            "downloaded_bytes": j.downloaded_bytes,
-            "total_bytes": j.total_bytes,
-            "error": j.error,
-        })),
-        None => Json(json!({"id": id, "status": "idle", "installed": false})),
+        Some(j) => Json(AuxDownloadStatusResponse::Progress {
+            id: id.clone(),
+            status: j.status.to_string(),
+            downloaded_bytes: j.downloaded_bytes,
+            total_bytes: j.total_bytes,
+            error: j.error.clone(),
+        }),
+        None => Json(AuxDownloadStatusResponse::Installed {
+            id,
+            status: "idle".to_string(),
+            installed: false,
+        }),
     }
+}
+
+/// `DELETE /aux-models/{id}` acknowledgement: the removed id and a constant
+/// `removed: true` flag.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AuxDeleteModelResponse {
+    id: String,
+    removed: bool,
 }
 
 /// Uninstall an aux model (delete its ONNX file from disk).
@@ -270,7 +353,7 @@ pub async fn download_status(
     operation_id = "aux_models_delete_model",
     params(("id" = String, Path, description = "Auxiliary model id to uninstall.")),
     responses(
-        (status = 200, description = "Auxiliary model weights removed (ad-hoc JSON)."),
+        (status = 200, description = "Auxiliary model weights removed.", body = AuxDeleteModelResponse),
         (status = 404, description = "Unknown auxiliary model id.", body = crate::routes::ApiErrorBody),
         (status = 500, description = "Filesystem error removing the weights.", body = crate::routes::ApiErrorBody)
     )
@@ -278,14 +361,26 @@ pub async fn download_status(
 pub async fn delete_model(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<AuxDeleteModelResponse>, ApiError> {
     let dest = dest_for(&state.config, &id)
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("unknown aux model {id}")))?;
     if dest.is_file() {
         std::fs::remove_file(&dest).map_err(ApiError::internal)?;
         log::info!("removed aux model {id} → {}", dest.display());
     }
-    Ok(Json(json!({"id": id, "removed": true})))
+    Ok(Json(AuxDeleteModelResponse {
+        id,
+        removed: true,
+    }))
+}
+
+/// `DELETE /aux-models/download/{id}` acknowledgement: the aux id and the
+/// resulting download `status` — `"cancelling"` when a live download was asked
+/// to stop, otherwise the job's current (terminal) status.
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AuxCancelDownloadResponse {
+    id: String,
+    status: String,
 }
 
 /// Cancel an in-flight aux download (mirror of models::cancel_download, keyed
@@ -297,21 +392,27 @@ pub async fn delete_model(
     operation_id = "aux_models_cancel_download",
     params(("id" = String, Path, description = "Auxiliary model id whose download to cancel.")),
     responses(
-        (status = 200, description = "Download cancelled (ad-hoc JSON)."),
+        (status = 200, description = "Download cancellation acknowledged.", body = AuxCancelDownloadResponse),
         (status = 404, description = "No active download for that auxiliary model.", body = crate::routes::ApiErrorBody)
     )
 )]
 pub async fn cancel_download(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<AuxCancelDownloadResponse>, ApiError> {
     let jobs = state.downloads.jobs.lock().expect("dl lock");
     match jobs.get(&id) {
         Some(j) if j.status == "downloading" => {
             j.cancel.store(true, Ordering::Relaxed);
-            Ok(Json(json!({"id": id, "status": "cancelling"})))
+            Ok(Json(AuxCancelDownloadResponse {
+                id: id.clone(),
+                status: "cancelling".to_string(),
+            }))
         }
-        Some(j) => Ok(Json(json!({"id": id, "status": j.status}))),
+        Some(j) => Ok(Json(AuxCancelDownloadResponse {
+            id: id.clone(),
+            status: j.status.to_string(),
+        })),
         None => Err(ApiError::new(
             StatusCode::NOT_FOUND,
             format!("no download for {id}"),
@@ -353,5 +454,160 @@ mod tests {
         assert!(find("diarize-embedding-fast").unwrap().recommended);
         assert!(!find("diarize-embedding-fast").unwrap().required);
         assert!(!find("diarize-embedding-balanced").unwrap().recommended);
+    }
+}
+
+#[cfg(test)]
+mod wire_shape_tests {
+    //! Task 1.8: each `/aux-models*` success body serializes byte-identically
+    //! to the ad-hoc `json!()` the handler produced before typing — one test
+    //! per state for the state-dependent endpoints. Keyed by `id` (vs `name`
+    //! in `models.rs`).
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn aux_list_shape() {
+        let s = AuxListResponse {
+            models: vec![AuxModelEntry {
+                id: "vad-silero".to_string(),
+                stage: "vad".to_string(),
+                size_bytes: 643_854,
+                required: false,
+                recommended: false,
+                installed: true,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "models": [{
+                    "id": "vad-silero",
+                    "stage": "vad",
+                    "size_bytes": 643_854,
+                    "required": false,
+                    "recommended": false,
+                    "installed": true
+                }]
+            })
+        );
+    }
+
+    #[test]
+    fn aux_download_already_present_state() {
+        let s = AuxDownloadResponse {
+            id: "vad-silero".to_string(),
+            status: "done".to_string(),
+            already_present: Some(true),
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"id": "vad-silero", "status": "done", "already_present": true})
+        );
+    }
+
+    #[test]
+    fn aux_download_downloading_state_omits_already_present() {
+        let s = AuxDownloadResponse {
+            id: "vad-silero".to_string(),
+            status: "downloading".to_string(),
+            already_present: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"id": "vad-silero", "status": "downloading"})
+        );
+    }
+
+    #[test]
+    fn aux_download_status_done_installed_state() {
+        let s = AuxDownloadStatusResponse::Installed {
+            id: "vad-silero".to_string(),
+            status: "done".to_string(),
+            installed: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"id": "vad-silero", "status": "done", "installed": true})
+        );
+    }
+
+    #[test]
+    fn aux_download_status_idle_state() {
+        let s = AuxDownloadStatusResponse::Installed {
+            id: "vad-silero".to_string(),
+            status: "idle".to_string(),
+            installed: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"id": "vad-silero", "status": "idle", "installed": false})
+        );
+    }
+
+    #[test]
+    fn aux_download_status_progress_state_emits_null_totals() {
+        let s = AuxDownloadStatusResponse::Progress {
+            id: "vad-silero".to_string(),
+            status: "downloading".to_string(),
+            downloaded_bytes: 2048,
+            total_bytes: None,
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "id": "vad-silero",
+                "status": "downloading",
+                "downloaded_bytes": 2048,
+                "total_bytes": null,
+                "error": null
+            })
+        );
+    }
+
+    #[test]
+    fn aux_download_status_progress_state_with_totals_and_error() {
+        let s = AuxDownloadStatusResponse::Progress {
+            id: "vad-silero".to_string(),
+            status: "error".to_string(),
+            downloaded_bytes: 2048,
+            total_bytes: Some(8192),
+            error: Some("boom".to_string()),
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "id": "vad-silero",
+                "status": "error",
+                "downloaded_bytes": 2048,
+                "total_bytes": 8192,
+                "error": "boom"
+            })
+        );
+    }
+
+    #[test]
+    fn aux_cancel_download_state() {
+        let s = AuxCancelDownloadResponse {
+            id: "vad-silero".to_string(),
+            status: "cancelling".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"id": "vad-silero", "status": "cancelling"})
+        );
+    }
+
+    #[test]
+    fn aux_delete_model_state() {
+        let s = AuxDeleteModelResponse {
+            id: "vad-silero".to_string(),
+            removed: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"id": "vad-silero", "removed": true})
+        );
     }
 }

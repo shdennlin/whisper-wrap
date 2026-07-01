@@ -123,6 +123,14 @@ pub struct RunRecord {
     pub origin: RunOrigin,
 }
 
+/// The `GET /items/{id}/runs` body: `{ "runs": RunRecord[] }`. A trivial
+/// wrapper over the run list, reusing the already-typed `RunRecord` element so
+/// the wire shape stays byte-identical to the prior `json!({ "runs": ... })`.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct ItemRunsResponse {
+    pub runs: Vec<RunRecord>,
+}
+
 /// Fields needed to open a run. `status` is the caller's starting state — the
 /// meeting pipeline opens at `Running` (D4).
 pub struct RunInsert {
@@ -424,7 +432,7 @@ pub async fn get_run(
     tag = "items",
     params(("id" = String, Path, description = "Item id.")),
     responses(
-        (status = 200, description = "All runs for the item (oldest first) as `{ \"runs\": RunRecord[] }`; an empty list when the item has no runs."),
+        (status = 200, description = "All runs for the item (oldest first) as `{ \"runs\": RunRecord[] }`; an empty list when the item has no runs.", body = ItemRunsResponse),
         (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
     )
 )]
@@ -433,7 +441,7 @@ pub async fn list_item_runs(
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     match list_unified(&state.history, &id) {
-        Ok(runs) => Json(serde_json::json!({ "runs": runs })).into_response(),
+        Ok(runs) => Json(ItemRunsResponse { runs }).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -638,6 +646,43 @@ mod tests {
             13,
             "contract has exactly 13 keys, got {:?}",
             obj.keys().collect::<Vec<_>>()
+        );
+    }
+
+    fn sample_record(id: &str) -> RunRecord {
+        RunRecord {
+            id: id.into(),
+            item_id: "i1".into(),
+            kind: RunKind::Transcribe,
+            model: None,
+            status: RunStatus::Done,
+            progress: 1.0,
+            stage: None,
+            result_ref: None,
+            error: None,
+            created_at: 100,
+            updated_at: 200,
+            result: None,
+            origin: RunOrigin::Stage,
+        }
+    }
+
+    #[test]
+    fn item_runs_response_serializes_to_wire_shape() {
+        // Pin the `GET /items/{id}/runs` body byte-for-byte against the prior
+        // `json!({ "runs": runs })`: a single `runs` key wrapping the array.
+        let response = ItemRunsResponse {
+            runs: vec![sample_record("r1"), sample_record("r2")],
+        };
+        let v = serde_json::to_value(&response).expect("serialize");
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "runs": [
+                    serde_json::to_value(sample_record("r1")).unwrap(),
+                    serde_json::to_value(sample_record("r2")).unwrap(),
+                ]
+            })
         );
     }
 }

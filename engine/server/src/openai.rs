@@ -7,12 +7,45 @@ use std::sync::Arc;
 use axum::extract::{Multipart, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
+use serde::Serialize;
 use serde_json::json;
+use utoipa::ToSchema;
 use whisper_wrap_core::postprocess::{filter_empty_transcription, FilterDecision};
 use whisper_wrap_core::subtitle::{format_srt, format_vtt};
 
 use crate::routes::decode_and_transcribe;
 use crate::state::AppState;
+
+/// A single entry in the OpenAI-compatible model list (`GET /v1/models`).
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OpenAiModel {
+    /// Model identifier (the active ASR model name).
+    pub id: String,
+    /// Object type — always `"model"`.
+    pub object: String,
+    /// Unix creation timestamp (server start time).
+    pub created: u64,
+    /// Owning organization — always `"whisper-wrap"`.
+    pub owned_by: String,
+}
+
+/// The OpenAI-compatible model listing envelope returned by `GET /v1/models`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OpenAiModelList {
+    /// Object type — always `"list"`.
+    pub object: String,
+    /// The listed models (the single active ASR model).
+    pub data: Vec<OpenAiModel>,
+}
+
+/// The default (`response_format=json`) transcription/translation body:
+/// `{ "text": string }`. Non-default formats (`text`/`srt`/`vtt`/`verbose_json`)
+/// are format-dependent and not schematized — see the operation descriptions.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct OpenAiTranscription {
+    /// The transcribed (or translated) text.
+    pub text: String,
+}
 
 const ACCEPTED_FORMATS: [&str; 5] = ["json", "text", "srt", "verbose_json", "vtt"];
 const RESERVED_ALIASES: [&str; 3] = ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"];
@@ -78,7 +111,10 @@ async fn read_fields(req: Request) -> Result<Fields, String> {
 
 fn empty_response(format: &str, task: &str, language: &str, duration: f64) -> Response {
     match format {
-        "json" => Json(json!({"text": ""})).into_response(),
+        "json" => Json(OpenAiTranscription {
+            text: String::new(),
+        })
+        .into_response(),
         "text" | "srt" => plain("", "text/plain; charset=utf-8"),
         "vtt" => plain("WEBVTT\n\n", "text/vtt; charset=utf-8"),
         _ => Json(json!({
@@ -224,7 +260,7 @@ async fn transcribe_or_translate(state: Arc<AppState>, req: Request, translate: 
                 .map(|s| (s.start, s.end, s.text.clone()))
                 .collect();
             match response_format.as_str() {
-                "json" => Json(json!({"text": text})).into_response(),
+                "json" => Json(OpenAiTranscription { text }).into_response(),
                 "text" => plain(&text, "text/plain; charset=utf-8"),
                 "srt" => plain(&format_srt(&cues), "text/plain; charset=utf-8"),
                 "vtt" => plain(&format_vtt(&cues), "text/vtt; charset=utf-8"),
@@ -256,7 +292,11 @@ async fn transcribe_or_translate(state: Arc<AppState>, req: Request, translate: 
         content = Vec<u8>
     ),
     responses(
-        (status = 200, description = "Transcription in OpenAI JSON shape (e.g. `{\"text\": …}`)."),
+        (status = 200, description = "Transcription result. The response shape varies by the \
+            `response_format` field: the default `json` returns `{\"text\": string}` (documented by \
+            the `OpenAiTranscription` schema below); `text`/`srt`/`vtt` return a `text/plain` (or \
+            `text/vtt`) body; `verbose_json` returns an extended JSON object with `segments`. The \
+            schema documents the default `json` form.", body = OpenAiTranscription),
         (status = 400, description = "Malformed request or missing `file` part."),
         (status = 413, description = "Audio exceeds the configured maximum file size."),
         (status = 415, description = "Unsupported media format."),
@@ -280,7 +320,11 @@ pub async fn transcriptions(State(state): State<Arc<AppState>>, req: Request) ->
         content = Vec<u8>
     ),
     responses(
-        (status = 200, description = "English translation in OpenAI JSON shape (e.g. `{\"text\": …}`)."),
+        (status = 200, description = "English translation result. The response shape varies by the \
+            `response_format` field: the default `json` returns `{\"text\": string}` (documented by \
+            the `OpenAiTranscription` schema below); `text`/`srt`/`vtt` return a `text/plain` (or \
+            `text/vtt`) body; `verbose_json` returns an extended JSON object with `segments`. The \
+            schema documents the default `json` form.", body = OpenAiTranscription),
         (status = 400, description = "Malformed request or missing `file` part."),
         (status = 413, description = "Audio exceeds the configured maximum file size."),
         (status = 415, description = "Unsupported media format."),
@@ -297,16 +341,73 @@ pub async fn translations(State(state): State<Arc<AppState>>, req: Request) -> R
     path = "/v1/models",
     tag = "openai-compat",
     operation_id = "openai_models",
-    responses((status = 200, description = "OpenAI-compatible model list `{object:\"list\", data:[…]}` describing the active ASR model."))
+    responses((status = 200, description = "OpenAI-compatible model list `{object:\"list\", data:[…]}` describing the active ASR model.", body = OpenAiModelList))
 )]
-pub async fn models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(json!({
-        "object": "list",
-        "data": [{
-            "id": state.model_snapshot().name,
-            "object": "model",
-            "created": state.started_unix,
-            "owned_by": "whisper-wrap",
+pub async fn models(State(state): State<Arc<AppState>>) -> Json<OpenAiModelList> {
+    Json(OpenAiModelList {
+        object: "list".to_owned(),
+        data: vec![OpenAiModel {
+            id: state.model_snapshot().name,
+            object: "model".to_owned(),
+            created: state.started_unix,
+            owned_by: "whisper-wrap".to_owned(),
         }],
-    }))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `OpenAiModelList`/`OpenAiModel` must serialize to the exact JSON the
+    /// handler emitted before typing: `{object:"list", data:[{id, object,
+    /// created, owned_by}]}`.
+    #[test]
+    fn model_list_wire_shape_is_byte_identical() {
+        let typed = OpenAiModelList {
+            object: "list".to_owned(),
+            data: vec![OpenAiModel {
+                id: "base.en".to_owned(),
+                object: "model".to_owned(),
+                created: 1_700_000_000,
+                owned_by: "whisper-wrap".to_owned(),
+            }],
+        };
+        let expected = json!({
+            "object": "list",
+            "data": [{
+                "id": "base.en",
+                "object": "model",
+                "created": 1_700_000_000u64,
+                "owned_by": "whisper-wrap",
+            }],
+        });
+        assert_eq!(serde_json::to_value(&typed).expect("serialize"), expected);
+    }
+
+    /// The default `response_format=json` body must serialize to `{"text": …}`
+    /// exactly, matching the prior `json!({"text": text})` output.
+    #[test]
+    fn transcription_wire_shape_is_byte_identical() {
+        let typed = OpenAiTranscription {
+            text: "hello world".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&typed).expect("serialize"),
+            json!({ "text": "hello world" }),
+        );
+    }
+
+    /// The empty-transcription default-json body is the same `{"text": ""}`
+    /// shape the `empty_response` helper emitted before typing.
+    #[test]
+    fn empty_transcription_wire_shape_is_byte_identical() {
+        let typed = OpenAiTranscription {
+            text: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&typed).expect("serialize"),
+            json!({ "text": "" }),
+        );
+    }
 }

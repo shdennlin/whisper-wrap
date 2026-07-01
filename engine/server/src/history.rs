@@ -14,7 +14,7 @@ use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json, Response};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -215,28 +215,142 @@ fn not_found(what: &str) -> ApiError {
     ApiError::new(StatusCode::NOT_FOUND, format!("{what} not found"))
 }
 
+// ---------- history response shapes ----------
+//
+// These structs reproduce the ad-hoc `json!()` bodies the history handlers
+// emitted before response-typing. History serialises everything in snake_case
+// on the wire (no camelCase), so no `#[serde(rename)]` is needed. Every
+// optional field uses a plain `Option<T>` WITHOUT `skip_serializing_if`,
+// because the prior `json!()` emitted an explicit `null` for a SQL NULL — the
+// key was always present. `result`/`speaker_names` on a meeting are dynamic
+// (per-kind snapshot + free-form name map) and stay `serde_json::Value`.
+
+/// One finalized transcript segment inside a session (a `finals` row). Also the
+/// standalone `201` body of `POST /v1/sessions/{id}/finals`, whose shape is
+/// exactly this row.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionFinal {
+    pub session_id: String,
+    pub ord: i64,
+    pub text: String,
+    pub start_ms: Option<i64>,
+    pub end_ms: Option<i64>,
+    pub kind: Option<String>,
+}
+
+/// One legacy `action_runs` row surfaced inside a session detail.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionActionRun {
+    pub id: i64,
+    pub session_id: String,
+    pub action_id: String,
+    pub prompt: String,
+    pub answer: String,
+    pub ran_at: i64,
+    pub model_used: Option<String>,
+    pub succeeded: bool,
+}
+
+/// Full session detail: the `sessions` row plus its `finals` and legacy
+/// `action_runs`. Returned by `get_session`, `create_session` (201),
+/// `patch_session`, and as each element of the session list.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionFull {
+    pub id: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub mode: String,
+    pub audio_path: Option<String>,
+    pub audio_mime_type: Option<String>,
+    pub audio_size_bytes: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub title: Option<String>,
+    pub starred: bool,
+    pub project: Option<String>,
+    pub category: Option<String>,
+    pub finals: Vec<SessionFinal>,
+    pub action_runs: Vec<SessionActionRun>,
+}
+
+/// Full meeting detail: the `meeting_analyses` row. `result` (per-kind diarize
+/// snapshot) and `speaker_names` (free-form id→name map) are dynamic and stay
+/// `serde_json::Value`. Returned by `get_meeting`, `create_meeting` (201),
+/// `patch_meeting`, and as each element of the meeting list.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct MeetingFull {
+    pub id: String,
+    pub created_at: i64,
+    pub filename: String,
+    pub duration_seconds: Option<f64>,
+    pub language: Option<String>,
+    pub speakers_count: Option<i64>,
+    /// Per-kind diarization result snapshot — shape varies, kept dynamic.
+    pub result: Value,
+    /// Free-form speaker id→name map — kept dynamic.
+    pub speaker_names: Value,
+    pub status: String,
+    pub audio_path: Option<String>,
+    pub audio_mime_type: Option<String>,
+    pub audio_size_bytes: Option<i64>,
+    pub title: Option<String>,
+    pub starred: bool,
+    pub project: Option<String>,
+    pub category: Option<String>,
+}
+
+/// Paged session list: `{ sessions: [...], next_before_ms: <cursor|null> }`.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionListResponse {
+    pub sessions: Vec<SessionFull>,
+    pub next_before_ms: Option<i64>,
+}
+
+/// Paged meeting list: `{ meetings: [...], next_before_ms: <cursor|null> }`.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct MeetingListResponse {
+    pub meetings: Vec<MeetingFull>,
+    pub next_before_ms: Option<i64>,
+}
+
+/// Shared body of `POST /v1/{sessions,meetings}/{id}/audio`: the stored blob's
+/// path, size, and mime. Both upload handlers emit the same three keys.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct AudioUploadResponse {
+    pub audio_path: String,
+    pub audio_size_bytes: u64,
+    pub audio_mime_type: String,
+}
+
+/// Body of `DELETE /v1/sessions/audio`: how many stored blobs were removed.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct BulkClearAudioResponse {
+    pub deleted_count: u64,
+}
+
 // ---------- sessions: row serialisation ----------
 
-fn session_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>> {
+fn session_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<SessionFull>> {
     let row = conn
         .query_row(
             "SELECT id, started_at, ended_at, mode, audio_path, audio_mime_type, audio_size_bytes, duration_ms, title, starred, project, category FROM sessions WHERE id = ?1",
             params![id],
             |r| {
-                Ok(json!({
-                    "id": r.get::<_, String>(0)?,
-                    "started_at": r.get::<_, i64>(1)?,
-                    "ended_at": r.get::<_, Option<i64>>(2)?,
-                    "mode": r.get::<_, String>(3)?,
-                    "audio_path": r.get::<_, Option<String>>(4)?,
-                    "audio_mime_type": r.get::<_, Option<String>>(5)?,
-                    "audio_size_bytes": r.get::<_, Option<i64>>(6)?,
-                    "duration_ms": r.get::<_, Option<i64>>(7)?,
-                    "title": r.get::<_, Option<String>>(8)?,
-                    "starred": r.get::<_, i64>(9)? != 0,
-                    "project": r.get::<_, Option<String>>(10)?,
-                    "category": r.get::<_, Option<String>>(11)?,
-                }))
+                Ok(SessionFull {
+                    id: r.get(0)?,
+                    started_at: r.get(1)?,
+                    ended_at: r.get(2)?,
+                    mode: r.get(3)?,
+                    audio_path: r.get(4)?,
+                    audio_mime_type: r.get(5)?,
+                    audio_size_bytes: r.get(6)?,
+                    duration_ms: r.get(7)?,
+                    title: r.get(8)?,
+                    starred: r.get::<_, i64>(9)? != 0,
+                    project: r.get(10)?,
+                    category: r.get(11)?,
+                    finals: Vec::new(),
+                    action_runs: Vec::new(),
+                })
             },
         )
         .optional()?;
@@ -245,39 +359,39 @@ fn session_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>> 
     let mut stmt = conn.prepare(
         "SELECT session_id, ord, text, start_ms, end_ms, kind FROM finals WHERE session_id = ?1 ORDER BY ord",
     )?;
-    let finals: Vec<Value> = stmt
+    let finals: Vec<SessionFinal> = stmt
         .query_map(params![id], |r| {
-            Ok(json!({
-                "session_id": r.get::<_, String>(0)?,
-                "ord": r.get::<_, i64>(1)?,
-                "text": r.get::<_, String>(2)?,
-                "start_ms": r.get::<_, Option<i64>>(3)?,
-                "end_ms": r.get::<_, Option<i64>>(4)?,
-                "kind": r.get::<_, Option<String>>(5)?,
-            }))
+            Ok(SessionFinal {
+                session_id: r.get(0)?,
+                ord: r.get(1)?,
+                text: r.get(2)?,
+                start_ms: r.get(3)?,
+                end_ms: r.get(4)?,
+                kind: r.get(5)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
 
     let mut stmt = conn.prepare(
         "SELECT id, session_id, action_id, prompt, answer, ran_at, model_used, succeeded FROM action_runs WHERE session_id = ?1 ORDER BY id",
     )?;
-    let runs: Vec<Value> = stmt
+    let runs: Vec<SessionActionRun> = stmt
         .query_map(params![id], |r| {
-            Ok(json!({
-                "id": r.get::<_, i64>(0)?,
-                "session_id": r.get::<_, String>(1)?,
-                "action_id": r.get::<_, String>(2)?,
-                "prompt": r.get::<_, String>(3)?,
-                "answer": r.get::<_, String>(4)?,
-                "ran_at": r.get::<_, i64>(5)?,
-                "model_used": r.get::<_, Option<String>>(6)?,
-                "succeeded": r.get::<_, bool>(7)?,
-            }))
+            Ok(SessionActionRun {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                action_id: r.get(2)?,
+                prompt: r.get(3)?,
+                answer: r.get(4)?,
+                ran_at: r.get(5)?,
+                model_used: r.get(6)?,
+                succeeded: r.get(7)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
 
-    row["finals"] = Value::Array(finals);
-    row["action_runs"] = Value::Array(runs);
+    row.finals = finals;
+    row.action_runs = runs;
     Ok(Some(row))
 }
 
@@ -358,14 +472,14 @@ fn default_limit() -> i64 {
     tag = "history",
     params(ListQuery),
     responses(
-        (status = 200, description = "Paged session list with item-metadata filters applied (ad-hoc JSON)."),
+        (status = 200, description = "Paged session list with item-metadata filters applied.", body = SessionListResponse),
         (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
     )
 )]
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SessionListResponse>, ApiError> {
     let limit = q.limit.clamp(1, 100);
     let ids: Vec<String> = state
         .history
@@ -375,7 +489,7 @@ pub async fn list_sessions(
     let mut last_started: Option<i64> = None;
     for id in &ids {
         if let Some(full) = state.history.with(|c| session_full(c, id))? {
-            last_started = full["started_at"].as_i64();
+            last_started = Some(full.started_at);
             sessions.push(full);
         }
     }
@@ -384,9 +498,10 @@ pub async fn list_sessions(
     } else {
         None
     };
-    Ok(Json(
-        json!({ "sessions": sessions, "next_before_ms": next }),
-    ))
+    Ok(Json(SessionListResponse {
+        sessions,
+        next_before_ms: next,
+    }))
 }
 
 #[utoipa::path(
@@ -395,14 +510,14 @@ pub async fn list_sessions(
     tag = "history",
     params(("id" = String, Path, description = "Session id.")),
     responses(
-        (status = 200, description = "The session with its items and finals (ad-hoc JSON)."),
+        (status = 200, description = "The session with its items and finals.", body = SessionFull),
         (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
     )
 )]
 pub async fn get_session(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SessionFull>, ApiError> {
     state
         .history
         .with(|c| session_full(c, &id))?
@@ -423,7 +538,7 @@ pub struct SessionCreate {
     tag = "history",
     request_body(content = SessionCreate, description = "New session metadata."),
     responses(
-        (status = 200, description = "Session created (ad-hoc JSON with the new id)."),
+        (status = 201, description = "Session created (the full new session).", body = SessionFull),
         (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
         (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
     )
@@ -529,7 +644,7 @@ pub struct SessionPatch {
     params(("id" = String, Path, description = "Session id.")),
     request_body(content = SessionPatch, description = "Partial session update (title, item metadata, …)."),
     responses(
-        (status = 200, description = "Updated session (ad-hoc JSON)."),
+        (status = 200, description = "Updated session.", body = SessionFull),
         (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
         (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
     )
@@ -538,7 +653,7 @@ pub async fn patch_session(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
     Json(body): Json<SessionPatch>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SessionFull>, ApiError> {
     // Security: audio_path is server-managed (set only by the upload
     // handler). A client-supplied value would enable arbitrary file
     // read/unlink through the audio endpoints — accept-and-ignore so
@@ -631,7 +746,7 @@ pub struct FinalIn {
     params(("id" = String, Path, description = "Session id.")),
     request_body(content = FinalIn, description = "A finalized transcript segment to append to the session."),
     responses(
-        (status = 200, description = "Segment appended."),
+        (status = 201, description = "Segment appended (the stored final segment).", body = SessionFinal),
         (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
         (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
     )
@@ -657,10 +772,14 @@ pub async fn append_final(
     state.notify_sessions_changed();
     Ok((
         StatusCode::CREATED,
-        Json(json!({
-            "session_id": id, "ord": ord, "text": body.text,
-            "start_ms": body.start_ms, "end_ms": body.end_ms, "kind": body.kind,
-        })),
+        Json(SessionFinal {
+            session_id: id,
+            ord,
+            text: body.text,
+            start_ms: body.start_ms,
+            end_ms: body.end_ms,
+            kind: body.kind,
+        }),
     )
         .into_response())
 }
@@ -692,7 +811,7 @@ fn ensure_session(state: &AppState, id: &str) -> Result<(), ApiError> {
         content = Vec<u8>
     ),
     responses(
-        (status = 200, description = "Audio stored (ad-hoc JSON)."),
+        (status = 200, description = "Audio stored.", body = AudioUploadResponse),
         (status = 400, description = "Missing or malformed upload.", body = crate::routes::ApiErrorBody),
         (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
     )
@@ -701,7 +820,7 @@ pub async fn upload_session_audio(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
     multipart: Multipart,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<AudioUploadResponse>, ApiError> {
     if !valid_fs_id(&id) {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -736,9 +855,11 @@ pub async fn upload_session_audio(
             params![id, rel, mime, body.len() as i64],
         )
     })?;
-    Ok(Json(json!({
-        "audio_path": rel, "audio_size_bytes": body.len(), "audio_mime_type": mime,
-    })))
+    Ok(Json(AudioUploadResponse {
+        audio_path: rel,
+        audio_size_bytes: body.len() as u64,
+        audio_mime_type: mime,
+    }))
 }
 
 #[utoipa::path(
@@ -774,11 +895,13 @@ pub async fn stream_session_audio(
     path = "/v1/sessions/audio",
     tag = "history",
     responses(
-        (status = 200, description = "Cleared stored audio blobs across sessions (ad-hoc JSON summary)."),
+        (status = 200, description = "Cleared stored audio blobs across sessions.", body = BulkClearAudioResponse),
         (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
     )
 )]
-pub async fn bulk_clear_audio(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+pub async fn bulk_clear_audio(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<BulkClearAudioResponse>, ApiError> {
     let paths: Vec<String> = state.history.with(|c| {
         let mut stmt = c.prepare("SELECT audio_path FROM sessions WHERE audio_path IS NOT NULL")?;
         let rows = stmt
@@ -790,14 +913,16 @@ pub async fn bulk_clear_audio(State(state): State<Arc<AppState>>) -> Result<Json
         )?;
         Ok(rows)
     })?;
-    let mut count = 0;
+    let mut count: u64 = 0;
     let audio_dir = state.config.audio_dir();
     for p in paths {
         if audio_path_in_dir(&p, &audio_dir) && std::fs::remove_file(&p).is_ok() {
             count += 1;
         }
     }
-    Ok(Json(json!({ "deleted_count": count })))
+    Ok(Json(BulkClearAudioResponse {
+        deleted_count: count,
+    }))
 }
 
 fn serve_audio(
@@ -865,29 +990,30 @@ async fn read_file_field(mut multipart: Multipart) -> Result<(Vec<u8>, String), 
 
 // ---------- meetings ----------
 
-fn meeting_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>> {
+fn meeting_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<MeetingFull>> {
     conn.query_row(
         "SELECT id, created_at, filename, duration_seconds, language, speakers_count, result_json, speaker_names_json, status, audio_path, audio_mime_type, audio_size_bytes, title, starred, project, category FROM meeting_analyses WHERE id = ?1",
         params![id],
         |r| {
-            Ok(json!({
-                "id": r.get::<_, String>(0)?,
-                "created_at": r.get::<_, i64>(1)?,
-                "filename": r.get::<_, String>(2)?,
-                "duration_seconds": r.get::<_, Option<f64>>(3)?,
-                "language": r.get::<_, Option<String>>(4)?,
-                "speakers_count": r.get::<_, Option<i64>>(5)?,
-                "result": serde_json::from_str::<Value>(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
-                "speaker_names": serde_json::from_str::<Value>(&r.get::<_, String>(7)?).unwrap_or(json!({})),
-                "status": r.get::<_, String>(8)?,
-                "audio_path": r.get::<_, Option<String>>(9)?,
-                "audio_mime_type": r.get::<_, Option<String>>(10)?,
-                "audio_size_bytes": r.get::<_, Option<i64>>(11)?,
-                "title": r.get::<_, Option<String>>(12)?,
-                "starred": r.get::<_, i64>(13)? != 0,
-                "project": r.get::<_, Option<String>>(14)?,
-                "category": r.get::<_, Option<String>>(15)?,
-            }))
+            Ok(MeetingFull {
+                id: r.get(0)?,
+                created_at: r.get(1)?,
+                filename: r.get(2)?,
+                duration_seconds: r.get(3)?,
+                language: r.get(4)?,
+                speakers_count: r.get(5)?,
+                result: serde_json::from_str::<Value>(&r.get::<_, String>(6)?).unwrap_or(Value::Null),
+                speaker_names: serde_json::from_str::<Value>(&r.get::<_, String>(7)?)
+                    .unwrap_or(json!({})),
+                status: r.get(8)?,
+                audio_path: r.get(9)?,
+                audio_mime_type: r.get(10)?,
+                audio_size_bytes: r.get(11)?,
+                title: r.get(12)?,
+                starred: r.get::<_, i64>(13)? != 0,
+                project: r.get(14)?,
+                category: r.get(15)?,
+            })
         },
     )
     .optional()
@@ -899,14 +1025,14 @@ fn meeting_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>> 
     tag = "history",
     params(ListQuery),
     responses(
-        (status = 200, description = "Paged meeting list with item-metadata filters applied (ad-hoc JSON)."),
+        (status = 200, description = "Paged meeting list with item-metadata filters applied.", body = MeetingListResponse),
         (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
     )
 )]
 pub async fn list_meetings(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<MeetingListResponse>, ApiError> {
     let limit = q.limit.clamp(1, 100);
     let ids: Vec<String> = state
         .history
@@ -915,7 +1041,7 @@ pub async fn list_meetings(
     let mut last: Option<i64> = None;
     for id in &ids {
         if let Some(m) = state.history.with(|c| meeting_full(c, id))? {
-            last = m["created_at"].as_i64();
+            last = Some(m.created_at);
             meetings.push(m);
         }
     }
@@ -924,9 +1050,10 @@ pub async fn list_meetings(
     } else {
         None
     };
-    Ok(Json(
-        json!({ "meetings": meetings, "next_before_ms": next }),
-    ))
+    Ok(Json(MeetingListResponse {
+        meetings,
+        next_before_ms: next,
+    }))
 }
 
 #[utoipa::path(
@@ -935,14 +1062,14 @@ pub async fn list_meetings(
     tag = "history",
     params(("id" = String, Path, description = "Meeting id.")),
     responses(
-        (status = 200, description = "The meeting with its items (ad-hoc JSON)."),
+        (status = 200, description = "The meeting with its items.", body = MeetingFull),
         (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
     )
 )]
 pub async fn get_meeting(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<MeetingFull>, ApiError> {
     state
         .history
         .with(|c| meeting_full(c, &id))?
@@ -1000,7 +1127,7 @@ pub fn insert_meeting(db: &HistoryDb, m: &MeetingCreate) -> Result<(), ApiError>
     tag = "history",
     request_body(content = MeetingCreate, description = "New meeting metadata."),
     responses(
-        (status = 200, description = "Meeting created (ad-hoc JSON with the new id)."),
+        (status = 201, description = "Meeting created (the full new meeting).", body = MeetingFull),
         (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
         (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
     )
@@ -1057,7 +1184,7 @@ pub struct MeetingPatch {
     params(("id" = String, Path, description = "Meeting id.")),
     request_body(content = MeetingPatch, description = "Partial meeting update (title, item metadata, …)."),
     responses(
-        (status = 200, description = "Updated meeting (ad-hoc JSON)."),
+        (status = 200, description = "Updated meeting.", body = MeetingFull),
         (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
         (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
     )
@@ -1066,7 +1193,7 @@ pub async fn patch_meeting(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
     Json(body): Json<MeetingPatch>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<MeetingFull>, ApiError> {
     if body.speaker_names.is_none()
         && body.filename.is_none()
         && body.title.is_none()
@@ -1157,7 +1284,7 @@ pub async fn delete_meeting(
         content = Vec<u8>
     ),
     responses(
-        (status = 200, description = "Audio stored (ad-hoc JSON)."),
+        (status = 200, description = "Audio stored.", body = AudioUploadResponse),
         (status = 400, description = "Missing or malformed upload.", body = crate::routes::ApiErrorBody),
         (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
     )
@@ -1166,7 +1293,7 @@ pub async fn upload_meeting_audio(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
     multipart: Multipart,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<AudioUploadResponse>, ApiError> {
     if !valid_meeting_id(&id) {
         // v2 returns 400 here (path-level re-validation), not 422.
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "invalid meeting id"));
@@ -1223,9 +1350,11 @@ pub async fn upload_meeting_audio(
             params![id, rel, mime, body.len() as i64],
         )
     })?;
-    Ok(Json(json!({
-        "audio_path": rel, "audio_mime_type": mime, "audio_size_bytes": body.len(),
-    })))
+    Ok(Json(AudioUploadResponse {
+        audio_path: rel,
+        audio_mime_type: mime,
+        audio_size_bytes: body.len() as u64,
+    }))
 }
 
 #[utoipa::path(
@@ -1254,6 +1383,289 @@ pub async fn stream_meeting_audio(
         })?
         .ok_or_else(|| not_found("meeting"))?;
     serve_audio(path, mime, &state.config.audio_dir())
+}
+
+#[cfg(test)]
+mod wire_shape_tests {
+    //! Task 1.9: each typed history response struct SHALL serialize to the
+    //! exact JSON its handler produced before response-typing. Equality is by
+    //! `serde_json::Value`, so key order is irrelevant but shape, casing (all
+    //! snake_case here), numeric types, and — critically — the omit-vs-null
+    //! choice for optionals are pinned. Every optional field emits an explicit
+    //! `null` (plain `Option<T>`, no `skip_serializing_if`), matching the prior
+    //! `json!()` output.
+    use super::*;
+    use serde_json::to_value;
+
+    fn sample_final() -> SessionFinal {
+        SessionFinal {
+            session_id: "s1".into(),
+            ord: 0,
+            text: "hello".into(),
+            start_ms: Some(10),
+            end_ms: Some(20),
+            kind: Some("final".into()),
+        }
+    }
+
+    #[test]
+    fn session_final_matches_prior_json() {
+        // With optionals present.
+        assert_eq!(
+            to_value(sample_final()).unwrap(),
+            json!({
+                "session_id": "s1", "ord": 0, "text": "hello",
+                "start_ms": 10, "end_ms": 20, "kind": "final",
+            })
+        );
+        // With optionals absent → explicit nulls (append_final on a bare final).
+        let bare = SessionFinal {
+            session_id: "s1".into(),
+            ord: 3,
+            text: "x".into(),
+            start_ms: None,
+            end_ms: None,
+            kind: None,
+        };
+        assert_eq!(
+            to_value(bare).unwrap(),
+            json!({
+                "session_id": "s1", "ord": 3, "text": "x",
+                "start_ms": null, "end_ms": null, "kind": null,
+            })
+        );
+    }
+
+    #[test]
+    fn session_action_run_matches_prior_json() {
+        let run = SessionActionRun {
+            id: 7,
+            session_id: "s1".into(),
+            action_id: "summarize".into(),
+            prompt: "p".into(),
+            answer: "a".into(),
+            ran_at: 1234,
+            model_used: None,
+            succeeded: true,
+        };
+        assert_eq!(
+            to_value(run).unwrap(),
+            json!({
+                "id": 7, "session_id": "s1", "action_id": "summarize",
+                "prompt": "p", "answer": "a", "ran_at": 1234,
+                "model_used": null, "succeeded": true,
+            })
+        );
+    }
+
+    fn full_session() -> SessionFull {
+        SessionFull {
+            id: "s1".into(),
+            started_at: 1000,
+            ended_at: Some(2000),
+            mode: "batch".into(),
+            audio_path: Some("/a/s1.webm".into()),
+            audio_mime_type: Some("audio/webm".into()),
+            audio_size_bytes: Some(42),
+            duration_ms: Some(1000),
+            title: Some("t".into()),
+            starred: true,
+            project: Some("proj".into()),
+            category: Some("cat".into()),
+            finals: vec![sample_final()],
+            action_runs: vec![],
+        }
+    }
+
+    #[test]
+    fn session_full_with_all_fields_matches_prior_json() {
+        assert_eq!(
+            to_value(full_session()).unwrap(),
+            json!({
+                "id": "s1", "started_at": 1000, "ended_at": 2000, "mode": "batch",
+                "audio_path": "/a/s1.webm", "audio_mime_type": "audio/webm",
+                "audio_size_bytes": 42, "duration_ms": 1000,
+                "title": "t", "starred": true, "project": "proj", "category": "cat",
+                "finals": [{
+                    "session_id": "s1", "ord": 0, "text": "hello",
+                    "start_ms": 10, "end_ms": 20, "kind": "final",
+                }],
+                "action_runs": [],
+            })
+        );
+    }
+
+    #[test]
+    fn session_full_with_null_optionals_matches_prior_json() {
+        // A fresh session (create_session): every nullable column is NULL and
+        // is emitted as an explicit `null`, with empty finals/action_runs.
+        let s = SessionFull {
+            id: "s2".into(),
+            started_at: 500,
+            ended_at: None,
+            mode: "live".into(),
+            audio_path: None,
+            audio_mime_type: None,
+            audio_size_bytes: None,
+            duration_ms: None,
+            title: None,
+            starred: false,
+            project: None,
+            category: None,
+            finals: vec![],
+            action_runs: vec![],
+        };
+        assert_eq!(
+            to_value(s).unwrap(),
+            json!({
+                "id": "s2", "started_at": 500, "ended_at": null, "mode": "live",
+                "audio_path": null, "audio_mime_type": null,
+                "audio_size_bytes": null, "duration_ms": null,
+                "title": null, "starred": false, "project": null, "category": null,
+                "finals": [], "action_runs": [],
+            })
+        );
+    }
+
+    #[test]
+    fn session_list_response_matches_prior_json() {
+        // Non-terminal page carries a cursor.
+        assert_eq!(
+            to_value(SessionListResponse {
+                sessions: vec![full_session()],
+                next_before_ms: Some(1000),
+            })
+            .unwrap(),
+            json!({ "sessions": [to_value(full_session()).unwrap()], "next_before_ms": 1000 })
+        );
+        // Terminal page: cursor is emitted as explicit null.
+        assert_eq!(
+            to_value(SessionListResponse {
+                sessions: vec![],
+                next_before_ms: None,
+            })
+            .unwrap(),
+            json!({ "sessions": [], "next_before_ms": null })
+        );
+    }
+
+    fn full_meeting() -> MeetingFull {
+        MeetingFull {
+            id: "m1".into(),
+            created_at: 1000,
+            filename: "m.wav".into(),
+            duration_seconds: Some(12.5),
+            language: Some("en".into()),
+            speakers_count: Some(2),
+            result: json!({"segments": []}),
+            speaker_names: json!({"0": "Alice"}),
+            status: "done".into(),
+            audio_path: Some("/a/meeting-m1.wav".into()),
+            audio_mime_type: Some("audio/wav".into()),
+            audio_size_bytes: Some(99),
+            title: Some("t".into()),
+            starred: true,
+            project: Some("p".into()),
+            category: Some("c".into()),
+        }
+    }
+
+    #[test]
+    fn meeting_full_with_all_fields_matches_prior_json() {
+        assert_eq!(
+            to_value(full_meeting()).unwrap(),
+            json!({
+                "id": "m1", "created_at": 1000, "filename": "m.wav",
+                "duration_seconds": 12.5, "language": "en", "speakers_count": 2,
+                "result": {"segments": []}, "speaker_names": {"0": "Alice"},
+                "status": "done",
+                "audio_path": "/a/meeting-m1.wav", "audio_mime_type": "audio/wav",
+                "audio_size_bytes": 99,
+                "title": "t", "starred": true, "project": "p", "category": "c",
+            })
+        );
+    }
+
+    #[test]
+    fn meeting_full_with_null_optionals_matches_prior_json() {
+        // A just-created meeting: result Null, speaker_names default {}, and
+        // every nullable column emitted as explicit null.
+        let m = MeetingFull {
+            id: "m2".into(),
+            created_at: 500,
+            filename: "x.wav".into(),
+            duration_seconds: None,
+            language: None,
+            speakers_count: None,
+            result: Value::Null,
+            speaker_names: json!({}),
+            status: "done".into(),
+            audio_path: None,
+            audio_mime_type: None,
+            audio_size_bytes: None,
+            title: None,
+            starred: false,
+            project: None,
+            category: None,
+        };
+        assert_eq!(
+            to_value(m).unwrap(),
+            json!({
+                "id": "m2", "created_at": 500, "filename": "x.wav",
+                "duration_seconds": null, "language": null, "speakers_count": null,
+                "result": null, "speaker_names": {},
+                "status": "done",
+                "audio_path": null, "audio_mime_type": null, "audio_size_bytes": null,
+                "title": null, "starred": false, "project": null, "category": null,
+            })
+        );
+    }
+
+    #[test]
+    fn meeting_list_response_matches_prior_json() {
+        assert_eq!(
+            to_value(MeetingListResponse {
+                meetings: vec![],
+                next_before_ms: None,
+            })
+            .unwrap(),
+            json!({ "meetings": [], "next_before_ms": null })
+        );
+        assert_eq!(
+            to_value(MeetingListResponse {
+                meetings: vec![full_meeting()],
+                next_before_ms: Some(1000),
+            })
+            .unwrap(),
+            json!({ "meetings": [to_value(full_meeting()).unwrap()], "next_before_ms": 1000 })
+        );
+    }
+
+    #[test]
+    fn audio_upload_response_matches_prior_json() {
+        // Both upload handlers emit these three keys (order-independent).
+        assert_eq!(
+            to_value(AudioUploadResponse {
+                audio_path: "/a/s1.webm".into(),
+                audio_size_bytes: 1234,
+                audio_mime_type: "audio/webm".into(),
+            })
+            .unwrap(),
+            json!({
+                "audio_path": "/a/s1.webm",
+                "audio_size_bytes": 1234,
+                "audio_mime_type": "audio/webm",
+            })
+        );
+    }
+
+    #[test]
+    fn bulk_clear_audio_response_matches_prior_json() {
+        assert_eq!(
+            to_value(BulkClearAudioResponse { deleted_count: 3 }).unwrap(),
+            json!({ "deleted_count": 3 })
+        );
+    }
 }
 
 #[cfg(test)]

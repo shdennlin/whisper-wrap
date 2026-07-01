@@ -18,7 +18,14 @@
         "operationId": "discovery",
         "responses": {
           "200": {
-            "description": "API discovery document — a hand-maintained list of top-level routes (ad-hoc JSON). Token-exempt."
+            "description": "API discovery document — a hand-maintained list of top-level routes. Token-exempt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -34,7 +41,14 @@
         "operationId": "actions",
         "responses": {
           "200": {
-            "description": "The prompt-action registry (categories + actions) as ad-hoc JSON."
+            "description": "The prompt-action registry (categories + actions).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionsResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -106,7 +120,14 @@
         },
         "responses": {
           "200": {
-            "description": "Answer. When `stream=true` the response is a `text/event-stream` (SSE) of incremental `data:` chunks terminated by a final event; otherwise a single JSON answer object."
+            "description": "Answer. When `stream=true` the response is a `text/event-stream` (SSE) of incremental `data:` chunks terminated by a final event; otherwise a single JSON answer object.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AskResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Empty or malformed body.",
@@ -159,7 +180,14 @@
         "operationId": "aux_models_list",
         "responses": {
           "200": {
-            "description": "Auxiliary (diarization + VAD) models with install state (ad-hoc JSON)."
+            "description": "Auxiliary (diarization + VAD) models with install state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuxListResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -184,7 +212,14 @@
         },
         "responses": {
           "200": {
-            "description": "Download started/queued (ad-hoc JSON with a progress handle)."
+            "description": "Download started/queued, or already present. `status = \"done\"` adds `already_present: true`; `status = \"downloading\"` omits it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuxDownloadResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown auxiliary model id.",
@@ -228,7 +263,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Current download progress (ad-hoc JSON)."
+            "description": "Current download progress: an `installed` form (`status` \"done\"/\"idle\" + `installed`) or a `progress` form (byte counters).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuxDownloadStatusResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -251,7 +293,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Download cancelled (ad-hoc JSON)."
+            "description": "Download cancellation acknowledged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuxCancelDownloadResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "No active download for that auxiliary model.",
@@ -286,7 +335,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Auxiliary model weights removed (ad-hoc JSON)."
+            "description": "Auxiliary model weights removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuxDeleteModelResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown auxiliary model id.",
@@ -432,7 +488,14 @@
         },
         "responses": {
           "200": {
-            "description": "Connectivity test result `{ok, …}` (failures are reported in the body, not as a non-200 status)."
+            "description": "Connectivity test result `{ok, error}` (failures are reported in the body, not as a non-200 status).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiTestResult"
+                }
+              }
+            }
           }
         }
       }
@@ -476,7 +539,14 @@
         },
         "responses": {
           "202": {
-            "description": "AI run accepted."
+            "description": "AI run accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
           },
           "404": {
             "description": "No item for that id.",
@@ -522,7 +592,14 @@
         ],
         "responses": {
           "202": {
-            "description": "Diarization run accepted."
+            "description": "Diarization run accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid quality tier."
@@ -563,7 +640,14 @@
         ],
         "responses": {
           "200": {
-            "description": "All runs for the item (oldest first) as `{ \"runs\": RunRecord[] }`; an empty list when the item has no runs."
+            "description": "All runs for the item (oldest first) as `{ \"runs\": RunRecord[] }`; an empty list when the item has no runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemRunsResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "History store error.",
@@ -606,7 +690,14 @@
         ],
         "responses": {
           "202": {
-            "description": "Transcription run accepted — returns the run descriptor; poll `GET /runs/{id}`."
+            "description": "Transcription run accepted — returns the run descriptor; poll `GET /runs/{id}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
           },
           "404": {
             "description": "No item or stored audio for that id.",
@@ -646,7 +737,14 @@
         "operationId": "list",
         "responses": {
           "200": {
-            "description": "Installed + registered ASR models with active/loaded state (ad-hoc JSON)."
+            "description": "Installed + registered ASR models with active/loaded state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsListResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "Registry read error.",
@@ -680,7 +778,14 @@
         },
         "responses": {
           "200": {
-            "description": "Model activated (ad-hoc JSON status)."
+            "description": "Model activated (or a no-op when already active + loaded).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetActiveResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown model name.",
@@ -735,7 +840,14 @@
         },
         "responses": {
           "200": {
-            "description": "Download started/queued (ad-hoc JSON with a progress handle)."
+            "description": "Download started/queued, or already present. `status = \"done\"` adds `already_present: true`; `status = \"downloading\"` omits it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown model name.",
@@ -789,7 +901,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Current download progress (ad-hoc JSON)."
+            "description": "Current download progress: an `installed` form (`status` \"done\"/\"idle\" + `installed`) or a `progress` form (byte counters).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadStatusResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "No active download for that model.",
@@ -822,7 +941,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Download cancelled (ad-hoc JSON)."
+            "description": "Download cancellation acknowledged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelDownloadResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "No active download for that model.",
@@ -857,7 +983,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Model weights removed (ad-hoc JSON)."
+            "description": "Model weights removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteModelResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Unknown model name.",
@@ -942,7 +1075,14 @@
         "operationId": "status",
         "responses": {
           "200": {
-            "description": "Engine health + active-model snapshot (ad-hoc JSON). Token-exempt."
+            "description": "Engine health + active-model snapshot. Token-exempt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1009,7 +1149,14 @@
         },
         "responses": {
           "200": {
-            "description": "Transcription result — text plus timing/metadata (ad-hoc JSON object)."
+            "description": "Transcription result — text plus timing/metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscribeResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Empty or unreadable audio body, or missing multipart `file` field.",
@@ -1116,7 +1263,14 @@
         },
         "responses": {
           "202": {
-            "description": "Job accepted — returns a job descriptor `{id, status, …}`; poll `GET /transcribe/meeting/{id}` for progress."
+            "description": "Job accepted — returns a job descriptor; poll `GET /transcribe/meeting/{id}` for progress.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid quality tier or malformed upload (ad-hoc `{detail:{error,reason}}` body)."
@@ -1149,7 +1303,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Current job status and, when finished, the result (ad-hoc JSON)."
+            "description": "Current job status and, when finished, the result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PollResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "No job with that id."
@@ -1174,7 +1335,14 @@
         ],
         "responses": {
           "202": {
-            "description": "Cancellation requested for an in-flight job."
+            "description": "Cancellation requested for an in-flight job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "No job with that id."
@@ -1209,7 +1377,14 @@
         },
         "responses": {
           "200": {
-            "description": "Transcription in OpenAI JSON shape (e.g. `{\"text\": …}`)."
+            "description": "Transcription result. The response shape varies by the `response_format` field: the default `json` returns `{\"text\": string}` (documented by the `OpenAiTranscription` schema below); `text`/`srt`/`vtt` return a `text/plain` (or `text/vtt`) body; `verbose_json` returns an extended JSON object with `segments`. The schema documents the default `json` form.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiTranscription"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed request or missing `file` part."
@@ -1253,7 +1428,14 @@
         },
         "responses": {
           "200": {
-            "description": "English translation in OpenAI JSON shape (e.g. `{\"text\": …}`)."
+            "description": "English translation result. The response shape varies by the `response_format` field: the default `json` returns `{\"text\": string}` (documented by the `OpenAiTranscription` schema below); `text`/`srt`/`vtt` return a `text/plain` (or `text/vtt`) body; `verbose_json` returns an extended JSON object with `segments`. The schema documents the default `json` form.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiTranscription"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed request or missing `file` part."
@@ -1325,7 +1507,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Paged meeting list with item-metadata filters applied (ad-hoc JSON)."
+            "description": "Paged meeting list with item-metadata filters applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingListResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "History store error.",
@@ -1356,8 +1545,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "Meeting created (ad-hoc JSON with the new id)."
+          "201": {
+            "description": "Meeting created (the full new meeting).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingFull"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed body.",
@@ -1401,7 +1597,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The meeting with its items (ad-hoc JSON)."
+            "description": "The meeting with its items.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingFull"
+                }
+              }
+            }
           },
           "404": {
             "description": "No meeting with that id.",
@@ -1476,7 +1679,14 @@
         },
         "responses": {
           "200": {
-            "description": "Updated meeting (ad-hoc JSON)."
+            "description": "Updated meeting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeetingFull"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed body.",
@@ -1571,7 +1781,14 @@
         },
         "responses": {
           "200": {
-            "description": "Audio stored (ad-hoc JSON)."
+            "description": "Audio stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioUploadResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Missing or malformed upload.",
@@ -1604,7 +1821,14 @@
         "operationId": "openai_models",
         "responses": {
           "200": {
-            "description": "OpenAI-compatible model list `{object:\"list\", data:[…]}` describing the active ASR model."
+            "description": "OpenAI-compatible model list `{object:\"list\", data:[…]}` describing the active ASR model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiModelList"
+                }
+              }
+            }
           }
         }
       }
@@ -1661,7 +1885,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Paged session list with item-metadata filters applied (ad-hoc JSON)."
+            "description": "Paged session list with item-metadata filters applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "History store error.",
@@ -1692,8 +1923,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "Session created (ad-hoc JSON with the new id)."
+          "201": {
+            "description": "Session created (the full new session).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFull"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed body.",
@@ -1726,7 +1964,14 @@
         "operationId": "bulk_clear_audio",
         "responses": {
           "200": {
-            "description": "Cleared stored audio blobs across sessions (ad-hoc JSON summary)."
+            "description": "Cleared stored audio blobs across sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkClearAudioResponse"
+                }
+              }
+            }
           },
           "500": {
             "description": "History store error.",
@@ -1778,7 +2023,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The session with its items and finals (ad-hoc JSON)."
+            "description": "The session with its items and finals.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFull"
+                }
+              }
+            }
           },
           "404": {
             "description": "No session with that id.",
@@ -1853,7 +2105,14 @@
         },
         "responses": {
           "200": {
-            "description": "Updated session (ad-hoc JSON)."
+            "description": "Updated session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFull"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed body.",
@@ -1948,7 +2207,14 @@
         },
         "responses": {
           "200": {
-            "description": "Audio stored (ad-hoc JSON)."
+            "description": "Audio stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioUploadResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "Missing or malformed upload.",
@@ -2002,8 +2268,15 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "Segment appended."
+          "201": {
+            "description": "Segment appended (the stored final segment).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionFinal"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed body.",
@@ -2031,6 +2304,24 @@
   },
   "components": {
     "schemas": {
+      "ActionsResponse": {
+        "type": "object",
+        "description": "Success body of `GET /actions` — the prompt-action registry.\n\n`actions` and `categories` are kept as `Vec<serde_json::Value>` because\ntheir element types (`whisper_wrap_core::actions::Action` / `Category`)\nimplement `Serialize` but not `ToSchema` and live in the core crate; typing\nthem here would require touching core, so the element shape is preserved\nwithout over-typing.",
+        "required": [
+          "actions",
+          "categories"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {}
+          },
+          "categories": {
+            "type": "array",
+            "items": {}
+          }
+        }
+      },
       "AiBody": {
         "type": "object",
         "required": [
@@ -2101,6 +2392,24 @@
           }
         }
       },
+      "AiTestResult": {
+        "type": "object",
+        "description": "Connectivity-test result for `POST /config/ai/test`. Wire shape is\n`{ \"ok\": bool, \"error\": string | null }`: `error` is always present and is\n`null` on success, so it is a plain `Option<String>` (emitted as `null`, not\nomitted) to match today's `json!()` output byte-for-byte.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "ApiErrorBody": {
         "type": "object",
         "description": "The `{ \"detail\": string }` body every [`ApiError`] serializes to. `ApiError`\nitself is private and only implements `IntoResponse`, so it cannot derive\n`ToSchema`; this is the single reusable schema every fallible operation\nreferences for its non-200 error responses (rather than re-inlining the\nshape per handler).",
@@ -2115,6 +2424,80 @@
           }
         }
       },
+      "AskResponse": {
+        "type": "object",
+        "description": "Non-streaming answer body of `POST /ask` (`stream=false`). `transcript`\nis the STT text for audio input and `null` for a text question — the key\nis always present, never omitted. The streaming (`stream=true`) branch is\nan SSE `text/event-stream` and is not described by this type.",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "The LLM's answer to the question."
+          },
+          "transcript": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Transcript of the audio input, or `null` when the question was text."
+          }
+        }
+      },
+      "AudioUploadResponse": {
+        "type": "object",
+        "description": "Shared body of `POST /v1/{sessions,meetings}/{id}/audio`: the stored blob's\npath, size, and mime. Both upload handlers emit the same three keys.",
+        "required": [
+          "audio_path",
+          "audio_size_bytes",
+          "audio_mime_type"
+        ],
+        "properties": {
+          "audio_mime_type": {
+            "type": "string"
+          },
+          "audio_path": {
+            "type": "string"
+          },
+          "audio_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "AuxCancelDownloadResponse": {
+        "type": "object",
+        "description": "`DELETE /aux-models/download/{id}` acknowledgement: the aux id and the\nresulting download `status` — `\"cancelling\"` when a live download was asked\nto stop, otherwise the job's current (terminal) status.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AuxDeleteModelResponse": {
+        "type": "object",
+        "description": "`DELETE /aux-models/{id}` acknowledgement: the removed id and a constant\n`removed: true` flag.",
+        "required": [
+          "id",
+          "removed"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        }
+      },
       "AuxDownloadRequest": {
         "type": "object",
         "required": [
@@ -2126,6 +2509,220 @@
           }
         }
       },
+      "AuxDownloadResponse": {
+        "type": "object",
+        "description": "`POST /aux-models/download` success body. Mirrors `models::DownloadResponse`\nbut keyed by `id`: two states share the `id` + `status` discriminant — a\n`status = \"done\"` response carries `already_present: true`, a\n`status = \"downloading\"` response omits `already_present`.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "already_present": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AuxDownloadStatusResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "status",
+              "installed"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "installed": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "status",
+              "downloaded_bytes"
+            ],
+            "properties": {
+              "downloaded_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "total_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "`GET /aux-models/download/{id}` progress body. Mirrors\n`models::DownloadStatusResponse` but keyed by `id`: two disjoint wire shapes\n→ an untagged enum (utoipa emits a `oneOf`) so `installed` never mixes with\nthe progress byte-counters.\n\n- [`Installed`](Self::Installed) — weights on disk (`status = \"done\"`,\n  `installed = true`) or nothing happening (`status = \"idle\"`,\n  `installed = false`).\n- [`Progress`](Self::Progress) — a job's byte counters; `total_bytes` and\n  `error` are emitted as `null` when unknown (never omitted)."
+      },
+      "AuxListResponse": {
+        "type": "object",
+        "description": "`GET /aux-models` success body: the fixed auxiliary-model catalogue with\nper-entry install state.",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuxModelEntry"
+            }
+          }
+        }
+      },
+      "AuxModelEntry": {
+        "type": "object",
+        "description": "One row of `GET /aux-models` — a catalogue entry plus its on-disk install\nstate. Keys and types mirror the prior ad-hoc JSON exactly.",
+        "required": [
+          "id",
+          "stage",
+          "size_bytes",
+          "required",
+          "recommended",
+          "installed"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stage": {
+            "type": "string"
+          }
+        }
+      },
+      "BulkClearAudioResponse": {
+        "type": "object",
+        "description": "Body of `DELETE /v1/sessions/audio`: how many stored blobs were removed.",
+        "required": [
+          "deleted_count"
+        ],
+        "properties": {
+          "deleted_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "CancelDownloadResponse": {
+        "type": "object",
+        "description": "`DELETE /models/download/{name}` acknowledgement: the model name and the\nresulting download `status` — `\"cancelling\"` when a live download was asked\nto stop, otherwise the job's current (terminal) status.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "CancelResponse": {
+        "type": "object",
+        "description": "202 acknowledgement returned by `DELETE /transcribe/meeting/{id}`.",
+        "required": [
+          "job_id",
+          "status",
+          "note"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Id of the job whose cancellation was requested."
+          },
+          "note": {
+            "type": "string",
+            "description": "Advisory note about cancellation latency."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always `\"cancel_requested\"`."
+          }
+        }
+      },
+      "DeleteModelResponse": {
+        "type": "object",
+        "description": "`DELETE /models/{name}` acknowledgement: the removed model name and a\nconstant `removed: true` flag.",
+        "required": [
+          "name",
+          "removed"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DiscoveryResponse": {
+        "type": "object",
+        "description": "Success body of `GET /` — the hand-maintained API discovery document.\n\nThe wire shape is an object `{ \"endpoints\": [...] }`, so this is typed as a\nnamed object with an `endpoints` array property (NOT a top-level array — the\nlive handler wraps the list under `endpoints`, and the wire shape is\npreserved byte-for-byte).",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EndpointDescriptor"
+            }
+          }
+        }
+      },
       "DownloadRequest": {
         "type": "object",
         "required": [
@@ -2133,6 +2730,107 @@
         ],
         "properties": {
           "name": {
+            "type": "string"
+          }
+        }
+      },
+      "DownloadResponse": {
+        "type": "object",
+        "description": "`POST /models/download` success body. Two states share the `name` + `status`\ndiscriminant: a `status = \"done\"` response carries `already_present: true`\n(weights already on disk, nothing queued); a `status = \"downloading\"`\nresponse omits `already_present`. `already_present` is emitted **only** in\nthe done state, exactly as the prior ad-hoc JSON did.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "already_present": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "DownloadStatusResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "status",
+              "installed"
+            ],
+            "properties": {
+              "installed": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "status",
+              "downloaded_bytes"
+            ],
+            "properties": {
+              "downloaded_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "total_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "`GET /models/download/{name}` progress body. Two genuinely-disjoint wire\nshapes → an untagged enum (utoipa emits a `oneOf`), so the schema can never\nmix the `installed` flag with the progress byte-counters:\n\n- [`Installed`](Self::Installed) — no live job drives progress: either the\n  weights are on disk (`status = \"done\"`, `installed = true`) or nothing is\n  happening (`status = \"idle\"`, `installed = false`).\n- [`Progress`](Self::Progress) — a live or terminal job's counters;\n  `total_bytes` and `error` are emitted as `null` when unknown (never\n  omitted), matching the prior ad-hoc JSON."
+      },
+      "EndpointDescriptor": {
+        "type": "object",
+        "description": "One entry in the [`DiscoveryResponse`] endpoint list.",
+        "required": [
+          "method",
+          "path",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
             "type": "string"
           }
         }
@@ -2165,6 +2863,21 @@
           },
           "text": {
             "type": "string"
+          }
+        }
+      },
+      "ItemRunsResponse": {
+        "type": "object",
+        "description": "The `GET /items/{id}/runs` body: `{ \"runs\": RunRecord[] }`. A trivial\nwrapper over the run list, reusing the already-typed `RunRecord` element so\nthe wire shape stays byte-identical to the prior `json!({ \"runs\": ... })`.",
+        "required": [
+          "runs"
+        ],
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunRecord"
+            }
           }
         }
       },
@@ -2216,6 +2929,122 @@
           }
         }
       },
+      "MeetingFull": {
+        "type": "object",
+        "description": "Full meeting detail: the `meeting_analyses` row. `result` (per-kind diarize\nsnapshot) and `speaker_names` (free-form id→name map) are dynamic and stay\n`serde_json::Value`. Returned by `get_meeting`, `create_meeting` (201),\n`patch_meeting`, and as each element of the meeting list.",
+        "required": [
+          "id",
+          "created_at",
+          "filename",
+          "result",
+          "speaker_names",
+          "status",
+          "starred"
+        ],
+        "properties": {
+          "audio_mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audio_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audio_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "Per-kind diarization result snapshot — shape varies, kept dynamic."
+          },
+          "speaker_names": {
+            "description": "Free-form speaker id→name map — kept dynamic."
+          },
+          "speakers_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "starred": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MeetingListResponse": {
+        "type": "object",
+        "description": "Paged meeting list: `{ meetings: [...], next_before_ms: <cursor|null> }`.",
+        "required": [
+          "meetings"
+        ],
+        "properties": {
+          "meetings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeetingFull"
+            }
+          },
+          "next_before_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "MeetingPatch": {
         "type": "object",
         "properties": {
@@ -2249,6 +3078,235 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ModelEntry": {
+        "type": "object",
+        "description": "Schema mirror of [`registry::ModelListing`] (core crate: derives\n`Serialize` but not `ToSchema`). It is referenced only via `value_type` for\nthe OpenAPI schema of the `models` array — the wire value is the real\n`ModelListing`, whose snake_case keys and null-for-`None` optionals this\nmirrors byte-for-byte, so serialization is unchanged.",
+        "required": [
+          "name",
+          "languages",
+          "recommended",
+          "formats",
+          "installed",
+          "runnable"
+        ],
+        "properties": {
+          "accuracy": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "license": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "runnable": {
+            "type": "boolean"
+          },
+          "size": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "speed": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "ModelsListResponse": {
+        "type": "object",
+        "description": "`GET /models` success body: the active model name, whether its weights are\nactually loaded, and the registry listing.",
+        "required": [
+          "active",
+          "loaded",
+          "models"
+        ],
+        "properties": {
+          "active": {
+            "type": "string"
+          },
+          "loaded": {
+            "type": "boolean"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelEntry"
+            }
+          }
+        }
+      },
+      "OpenAiModel": {
+        "type": "object",
+        "description": "A single entry in the OpenAI-compatible model list (`GET /v1/models`).",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix creation timestamp (server start time).",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "Model identifier (the active ASR model name)."
+          },
+          "object": {
+            "type": "string",
+            "description": "Object type — always `\"model\"`."
+          },
+          "owned_by": {
+            "type": "string",
+            "description": "Owning organization — always `\"whisper-wrap\"`."
+          }
+        }
+      },
+      "OpenAiModelList": {
+        "type": "object",
+        "description": "The OpenAI-compatible model listing envelope returned by `GET /v1/models`.",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAiModel"
+            },
+            "description": "The listed models (the single active ASR model)."
+          },
+          "object": {
+            "type": "string",
+            "description": "Object type — always `\"list\"`."
+          }
+        }
+      },
+      "OpenAiTranscription": {
+        "type": "object",
+        "description": "The default (`response_format=json`) transcription/translation body:\n`{ \"text\": string }`. Non-default formats (`text`/`srt`/`vtt`/`verbose_json`)\nare format-dependent and not schematized — see the operation descriptions.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The transcribed (or translated) text."
+          }
+        }
+      },
+      "PollError": {
+        "type": "object",
+        "description": "Terminal-error detail spliced into a poll response only when the job\nfailed. Omitted entirely for pending/running/done/cancelled jobs.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Machine-readable error code (e.g. `asr_failed`, `diarize_failed`)."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable failure message."
+          }
+        }
+      },
+      "PollResponse": {
+        "type": "object",
+        "description": "Job-status body returned by `GET /transcribe/meeting/{id}`. `result` is the\nper-kind analysis snapshot — `null` until the job is `done` — and is always\npresent. `error` is present only for a failed job.",
+        "required": [
+          "status",
+          "progress",
+          "stage"
+        ],
+        "properties": {
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PollError",
+                "description": "Present only when `status == \"error\"`."
+              }
+            ]
+          },
+          "progress": {
+            "type": "number",
+            "format": "double",
+            "description": "Fractional progress in `[0, 1]`."
+          },
+          "result": {
+            "description": "Analysis result once `done`, otherwise `null` (always present)."
+          },
+          "stage": {
+            "type": "string",
+            "description": "Current pipeline stage (asr | diarize | complete | failed | …)."
+          },
+          "status": {
+            "type": "string",
+            "description": "pending | running | done | error | cancelled."
+          }
+        }
+      },
+      "RunAccepted": {
+        "type": "object",
+        "description": "The 202 run-accepted descriptor shared by every stage launcher: the opened\nrun's id and the poll URL for its job-status contract (`GET /runs/{id}`).\nWire shape: `{ \"run_id\": string, \"status_url\": string }` — field names map\n1:1 to the JSON keys, so no `#[serde(rename)]` is needed.",
+        "required": [
+          "run_id",
+          "status_url"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "status_url": {
+            "type": "string"
           }
         }
       },
@@ -2352,6 +3410,50 @@
           "cancelled"
         ]
       },
+      "SessionActionRun": {
+        "type": "object",
+        "description": "One legacy `action_runs` row surfaced inside a session detail.",
+        "required": [
+          "id",
+          "session_id",
+          "action_id",
+          "prompt",
+          "answer",
+          "ran_at",
+          "succeeded"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "model_used": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "ran_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "succeeded": {
+            "type": "boolean"
+          }
+        }
+      },
       "SessionCreate": {
         "type": "object",
         "required": [
@@ -2369,6 +3471,159 @@
           "started_at": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "SessionFinal": {
+        "type": "object",
+        "description": "One finalized transcript segment inside a session (a `finals` row). Also the\nstandalone `201` body of `POST /v1/sessions/{id}/finals`, whose shape is\nexactly this row.",
+        "required": [
+          "session_id",
+          "ord",
+          "text"
+        ],
+        "properties": {
+          "end_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ord": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "start_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionFull": {
+        "type": "object",
+        "description": "Full session detail: the `sessions` row plus its `finals` and legacy\n`action_runs`. Returned by `get_session`, `create_session` (201),\n`patch_session`, and as each element of the session list.",
+        "required": [
+          "id",
+          "started_at",
+          "mode",
+          "starred",
+          "finals",
+          "action_runs"
+        ],
+        "properties": {
+          "action_runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionActionRun"
+            }
+          },
+          "audio_mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audio_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audio_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "finals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionFinal"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "starred": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SessionListResponse": {
+        "type": "object",
+        "description": "Paged session list: `{ sessions: [...], next_before_ms: <cursor|null> }`.",
+        "required": [
+          "sessions"
+        ],
+        "properties": {
+          "next_before_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionFull"
+            }
           }
         }
       },
@@ -2434,6 +3689,216 @@
           }
         }
       },
+      "SetActiveResponse": {
+        "type": "object",
+        "description": "`POST /models/active` success body. `load_time_ms` is present **only** when\na load actually happened (`swapped = true`); it is omitted on the no-op path\n(`swapped = false`, the model was already active and loaded). The key is\nsnake_case on the wire, matching the prior ad-hoc JSON.",
+        "required": [
+          "active",
+          "swapped"
+        ],
+        "properties": {
+          "active": {
+            "type": "string"
+          },
+          "load_time_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "swapped": {
+            "type": "boolean"
+          }
+        }
+      },
+      "StatusAi": {
+        "type": "object",
+        "description": "AI-provider privacy indicator sub-object of [`StatusResponse`].",
+        "required": [
+          "configured",
+          "provider",
+          "endpoint",
+          "model"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusBackend": {
+        "type": "object",
+        "description": "Backend sub-object of [`StatusResponse`].",
+        "required": [
+          "backend",
+          "format"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "quant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Quantization label; `null` when the format carries none."
+          }
+        }
+      },
+      "StatusGemini": {
+        "type": "object",
+        "description": "Legacy `gemini` sub-object of [`StatusResponse`] (back-compat).",
+        "required": [
+          "configured",
+          "model"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusMeeting": {
+        "type": "object",
+        "description": "Meeting/diarization availability sub-object of [`StatusResponse`].",
+        "required": [
+          "available",
+          "quality_tiers",
+          "hf_token_configured",
+          "extras_installed"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "extras_installed": {
+            "type": "boolean"
+          },
+          "hf_token_configured": {
+            "type": "boolean"
+          },
+          "quality_tiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StatusModel": {
+        "type": "object",
+        "description": "Active-model sub-object of [`StatusResponse`].",
+        "required": [
+          "name",
+          "path",
+          "compute_type",
+          "device",
+          "loaded"
+        ],
+        "properties": {
+          "compute_type": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "load_time_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Model load time; `null` until weights are loaded.",
+            "minimum": 0
+          },
+          "loaded": {
+            "type": "boolean",
+            "description": "false on a fresh install until `POST /models/active` loads weights."
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "description": "Success body of `GET /status` — engine health + active-model snapshot.",
+        "required": [
+          "status",
+          "version",
+          "uptime_seconds",
+          "model",
+          "backend",
+          "gemini",
+          "ai",
+          "meeting"
+        ],
+        "properties": {
+          "ai": {
+            "$ref": "#/components/schemas/StatusAi"
+          },
+          "backend": {
+            "$ref": "#/components/schemas/StatusBackend"
+          },
+          "gemini": {
+            "$ref": "#/components/schemas/StatusGemini"
+          },
+          "meeting": {
+            "$ref": "#/components/schemas/StatusMeeting"
+          },
+          "model": {
+            "$ref": "#/components/schemas/StatusModel"
+          },
+          "status": {
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "SubmitResponse": {
+        "type": "object",
+        "description": "202 job descriptor returned by `POST /transcribe/meeting`.",
+        "required": [
+          "job_id",
+          "status_url"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Opaque job id — poll `status_url` for progress."
+          },
+          "status_url": {
+            "type": "string",
+            "description": "Relative URL of the poll endpoint for this job."
+          }
+        }
+      },
       "SwapRequest": {
         "type": "object",
         "required": [
@@ -2459,6 +3924,34 @@
           },
           "provider": {
             "type": "string"
+          }
+        }
+      },
+      "TranscribeResponse": {
+        "type": "object",
+        "description": "Success body of `POST /transcribe`. Two wire shapes descend from one struct:\nthe empty/filtered case serializes to exactly `{ \"text\": \"\" }` (language and\nsegments omitted via `skip_serializing_if`), and the kept case adds\n`language` and `segments`. `segments` is kept as `Vec<serde_json::Value>`\nbecause the element (`whisper_wrap_core::asr::Segment`) implements\n`Serialize` but not `ToSchema` and lives in the core crate — typing it here\nwould require touching core, so the shape is preserved without over-typing.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Detected language — omitted in the empty/filtered case."
+          },
+          "segments": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {},
+            "description": "Timed segments — omitted in the empty/filtered case."
+          },
+          "text": {
+            "type": "string",
+            "description": "Transcribed text (empty string when filtered/empty)."
           }
         }
       }
