@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderDetail } from "./detail-view";
+import { WaveformPlayer } from "./waveform-player";
 import type { Run, RunKind } from "../library/runs-api";
 import type { SessionFull } from "../storage/history-api-client";
 import { resetClientFetch, setClientFetch } from "../api/client";
@@ -212,6 +213,8 @@ describe("renderDetail", () => {
       }),
     ];
     await renderDetail(container, "i", { loadRuns: async () => runs, loadAudio: noAudio });
+    // Timestamps are timeline-only; switch out of the default article layout.
+    container.querySelector<HTMLButtonElement>(".timeline-toggle")!.click();
 
     const turns = [...container.querySelectorAll<HTMLElement>(".run-snapshot .turn")];
     expect(turns).toHaveLength(3);
@@ -242,6 +245,8 @@ describe("renderDetail", () => {
       }),
     ];
     await renderDetail(container, "i", { loadRuns: async () => runs, loadAudio: noAudio });
+    // Timestamps are timeline-only; switch out of the default article layout.
+    container.querySelector<HTMLButtonElement>(".timeline-toggle")!.click();
 
     const turn = container.querySelector<HTMLElement>(".run-snapshot .turn")!;
     expect(turn).toBeTruthy();
@@ -250,9 +255,9 @@ describe("renderDetail", () => {
     expect(turn.querySelector("p")!.textContent).toBe("plain");
   });
 
-  it("keeps the raw snapshot fallback for non-segment results", async () => {
+  it("keeps the raw snapshot fallback for unrecognized results", async () => {
     const runs = [
-      run({ id: "a1", kind: "ai", status: "done", result: { answer: "42" } }),
+      run({ id: "a1", kind: "ai", status: "done", result: { note: "42" } }),
     ];
     await renderDetail(container, "i", { loadRuns: async () => runs, loadAudio: noAudio });
 
@@ -457,5 +462,184 @@ describe("renderDetail", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(deleteItem).not.toHaveBeenCalled();
+  });
+
+  it("clicking a transcript segment seeks the player; a wordless snapshot seeks at segment level", async () => {
+    const seekSpy = vi
+      .spyOn(WaveformPlayer.prototype, "seekTo")
+      .mockImplementation(() => {});
+    const runs = [
+      run({
+        id: "t1",
+        kind: "transcribe",
+        status: "done",
+        result: { segments: [{ text: "hello", start: 3, end: 5 }] },
+      }),
+    ];
+    await renderDetail(container, "i", {
+      loadRuns: async () => runs,
+      loadAudio: async () => new Blob(["x"]),
+    });
+
+    const turn = container.querySelector<HTMLElement>(".turn")!;
+    turn.click();
+    expect(seekSpy).toHaveBeenCalledWith(3);
+    seekSpy.mockRestore();
+  });
+
+  it("clicking a word seeks to that word's start", async () => {
+    const seekSpy = vi
+      .spyOn(WaveformPlayer.prototype, "seekTo")
+      .mockImplementation(() => {});
+    const runs = [
+      run({
+        id: "t1",
+        kind: "transcribe",
+        status: "done",
+        result: {
+          segments: [
+            {
+              text: "ab",
+              start: 1,
+              end: 4,
+              words: [
+                { word: "a", start: 1, end: 2 },
+                { word: "b", start: 2, end: 4 },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+    await renderDetail(container, "i", {
+      loadRuns: async () => runs,
+      loadAudio: async () => new Blob(["x"]),
+    });
+
+    const words = container.querySelectorAll<HTMLElement>(".segment-word");
+    expect(words).toHaveLength(2);
+    words[1].click(); // "b" → its own start, not the segment start
+    expect(seekSpy).toHaveBeenLastCalledWith(2);
+    seekSpy.mockRestore();
+  });
+
+  it("renders a diarize run as speaker-labeled turns from the transcript, not raw JSON", async () => {
+    const runs = [
+      run({
+        id: "t1",
+        kind: "transcribe",
+        status: "done",
+        result: {
+          segments: [
+            { text: "hi", start: 0, end: 2 },
+            { text: "yo", start: 2, end: 4 },
+            { text: "zz", start: 10, end: 12 },
+          ],
+        },
+      }),
+      run({
+        id: "d1",
+        kind: "diarize",
+        status: "done",
+        result: {
+          quality: "balanced",
+          speakers: [
+            { start: 0, end: 2, speaker: "SPEAKER_00" },
+            { start: 2, end: 4, speaker: "SPEAKER_01" },
+          ],
+        },
+      }),
+    ];
+    await renderDetail(container, "i", {
+      loadRuns: async () => runs,
+      loadAudio: noAudio,
+    });
+
+    container.querySelector<HTMLElement>('.run-row[data-run-id="d1"]')!.click();
+    const snap = container.querySelector<HTMLElement>(".run-snapshot")!;
+    // Not the raw-JSON fallback.
+    expect(snap.querySelector(".snapshot-body")).toBeNull();
+    expect(snap.querySelectorAll(".turn")).toHaveLength(3);
+    expect(snap.textContent).toContain("SPEAKER_00");
+    expect(snap.textContent).toContain("SPEAKER_01");
+    // "zz" overlaps no speaker turn → rendered without a speaker label.
+    expect(snap.querySelectorAll(".who")).toHaveLength(2);
+    // Speakered turns are marked so article mode keeps them on their own line.
+    expect(snap.querySelectorAll(".turn.has-speaker")).toHaveLength(2);
+  });
+
+  it("renders an AI run's answer as readable text, not raw JSON", async () => {
+    const runs = [
+      run({
+        id: "t1",
+        kind: "transcribe",
+        status: "done",
+        result: { segments: [{ text: "hi", start: 0, end: 1 }] },
+      }),
+      run({
+        id: "a1",
+        kind: "ai",
+        status: "done",
+        result: { answer: "This is the summary.", prompt: "Summarize the key points" },
+      }),
+    ];
+    await renderDetail(container, "i", {
+      loadRuns: async () => runs,
+      loadAudio: noAudio,
+    });
+
+    container.querySelector<HTMLElement>('.run-row[data-run-id="a1"]')!.click();
+    const snap = container.querySelector<HTMLElement>(".run-snapshot")!;
+    expect(snap.querySelector(".snapshot-body")).toBeNull(); // not the raw-JSON fallback
+    expect(snap.textContent).toContain("This is the summary.");
+    expect(snap.querySelector(".turn")).not.toBeNull();
+    // The prompt that produced the answer is shown above it.
+    expect(snap.querySelector(".ai-prompt")!.textContent).toContain(
+      "Summarize the key points",
+    );
+  });
+
+  it("defaults to article layout (no timestamps, words still seek) and the timeline toggle reveals timestamps", async () => {
+    const seekSpy = vi
+      .spyOn(WaveformPlayer.prototype, "seekTo")
+      .mockImplementation(() => {});
+    const runs = [
+      run({
+        id: "t1",
+        kind: "transcribe",
+        status: "done",
+        result: {
+          segments: [
+            {
+              text: "ab",
+              start: 1,
+              end: 4,
+              words: [
+                { word: "a", start: 1, end: 2 },
+                { word: "b", start: 2, end: 4 },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+    await renderDetail(container, "i", {
+      loadRuns: async () => runs,
+      loadAudio: async () => new Blob(["x"]),
+    });
+
+    const snap = container.querySelector<HTMLElement>(".run-snapshot")!;
+    // Article default: no per-segment timestamp shown...
+    expect(snap.classList.contains("timeline")).toBe(false);
+    expect(snap.querySelector(".turn .t")).toBeNull();
+    // ...but words are still click-to-seek.
+    container.querySelectorAll<HTMLElement>(".segment-word")[0].click();
+    expect(seekSpy).toHaveBeenCalledWith(1);
+
+    // Toggle timeline → per-segment timestamps appear.
+    container.querySelector<HTMLButtonElement>(".timeline-toggle")!.click();
+    expect(snap.classList.contains("timeline")).toBe(true);
+    expect(snap.querySelector(".turn .t")).not.toBeNull();
+    seekSpy.mockRestore();
   });
 });

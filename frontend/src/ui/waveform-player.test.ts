@@ -425,6 +425,115 @@ describe("WaveformPlayer", () => {
     player.destroy();
   });
 
+  function stubDuration(audio: HTMLAudioElement, seconds: number): void {
+    Object.defineProperty(audio, "duration", {
+      configurable: true,
+      get: () => seconds,
+    });
+  }
+
+  it("seekTo() sets the audio playback position to the given seconds", async () => {
+    const root = mountRoot();
+    const decode = vi.fn(async () => flatSamples());
+    const player = new WaveformPlayer({
+      root,
+      input: {
+        kind: "audio",
+        blob: makeBlob(),
+        mime_type: "audio/webm",
+        duration_ms: 10_000, // 10 seconds
+      },
+      decode,
+    });
+    await player.load();
+
+    const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    stubDuration(audio, 10);
+    const time = spyCurrentTime(audio);
+
+    player.seekTo(4);
+    expect(time.value).toBeCloseTo(4, 5);
+
+    player.destroy();
+  });
+
+  it("seekTo() clamps a negative input to 0", async () => {
+    const root = mountRoot();
+    const decode = vi.fn(async () => flatSamples());
+    const player = new WaveformPlayer({
+      root,
+      input: {
+        kind: "audio",
+        blob: makeBlob(),
+        mime_type: "audio/webm",
+        duration_ms: 10_000,
+      },
+      decode,
+    });
+    await player.load();
+
+    const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    stubDuration(audio, 10);
+    const time = spyCurrentTime(audio);
+
+    player.seekTo(-5);
+    expect(time.value).toBe(0);
+
+    player.destroy();
+  });
+
+  it("seekTo() clamps an input beyond the duration to the duration", async () => {
+    const root = mountRoot();
+    const decode = vi.fn(async () => flatSamples());
+    const player = new WaveformPlayer({
+      root,
+      input: {
+        kind: "audio",
+        blob: makeBlob(),
+        mime_type: "audio/webm",
+        duration_ms: 10_000,
+      },
+      decode,
+    });
+    await player.load();
+
+    const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    stubDuration(audio, 10);
+    const time = spyCurrentTime(audio);
+
+    player.seekTo(99);
+    expect(time.value).toBeCloseTo(10, 5);
+
+    player.destroy();
+  });
+
+  it("onTime fires with the current position when the time readout updates", async () => {
+    const root = mountRoot();
+    const decode = vi.fn(async () => flatSamples());
+    const onTime = vi.fn();
+    const player = new WaveformPlayer({
+      root,
+      input: {
+        kind: "audio",
+        blob: makeBlob(),
+        mime_type: "audio/webm",
+        duration_ms: 10_000,
+      },
+      decode,
+      onTime,
+    });
+    await player.load();
+
+    const audio = root.querySelector<HTMLAudioElement>("audio")!;
+    stubDuration(audio, 10);
+    spyCurrentTime(audio);
+
+    player.seekTo(4);
+    expect(onTime).toHaveBeenCalledWith(4);
+
+    player.destroy();
+  });
+
   it("pointerdown on canvas while in error state is a no-op", async () => {
     const root = mountRoot();
     const decode = vi.fn(() => Promise.reject(new Error("bad")));

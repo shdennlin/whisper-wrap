@@ -37,6 +37,13 @@ interface PlayerOpts {
   decode?: (blob: Blob) => Promise<Float32Array>;
   /** Called once if decode rejects, with the original error. */
   onError?: (error: unknown) => void;
+  /**
+   * Called with the current playback position (seconds) whenever the time
+   * readout updates — during playback (per animation frame), on scrub, and on
+   * programmatic seek. Lets a caller track playback (e.g. highlight the active
+   * transcript segment) without reaching into the audio element.
+   */
+  onTime?: (seconds: number) => void;
 }
 
 const DEFAULT_CANVAS_WIDTH = 320;
@@ -47,6 +54,7 @@ export class WaveformPlayer {
   private readonly input: PlayerInput;
   private readonly decodeFn: (blob: Blob) => Promise<Float32Array>;
   private readonly onError: (error: unknown) => void;
+  private readonly onTime?: (seconds: number) => void;
 
   private readonly canvas: HTMLCanvasElement;
   private readonly playBtn: HTMLButtonElement;
@@ -71,6 +79,7 @@ export class WaveformPlayer {
     this.input = opts.input;
     this.decodeFn = opts.decode ?? defaultDecode;
     this.onError = opts.onError ?? (() => {});
+    this.onTime = opts.onTime;
 
     this.root.classList.add("waveform-player");
 
@@ -170,6 +179,22 @@ export class WaveformPlayer {
     } else {
       this.clearCanvas();
     }
+  }
+
+  /**
+   * Seek playback to an absolute position in seconds, clamped to the valid
+   * range [0, duration]. Lets other views jump audio to a timestamp. When the
+   * audio element has no finite positive duration yet, only the lower bound is
+   * applied. Negative or over-long inputs are clamped, never thrown.
+   */
+  seekTo(seconds: number): void {
+    const duration = this.audioEl.duration;
+    const upper =
+      Number.isFinite(duration) && duration > 0 ? duration : Number.POSITIVE_INFINITY;
+    const clamped = Math.max(0, Math.min(seconds, upper));
+    this.audioEl.currentTime = clamped;
+    this.drawCursor();
+    this.updateTimeText();
   }
 
   destroy(): void {
@@ -395,6 +420,7 @@ export class WaveformPlayer {
     if (this.input.kind !== "audio") return;
     const cur = Math.floor(this.audioEl.currentTime * 1000);
     this.timeEl.textContent = `${formatMmSs(cur)} / ${formatMmSs(this.input.duration_ms)}`;
+    this.onTime?.(this.audioEl.currentTime);
   }
 }
 

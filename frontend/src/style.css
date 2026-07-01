@@ -2686,13 +2686,54 @@ body { min-height: 100vh; }
   font-size: 10px; padding: 1px 7px; border-radius: 99px; font-weight: 600;
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
 }
-.turn { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 7px 0; }
+/* Timeline layout: each segment is its own row with an 84px timestamp gutter. */
+.turn { padding: 7px 0; }
+.run-snapshot.timeline .turn { display: grid; grid-template-columns: 84px 1fr; gap: 12px; }
+/* Article layout (default): whisper segments are acoustic fragments, not
+   paragraphs — flow them inline into continuous, readable prose. A generated
+   space separates segments (safe for spaced scripts, light gap for CJK). */
+.run-snapshot:not(.timeline) { line-height: 1.95; }
+.run-snapshot:not(.timeline) .turn { display: inline; padding: 0; }
+.run-snapshot:not(.timeline) .turn p { display: inline; }
+.run-snapshot:not(.timeline) .turn .who { display: inline; margin: 0 5px 0 0; }
+.run-snapshot:not(.timeline) .turn::after { content: " "; }
+/* Diarize keeps each speaker turn on its own line even in article mode —
+   speaker boundaries are meaningful (option A). */
+.run-snapshot:not(.timeline) .turn.has-speaker { display: block; padding: 3px 0; }
+.run-snapshot:not(.timeline) .turn.has-speaker::after { content: none; }
 .turn .who { font-weight: 600; font-size: 12.5px; }
 .turn .t { font: 10.5px var(--mono); color: var(--muted); display: block; }
 .turn p { font-size: 13.5px; margin: 0; }
 .turn.c1 .who { color: var(--s1); }
 .turn.c2 .who { color: var(--s2); }
 .turn.c3 .who { color: var(--s3); }
+.turn.seekable { cursor: pointer; border-radius: 6px; }
+/* Whole-turn hover only clutters the clean article view; keep it to timeline. */
+.run-snapshot.timeline .turn.seekable:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.turn.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* Transcript display toggle (article ⇄ timeline). */
+.transcript-controls { display: flex; justify-content: flex-end; margin: 0 0 6px; }
+.timeline-toggle {
+  font-size: 12px; padding: 3px 11px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  cursor: pointer;
+}
+.timeline-toggle.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--fg); border-color: transparent;
+}
+
+/* AI run: the prompt that produced the answer, shown above it. */
+.ai-prompt {
+  margin: 0 0 12px; padding: 7px 11px; border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0; color: var(--muted); font-size: 12.5px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.ai-prompt-label {
+  margin-right: 7px; font-weight: 600; font-size: 10.5px;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent);
+}
 .detail-wrap .inspector {
   border-left: 1px solid var(--border); background: var(--sidebar);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);

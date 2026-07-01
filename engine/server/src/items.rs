@@ -180,6 +180,10 @@ pub async fn items_transcribe(
                 .await
                 .map_err(|e| e.to_string())?
                 .map_err(|e| e.detail)?;
+            // `transcribe_with_words` always emits per-segment `words` (that is
+            // what the Detail view uses for per-word click-to-seek). The 4th arg
+            // is `translate` — keep it false so the transcript stays in its
+            // source language.
             let asr = tokio::task::spawn_blocking(move || {
                 engine.transcribe_with_words(&samples, "auto", None, false)
             })
@@ -434,7 +438,9 @@ pub async fn items_ai(
         move |st| async move {
             let input = format!("{prompt}\n\nTranscript:\n{transcript}");
             let answer = st.llm().ask(&input, None).await.map_err(|e| e.to_string())?;
-            Ok(json!({ "answer": answer }))
+            // Record the prompt so the Detail view can show which prompt produced
+            // this answer (`prompt` is only borrowed by the format above).
+            Ok(json!({ "answer": answer, "prompt": prompt }))
         },
     )
 }

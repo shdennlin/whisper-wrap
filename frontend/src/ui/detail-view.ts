@@ -42,6 +42,13 @@ import { modalConfirm } from "./modal-prompt";
 import { toast } from "./toast";
 import { t, type StringKey } from "../i18n";
 import { WaveformPlayer, type PlayerInput } from "./waveform-player";
+import {
+  overlaySpeakers,
+  type DiarizeTurn,
+  type TranscriptSegment,
+  type TranscriptWord,
+} from "../library/speaker-overlay";
+import { alignWordsToText } from "../meeting/transcript-renderer";
 import { client } from "../api/client";
 
 const KINDS: RunKind[] = ["transcribe", "diarize", "ai"];
@@ -152,13 +159,33 @@ interface TurnEntry {
   text: string;
   speaker: string | null;
   start: number | null;
+  end: number | null;
+  words: TranscriptWord[] | null;
+}
+
+/** Parse a snapshot `words` array into timed words, or null if unusable. */
+function parseWords(raw: unknown): TranscriptWord[] | null {
+  if (!Array.isArray(raw)) return null;
+  const words = raw.flatMap((w: unknown): TranscriptWord[] => {
+    if (typeof w !== "object" || w === null) return [];
+    const cand = w as { word?: unknown; start?: unknown; end?: unknown };
+    if (
+      typeof cand.word !== "string" ||
+      typeof cand.start !== "number" ||
+      typeof cand.end !== "number"
+    ) {
+      return [];
+    }
+    return [{ word: cand.word, start: cand.start, end: cand.end }];
+  });
+  return words.length ? words : null;
 }
 
 /**
  * Pull speaker-turn entries out of a run snapshot. Accepts the segment shapes
  * the backends emit (`segments` or `turns` arrays whose entries carry `text`,
- * optionally `speaker` + `start`). Returns null when the snapshot isn't
- * segment-shaped so the caller falls back to raw rendering.
+ * optionally `speaker` + `start` + `end` + `words`). Returns null when the
+ * snapshot isn't segment-shaped so the caller falls back to raw rendering.
  */
 function turnEntries(result: unknown): TurnEntry[] | null {
   const r = result as { segments?: unknown; turns?: unknown } | null;
@@ -170,17 +197,76 @@ function turnEntries(result: unknown): TurnEntry[] | null {
   if (!raw) return null;
   const entries = raw.flatMap((e: unknown): TurnEntry[] => {
     if (typeof e !== "object" || e === null) return [];
-    const seg = e as { text?: unknown; speaker?: unknown; start?: unknown };
+    const seg = e as {
+      text?: unknown;
+      speaker?: unknown;
+      start?: unknown;
+      end?: unknown;
+      words?: unknown;
+    };
     if (typeof seg.text !== "string") return [];
     return [
       {
         text: seg.text,
         speaker: typeof seg.speaker === "string" ? seg.speaker : null,
         start: typeof seg.start === "number" ? seg.start : null,
+        end: typeof seg.end === "number" ? seg.end : null,
+        words: parseWords(seg.words),
       },
     ];
   });
   return entries.length ? entries : null;
+}
+
+/** Speaker turns from a diarize snapshot (`{ speakers: [{start,end,speaker}] }`). */
+function diarizeTurns(result: unknown): DiarizeTurn[] | null {
+  const r = result as { speakers?: unknown } | null;
+  if (!Array.isArray(r?.speakers)) return null;
+  const turns = r.speakers.flatMap((s: unknown): DiarizeTurn[] => {
+    if (typeof s !== "object" || s === null) return [];
+    const t = s as { start?: unknown; end?: unknown; speaker?: unknown };
+    if (
+      typeof t.start !== "number" ||
+      typeof t.end !== "number" ||
+      typeof t.speaker !== "string"
+    ) {
+      return [];
+    }
+    return [{ start: t.start, end: t.end, speaker: t.speaker }];
+  });
+  return turns.length ? turns : null;
+}
+
+/** Transcript segments from a transcribe snapshot, for the speaker overlay. */
+function transcriptSegments(result: unknown): TranscriptSegment[] | null {
+  const r = result as { segments?: unknown } | null;
+  if (!Array.isArray(r?.segments)) return null;
+  const segs = r.segments.flatMap((e: unknown): TranscriptSegment[] => {
+    if (typeof e !== "object" || e === null) return [];
+    const seg = e as { text?: unknown; start?: unknown; end?: unknown; words?: unknown };
+    if (
+      typeof seg.text !== "string" ||
+      typeof seg.start !== "number" ||
+      typeof seg.end !== "number"
+    ) {
+      return [];
+    }
+    const words = parseWords(seg.words);
+    return [{ text: seg.text, start: seg.start, end: seg.end, ...(words ? { words } : {}) }];
+  });
+  return segs.length ? segs : null;
+}
+
+/** The prose answer from an AI run snapshot (`{ answer: "…" }`), if present. */
+function aiAnswer(result: unknown): string | null {
+  const r = result as { answer?: unknown } | null;
+  return typeof r?.answer === "string" && r.answer.length ? r.answer : null;
+}
+
+/** The prompt an AI run was given (`{ prompt: "…" }`), if recorded. */
+function aiPrompt(result: unknown): string | null {
+  const r = result as { prompt?: unknown } | null;
+  return typeof r?.prompt === "string" && r.prompt.length ? r.prompt : null;
 }
 
 /** Stable hash of a speaker label onto 3 colour buckets (c1 / c2 / c3). */
@@ -206,23 +292,69 @@ function timestampEl(start: number): HTMLElement {
   return t;
 }
 
-function turnEl(entry: TurnEntry): HTMLElement {
+function turnEl(
+  entry: TurnEntry,
+  seek: (seconds: number) => void,
+  showTimeline: boolean,
+): HTMLElement {
   const turn = document.createElement("div");
   turn.className = "turn";
+  if (entry.start != null) {
+    // Kept in both layouts so seek + active-highlight work even when the
+    // timestamp text is hidden (article mode).
+    turn.dataset.start = String(entry.start);
+    if (entry.end != null) turn.dataset.end = String(entry.end);
+    turn.classList.add("seekable");
+    const at = entry.start;
+    turn.addEventListener("click", () => seek(at));
+  }
   if (entry.speaker) {
-    turn.classList.add(speakerBucket(entry.speaker));
+    turn.classList.add(speakerBucket(entry.speaker), "has-speaker");
     const who = document.createElement("div");
     who.className = "who";
     who.append(document.createTextNode(entry.speaker));
-    if (entry.start != null) who.appendChild(timestampEl(entry.start));
+    if (showTimeline && entry.start != null) who.appendChild(timestampEl(entry.start));
     turn.appendChild(who);
-  } else if (entry.start != null) {
+  } else if (showTimeline && entry.start != null) {
     turn.appendChild(timestampEl(entry.start));
   }
   const p = document.createElement("p");
-  p.textContent = entry.text;
+  appendTranscript(p, entry, seek);
   turn.appendChild(p);
   return turn;
+}
+
+/**
+ * Fill `p` with the turn text — clickable per-word spans when the entry carries
+ * aligned word timings, otherwise plain text. Word clicks seek to the word's
+ * start and stop propagation so the parent turn doesn't also seek.
+ */
+function appendTranscript(
+  p: HTMLElement,
+  entry: TurnEntry,
+  seek: (seconds: number) => void,
+): void {
+  const chunks = entry.words ? alignWordsToText(entry.text, entry.words) : null;
+  if (!chunks) {
+    p.textContent = entry.text;
+    return;
+  }
+  for (const chunk of chunks) {
+    if (!chunk.word) {
+      p.append(document.createTextNode(chunk.text));
+      continue;
+    }
+    const at = chunk.word.start;
+    const span = document.createElement("span");
+    span.className = "segment-word";
+    span.dataset.start = String(at);
+    span.textContent = chunk.text;
+    span.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      seek(at);
+    });
+    p.append(span);
+  }
 }
 
 export async function renderDetail(
@@ -301,9 +433,30 @@ export async function renderDetail(
 
   const meta = document.createElement("div");
   meta.className = "meta";
+
+  // Transcript display mode: article (clean prose, default) vs timeline
+  // (per-segment timestamps). Per-word/segment click-to-seek stays active in
+  // both — the toggle only controls whether timestamps are shown.
+  let showTimeline = false;
+  let selectedRun: Run | null = null;
+  const controls = document.createElement("div");
+  controls.className = "transcript-controls";
+  const timelineToggle = document.createElement("button");
+  timelineToggle.type = "button";
+  timelineToggle.className = "timeline-toggle";
+  timelineToggle.textContent = t("detail.timeline");
+  timelineToggle.setAttribute("aria-pressed", "false");
+  timelineToggle.addEventListener("click", () => {
+    showTimeline = !showTimeline;
+    timelineToggle.classList.toggle("on", showTimeline);
+    timelineToggle.setAttribute("aria-pressed", showTimeline ? "true" : "false");
+    if (selectedRun) showSnapshot(selectedRun);
+  });
+  controls.appendChild(timelineToggle);
+
   const snapshot = document.createElement("div");
   snapshot.className = "run-snapshot";
-  doc.append(header, meta, snapshot);
+  doc.append(header, meta, controls, snapshot);
 
   // Inspector rail: run groups, re-run buttons, Ask-AI bar.
   const rail = document.createElement("aside");
@@ -355,6 +508,55 @@ export async function renderDetail(
     }
   }
 
+  const seek = (seconds: number): void => {
+    detailPlayers.get(container)?.seekTo(seconds);
+  };
+
+  /** Mark the turn spanning the current playback position as active. */
+  const highlightActive = (seconds: number): void => {
+    for (const el of snapshot.querySelectorAll<HTMLElement>(".turn[data-start]")) {
+      const start = Number(el.dataset.start);
+      const end = el.dataset.end ? Number(el.dataset.end) : Number.POSITIVE_INFINITY;
+      el.classList.toggle("active", seconds >= start && seconds < end);
+    }
+  };
+
+  /**
+   * Renderable turns for a run. A diarize run carries speaker turns without
+   * text, so it is overlaid onto the latest transcript's segments for display
+   * (view-only merge; diarization itself stays audio-only). Every other run
+   * renders from its own snapshot.
+   */
+  const entriesForRun = (run: Run): TurnEntry[] | null => {
+    if (run.kind === "diarize") {
+      const turns = diarizeTurns(run.result);
+      if (turns) {
+        const transcript = [...runs]
+          .reverse()
+          .find((r) => r.kind === "transcribe" && r.status !== "error");
+        const segments = transcript ? transcriptSegments(transcript.result) : null;
+        if (segments) {
+          return overlaySpeakers(segments, turns).map((s) => ({
+            text: s.text,
+            speaker: s.speaker,
+            start: s.start,
+            end: s.end,
+            words: s.words ?? null,
+          }));
+        }
+      }
+    }
+    // An AI run's snapshot is `{ answer: "…" }` (prose, no timing) — render it as
+    // readable text rather than dumping the raw JSON.
+    if (run.kind === "ai") {
+      const answer = aiAnswer(run.result);
+      if (answer) {
+        return [{ text: answer, speaker: null, start: null, end: null, words: null }];
+      }
+    }
+    return turnEntries(run.result);
+  };
+
   function showSnapshot(run: Run): void {
     snapshot.replaceChildren();
     snapshot.dataset.runId = run.id;
@@ -366,9 +568,23 @@ export async function renderDetail(
       snapshot.appendChild(body);
       return;
     }
-    const entries = turnEntries(run.result);
+    snapshot.classList.toggle("timeline", showTimeline);
+    // AI run: show which prompt produced the answer, above it.
+    if (run.kind === "ai") {
+      const prompt = aiPrompt(run.result);
+      if (prompt) {
+        const el = document.createElement("div");
+        el.className = "ai-prompt";
+        const label = document.createElement("span");
+        label.className = "ai-prompt-label";
+        label.textContent = t("detail.aiPrompt");
+        el.append(label, document.createTextNode(prompt));
+        snapshot.appendChild(el);
+      }
+    }
+    const entries = entriesForRun(run);
     if (entries) {
-      for (const entry of entries) snapshot.appendChild(turnEl(entry));
+      for (const entry of entries) snapshot.appendChild(turnEl(entry, seek, showTimeline));
       return;
     }
     // Not segment-shaped — keep the raw snapshot fallback.
@@ -379,6 +595,7 @@ export async function renderDetail(
   }
 
   function selectRun(run: Run): void {
+    selectedRun = run;
     for (const el of inspector.querySelectorAll<HTMLElement>(".run-row")) {
       el.classList.toggle("active", el.dataset.runId === run.id);
     }
@@ -553,7 +770,7 @@ export async function renderDetail(
       mime_type: session?.audio_mime_type ?? blob.type ?? "audio/webm",
       duration_ms: session?.duration_ms ?? 0,
     };
-    const player = new WaveformPlayer({ root: host, input });
+    const player = new WaveformPlayer({ root: host, input, onTime: highlightActive });
     detailPlayers.set(container, player);
     void player.load();
     wrap.appendChild(host);

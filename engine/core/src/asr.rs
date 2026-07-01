@@ -26,8 +26,9 @@ pub struct Segment {
     pub text: String,
     pub start: f64,
     pub end: f64,
-    // Meeting mode only — None elsewhere, and skipped in JSON so the
-    // /transcribe, /listen and OpenAI-compat outputs stay byte-stable.
+    // Set by the meeting pipeline and the item transcribe stage; None on the
+    // /transcribe, /listen and OpenAI-compat paths, where it is skipped in JSON
+    // so those outputs stay byte-stable.
     // `default` so a snapshot serialized without `words` round-trips.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub words: Option<Vec<Word>>,
