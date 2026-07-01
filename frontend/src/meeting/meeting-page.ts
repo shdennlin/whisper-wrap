@@ -2,7 +2,7 @@
  * Meeting Mode page wiring.
  *
  * Composes: upload zone → confirm card (filename + duration + speakers
- * dropdown + language dropdown + word-timestamps toggle + Start/Change) →
+ * dropdown + language dropdown + Start/Change) →
  * 4-step stepper with per-stage progress + elapsed/estimated remaining →
  * speaker-coloured transcript with rename-on-hover + click-to-seek +
  * speaker-aware exports (SRT/VTT/TXT/JSON) → Recent analyses sidebar.
@@ -260,7 +260,7 @@ export function createMeetingPage(
   confirmMeta.className = "confirm-meta";
   confirmInfo.append(confirmName, confirmMeta);
 
-  // Options grid: speakers select, language select, word-timestamps checkbox
+  // Options grid: speakers select, language select, quality, fast mode
   const confirmOptions = document.createElement("div");
   confirmOptions.className = "confirm-options";
 
@@ -311,17 +311,6 @@ export function createMeetingPage(
   // Options are built from /status's installed tiers once it resolves (below).
   qualityField.append(qualityLabel, qualitySelect);
 
-  const wordTsField = document.createElement("label");
-  wordTsField.className = "confirm-field confirm-field-checkbox";
-  const wordTsInput = document.createElement("input");
-  wordTsInput.type = "checkbox";
-  // Default OFF — skipping align saves ~30% time; users who want
-  // word-level timing opt in explicitly. Matches the plan's decision.
-  wordTsInput.checked = false;
-  const wordTsText = document.createElement("span");
-  wordTsText.textContent = t("meeting.confirm.wordTimestamps");
-  wordTsField.append(wordTsInput, wordTsText);
-
   // Fast mode — routes ASR through the platform-default WhisperBackend
   // (ggml+ANE on macOS, ct2+CUDA on Linux). Default ON for macOS users
   // because ct2 batched ASR on Apple Silicon CPU is structurally slow
@@ -338,19 +327,10 @@ export function createMeetingPage(
   fastModeText.textContent = t("meeting.confirm.fastMode");
   fastModeField.append(fastModeInput, fastModeText);
 
-  // Soft interlock: turning Fast mode ON clears Word timestamps so the
-  // user gets the fastest possible result by default. They can re-check
-  // word-ts afterwards if they want both (align runs on MPS, ~1-2 min);
-  // we don't force-clear in the reverse direction.
-  fastModeInput.addEventListener("change", () => {
-    if (fastModeInput.checked) wordTsInput.checked = false;
-  });
-
   confirmOptions.append(
     speakersField,
     languageField,
     qualityField,
-    wordTsField,
     fastModeField,
   );
 
@@ -782,11 +762,8 @@ export function createMeetingPage(
     } else if (lang !== "auto") {
       out.language = lang;
     }
-    // Word timestamps — backend default is true, our UI default is false.
-    out.enableWordTimestamps = wordTsInput.checked;
     // Fast mode — only sent when ON so the backend default (slow path)
-    // applies unless the user opted in. Matches the wordTs serialisation
-    // pattern in meeting-api.ts.
+    // applies unless the user opted in.
     if (fastModeInput.checked) out.fast = true;
     // Diarization quality — send the selected tier whenever it isn't the
     // engine's "fast" default. Covers a balanced-only install where the

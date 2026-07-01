@@ -12,7 +12,6 @@ import type { components } from "../api/generated/openapi";
 import type { JobStatusResponse } from "./types";
 
 export interface SubmitOptions {
-  enableWordTimestamps?: boolean;
   numSpeakers?: number;
   minSpeakers?: number;
   maxSpeakers?: number;
@@ -20,8 +19,7 @@ export interface SubmitOptions {
   /**
    * Run ASR via the platform-default WhisperBackend (ggml+ANE on macOS,
    * ct2+CUDA on Linux) instead of WhisperX's CT2 batched ASR. ~3× faster
-   * on Apple Silicon; word timestamps still available via
-   * `enableWordTimestamps`. Backend default is false (existing slow path).
+   * on Apple Silicon. Backend default is false (existing slow path).
    */
   fast?: boolean;
   /**
@@ -73,15 +71,8 @@ export async function submitMeeting(
     query.min_speakers = String(opts.minSpeakers);
   if (opts.maxSpeakers !== undefined)
     query.max_speakers = String(opts.maxSpeakers);
-  // Backend default is true. Only explicitly pass false so the URL stays
-  // short and a future backend default change is honoured by clients that
-  // haven't opted in.
-  if (opts.enableWordTimestamps === false)
-    query.enable_word_timestamps = "false";
-  else if (opts.enableWordTimestamps === true)
-    query.enable_word_timestamps = "true";
-  // Same opt-in pattern as enableWordTimestamps: only send when true, so a
-  // future backend default change to fast-on-everywhere is honoured.
+  // Only send `fast` when ON, so a future backend default change to
+  // fast-on-everywhere is honoured by clients that haven't opted in.
   if (opts.fast === true) query.fast = "true";
   // Backend default is fast — only send the non-default tier.
   if (opts.quality === "balanced") query.quality = "balanced";

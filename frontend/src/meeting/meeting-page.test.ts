@@ -463,13 +463,6 @@ describe("createMeetingPage — fast mode", () => {
     return boxes[boxes.length - 1];
   }
 
-  function wordTsCheckbox(): HTMLInputElement {
-    // First checkbox; word-ts appears before fast-mode in confirmOptions.
-    return document.querySelector<HTMLInputElement>(
-      ".confirm-field-checkbox input[type=checkbox]",
-    )!;
-  }
-
   it("defaults fast-mode ON for macOS users", () => {
     const origUA = navigator.userAgent;
     Object.defineProperty(navigator, "userAgent", {
@@ -479,8 +472,6 @@ describe("createMeetingPage — fast mode", () => {
     try {
       mountWithFile();
       expect(fastModeCheckbox().checked).toBe(true);
-      // Word-ts default OFF (independent of platform).
-      expect(wordTsCheckbox().checked).toBe(false);
     } finally {
       Object.defineProperty(navigator, "userAgent", {
         value: origUA,
@@ -504,7 +495,6 @@ describe("createMeetingPage — fast mode", () => {
     try {
       mountWithFile();
       expect(fastModeCheckbox().checked).toBe(false);
-      expect(wordTsCheckbox().checked).toBe(false);
     } finally {
       Object.defineProperty(navigator, "userAgent", {
         value: origUA,
@@ -512,34 +502,6 @@ describe("createMeetingPage — fast mode", () => {
       });
       Object.defineProperty(navigator, "platform", {
         value: origPlatform,
-        configurable: true,
-      });
-    }
-  });
-
-  it("checking fast-mode clears the word-ts checkbox (one-shot interlock)", () => {
-    const origUA = navigator.userAgent;
-    Object.defineProperty(navigator, "userAgent", {
-      value: "Mozilla/5.0 (X11; Linux x86_64)",
-      configurable: true,
-    });
-    Object.defineProperty(navigator, "platform", {
-      value: "Linux x86_64",
-      configurable: true,
-    });
-    try {
-      mountWithFile();
-      // Manually flip word-ts on first to simulate a user who wanted both.
-      const wts = wordTsCheckbox();
-      wts.checked = true;
-      // Then turn on fast-mode — the change handler should reset word-ts.
-      const fast = fastModeCheckbox();
-      fast.checked = true;
-      fast.dispatchEvent(new Event("change"));
-      expect(wts.checked).toBe(false);
-    } finally {
-      Object.defineProperty(navigator, "userAgent", {
-        value: origUA,
         configurable: true,
       });
     }
