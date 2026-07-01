@@ -1243,6 +1243,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "enable_word_timestamps",
+            "in": "query",
+            "description": "Opt-in whisper word-level timestamps. When `true`, the ASR pass emits\n`Segment::words` so the meeting view gets per-word click-to-seek (v2\nparity, via whisper.cpp token times). Absent/`false` keeps the faster\nsegment-only path. The PWA's word-timestamps toggle drives this.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "requestBody": {

@@ -305,6 +305,11 @@ pub struct SubmitQuery {
     /// Optional per-request ASR model (stage-run-endpoints D7). Absent selects
     /// the active engine — the v2 behavior.
     model: Option<String>,
+    /// Opt-in whisper word-level timestamps. When `true`, the ASR pass emits
+    /// `Segment::words` so the meeting view gets per-word click-to-seek (v2
+    /// parity, via whisper.cpp token times). Absent/`false` keeps the faster
+    /// segment-only path. The PWA's word-timestamps toggle drives this.
+    enable_word_timestamps: Option<bool>,
 }
 
 #[utoipa::path(
@@ -460,8 +465,10 @@ pub async fn submit(
     let st = Arc::clone(&state);
     let id = job_id.clone();
     let model = q.model.clone();
+    // Opt-in word timestamps (default off = the faster segment-only path).
+    let word_ts = q.enable_word_timestamps.unwrap_or(false);
     tokio::spawn(async move {
-        run_pipeline(st, id, run_id, body, suffix, filename, tier, model).await;
+        run_pipeline(st, id, run_id, body, suffix, filename, tier, model, word_ts).await;
     });
 
     (
@@ -567,6 +574,7 @@ async fn run_pipeline(
     filename: String,
     tier: QualityTier,
     model: Option<String>,
+    word_ts: bool,
 ) {
     // Single-job concurrency: second job stays pending while the
     // first runs (v2 behaviour).
@@ -596,7 +604,7 @@ async fn run_pipeline(
     });
     run_progress(&state, &run_id, "asr", 0.05);
 
-    let result = pipeline_inner(&state, &id, &run_id, body, suffix, tier, model).await;
+    let result = pipeline_inner(&state, &id, &run_id, body, suffix, tier, model, word_ts).await;
     match result {
         Ok(value) => {
             // Auto-persist (v2 behaviour): the row lands in history
@@ -677,6 +685,7 @@ async fn pipeline_inner(
     suffix: String,
     tier: QualityTier,
     model: Option<String>,
+    word_ts: bool,
 ) -> Result<Value, (String, String)> {
     let fail = |code: &str, msg: String| (code.to_owned(), msg);
 
@@ -714,9 +723,10 @@ async fn pipeline_inner(
     });
     run_progress(state, run_id, "asr", 0.15);
 
-    // Stage: ASR (full buffer) — word timestamps on, so the meeting
-    // view gets per-word click-to-seek (v2 parity; here via
-    // whisper.cpp heuristic token times instead of wav2vec2). The model is
+    // Stage: ASR (full buffer). `word_ts` (the submit's
+    // `enable_word_timestamps`, opt-in) turns on whisper's token-level word
+    // times so the meeting view gets per-word click-to-seek (v2 parity; here
+    // via whisper.cpp heuristic token times instead of wav2vec2). The model is
     // selected per request via engine_for (D7); absent = the active engine.
     let engine = {
         let st = Arc::clone(state);
@@ -735,7 +745,7 @@ async fn pipeline_inner(
     };
     let asr_samples = samples.clone();
     let asr = tokio::task::spawn_blocking(move || {
-        engine.transcribe_with_words(&asr_samples, "auto", None, false)
+        engine.transcribe_with_words(&asr_samples, "auto", None, word_ts)
     })
     .await
     .map_err(|e| fail("asr_failed", e.to_string()))?
