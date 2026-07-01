@@ -245,14 +245,60 @@ async fn transcribe_or_translate(state: Arc<AppState>, req: Request, translate: 
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/audio/transcriptions",
+    tag = "openai-compat",
+    request_body(
+        content_type = "multipart/form-data",
+        description = "OpenAI-compatible transcription request — `multipart/form-data` \
+            with a `file` part (audio) plus optional `model`/`language`/`response_format` fields.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 200, description = "Transcription in OpenAI JSON shape (e.g. `{\"text\": …}`)."),
+        (status = 400, description = "Malformed request or missing `file` part."),
+        (status = 413, description = "Audio exceeds the configured maximum file size."),
+        (status = 415, description = "Unsupported media format."),
+        (status = 500, description = "Decode or inference failure."),
+        (status = 503, description = "No ASR model loaded.")
+    )
+)]
 pub async fn transcriptions(State(state): State<Arc<AppState>>, req: Request) -> Response {
     transcribe_or_translate(state, req, false).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/audio/translations",
+    tag = "openai-compat",
+    request_body(
+        content_type = "multipart/form-data",
+        description = "OpenAI-compatible translation request (transcribe + translate to \
+            English) — `multipart/form-data` with a `file` part plus optional \
+            `model`/`response_format` fields.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 200, description = "English translation in OpenAI JSON shape (e.g. `{\"text\": …}`)."),
+        (status = 400, description = "Malformed request or missing `file` part."),
+        (status = 413, description = "Audio exceeds the configured maximum file size."),
+        (status = 415, description = "Unsupported media format."),
+        (status = 500, description = "Decode or inference failure."),
+        (status = 503, description = "No ASR model loaded.")
+    )
+)]
 pub async fn translations(State(state): State<Arc<AppState>>, req: Request) -> Response {
     transcribe_or_translate(state, req, true).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/models",
+    tag = "openai-compat",
+    operation_id = "openai_models",
+    responses((status = 200, description = "OpenAI-compatible model list `{object:\"list\", data:[…]}` describing the active ASR model."))
+)]
 pub async fn models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
         "object": "list",

@@ -17,11 +17,12 @@ use whisper_wrap_core::postprocess::{filter_empty_transcription, FilterDecision}
 use crate::llm::LlmError;
 use crate::routes::{
     decode_and_transcribe, is_supported_dispatch_type, normalize_content_type, raw_body_suffix,
-    read_multipart_file, ApiError,
+    read_multipart_file, ApiError, ApiErrorBody,
 };
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct AskQuery {
     #[serde(default)]
     stream: bool,
@@ -44,6 +45,28 @@ enum AskInput {
     Audio { body: Vec<u8>, suffix: String },
 }
 
+#[utoipa::path(
+    post,
+    path = "/ask",
+    tag = "transcription",
+    params(AskQuery),
+    request_body(
+        content_type = "application/json",
+        description = "Either a JSON body `{\"text\": \"…\"}` for a text question, \
+            or raw/multipart audio (`audio/*`, `application/octet-stream`, or \
+            `multipart/form-data` with a `file` part) to transcribe-then-ask.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 200, description = "Answer. When `stream=true` the response is a \
+            `text/event-stream` (SSE) of incremental `data:` chunks terminated by \
+            a final event; otherwise a single JSON answer object."),
+        (status = 400, description = "Empty or malformed body.", body = ApiErrorBody),
+        (status = 415, description = "Unsupported Content-Type or media format.", body = ApiErrorBody),
+        (status = 500, description = "Transcription or LLM failure.", body = ApiErrorBody),
+        (status = 503, description = "No ASR model loaded (audio input) or no LLM provider configured.", body = ApiErrorBody)
+    )
+)]
 pub async fn ask(
     State(state): State<Arc<AppState>>,
     Query(q): Query<AskQuery>,

@@ -243,7 +243,8 @@ fn availability(state: &AppState) -> Result<(), Response> {
 /// speaker-count / word-timestamp tuning params — serde ignores
 /// unknown query keys, so those continue to be accepted (and, as in
 /// the Fast tier, ignored) rather than rejected.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct SubmitQuery {
     filename: Option<String>,
     /// fast (default) | balanced — diarization quality tier.
@@ -253,6 +254,25 @@ pub struct SubmitQuery {
     model: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/transcribe/meeting",
+    tag = "transcription",
+    params(SubmitQuery),
+    request_body(
+        content_type = "multipart/form-data",
+        description = "Multipart upload with a `file` part carrying the meeting \
+            audio. Query params select the filename, diarization quality tier \
+            (`fast`|`balanced`), and optional per-request ASR model.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 202, description = "Job accepted — returns a job descriptor `{id, status, …}`; poll `GET /transcribe/meeting/{id}` for progress."),
+        (status = 400, description = "Invalid quality tier or malformed upload (ad-hoc `{detail:{error,reason}}` body)."),
+        (status = 413, description = "Audio exceeds the configured maximum file size."),
+        (status = 415, description = "Unsupported Content-Type or media format.")
+    )
+)]
 pub async fn submit(
     State(state): State<Arc<AppState>>,
     Query(q): Query<SubmitQuery>,
@@ -398,6 +418,16 @@ pub async fn submit(
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/transcribe/meeting/{id}",
+    tag = "transcription",
+    params(("id" = String, Path, description = "Meeting job id returned by the submit call.")),
+    responses(
+        (status = 200, description = "Current job status and, when finished, the result (ad-hoc JSON)."),
+        (status = 404, description = "No job with that id.")
+    )
+)]
 pub async fn poll(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<String>) -> Response {
     if let Err(resp) = availability(&state) {
         return resp;
@@ -426,6 +456,17 @@ pub async fn poll(State(state): State<Arc<AppState>>, AxumPath(id): AxumPath<Str
     Json(payload).into_response()
 }
 
+#[utoipa::path(
+    delete,
+    path = "/transcribe/meeting/{id}",
+    tag = "transcription",
+    params(("id" = String, Path, description = "Meeting job id to cancel.")),
+    responses(
+        (status = 202, description = "Cancellation requested for an in-flight job."),
+        (status = 404, description = "No job with that id."),
+        (status = 409, description = "Job already finished (done/error/cancelled).")
+    )
+)]
 pub async fn cancel(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,

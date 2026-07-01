@@ -39,7 +39,7 @@ struct StoredConfig {
 }
 
 /// The masked, read-safe view of the active config. Wire shape is camelCase.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AiConfigView {
     pub provider: String,
     #[serde(rename = "baseUrl")]
@@ -54,7 +54,7 @@ pub struct AiConfigView {
 }
 
 /// Update body for `PUT /config/ai`. camelCase on the wire.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct AiConfigUpdate {
     pub provider: String,
     #[serde(rename = "baseUrl", default)]
@@ -281,12 +281,28 @@ fn view_from(resolved: &Config) -> AiConfigView {
 // ---------- HTTP handlers ----------
 
 /// `GET /config/ai` — masked read of the active config.
+#[utoipa::path(
+    get,
+    path = "/config/ai",
+    tag = "ai-config",
+    responses((status = 200, description = "The masked, read-safe AI provider config.", body = AiConfigView))
+)]
 pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<AiConfigView> {
     Json(state.ai_config.read_masked())
 }
 
 /// `PUT /config/ai` — validate, save, swap the live client, return the masked
 /// view. Invalid provider -> 400. Empty `apiKey` keeps the stored key.
+#[utoipa::path(
+    put,
+    path = "/config/ai",
+    tag = "ai-config",
+    request_body(content = AiConfigUpdate, description = "Partial AI provider config update (camelCase). Unknown keys are ignored; the runtime accepts a lenient JSON object."),
+    responses(
+        (status = 200, description = "The updated masked config.", body = AiConfigView),
+        (status = 400, description = "Malformed or invalid config body.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn put_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
@@ -322,7 +338,8 @@ pub async fn put_config(
     Ok(Json(view))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ModelsQuery {
     #[serde(default)]
     provider: String,
@@ -335,6 +352,13 @@ pub struct ModelsQuery {
 /// `GET /config/ai/models` — list provider models using the SUBMITTED
 /// provider/base-url/key. Any fetch failure -> 200 with `models: []` + a
 /// non-null `error` (never a 5xx).
+#[utoipa::path(
+    get,
+    path = "/config/ai/models",
+    tag = "ai-config",
+    params(ModelsQuery),
+    responses((status = 200, description = "Available models for the given provider/baseUrl/apiKey, or an error descriptor embedded in the JSON."))
+)]
 pub async fn list_models(Query(q): Query<ModelsQuery>) -> Json<serde_json::Value> {
     match llm::list_models(&q.provider, &q.base_url, &q.api_key).await {
         Ok(models) => Json(json!({ "models": models, "error": serde_json::Value::Null })),
@@ -342,7 +366,7 @@ pub async fn list_models(Query(q): Query<ModelsQuery>) -> Json<serde_json::Value
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TestBody {
     #[serde(default)]
     provider: String,
@@ -356,6 +380,13 @@ pub struct TestBody {
 
 /// `POST /config/ai/test` — build a transient client from the submitted body,
 /// do one minimal non-streaming `ask`, report `{ ok, error }`. Never persists.
+#[utoipa::path(
+    post,
+    path = "/config/ai/test",
+    tag = "ai-config",
+    request_body(content = TestBody, description = "Provider credentials/settings to test-connect against."),
+    responses((status = 200, description = "Connectivity test result `{ok, …}` (failures are reported in the body, not as a non-200 status)."))
+)]
 pub async fn test_config(Json(body): Json<TestBody>) -> Json<serde_json::Value> {
     let mut config = Config::from_env();
     config.llm_provider = Some(if body.provider == "openai" {

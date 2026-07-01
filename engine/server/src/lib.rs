@@ -11,6 +11,7 @@ pub mod llm;
 pub mod meeting;
 pub mod models;
 pub mod openai;
+pub mod openapi;
 pub mod routes;
 pub mod runs;
 pub mod state;
@@ -22,7 +23,6 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -92,8 +92,17 @@ async fn require_token(
     };
     // Keep the bundle and health checks reachable without the token. The /app
     // response additionally hands the webview its same-origin token cookie.
+    // `/openapi.json` and `/docs` are exempt UNCONDITIONALLY (not under
+    // `cfg(debug_assertions)`): in a debug build the request reaches the live
+    // route (200), in a release build the compiled-out route falls through to a
+    // router 404 — so the gate never returns 401 for these paths in any build.
     let path = req.uri().path().to_owned();
-    if path == "/" || path == "/status" || path.starts_with("/app") {
+    if path == "/"
+        || path == "/status"
+        || path == "/openapi.json"
+        || path == "/docs"
+        || path.starts_with("/app")
+    {
         let mut resp = next.run(req).await;
         if path.starts_with("/app") {
             if let Some(cookie) = token_cookie_header(expected) {
@@ -135,98 +144,37 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 pub fn build_router(state: Arc<AppState>, frontend_dir: Option<&str>) -> Router {
     // Captured before `state` is moved into `with_state` below.
     let engine_token: Option<Arc<str>> = state.config.engine_token.as_deref().map(Arc::from);
-    let mut app = Router::new()
-        .route("/transcribe", post(routes::transcribe))
-        .route("/listen", get(listen::listen))
-        .route("/ask", post(ask::ask))
-        .route("/transcribe/meeting", post(meeting::submit))
-        .route(
-            "/transcribe/meeting/{id}",
-            get(meeting::poll).delete(meeting::cancel),
-        )
-        .route("/runs/{id}", get(runs::get_run))
-        .route("/items/{id}/transcribe", post(items::items_transcribe))
-        .route("/items/{id}/diarize", post(items::items_diarize))
-        .route("/items/{id}/ai", post(items::items_ai))
-        .route("/items/{id}/runs", get(runs::list_item_runs))
-        .route("/v1/audio/transcriptions", post(openai::transcriptions))
-        .route("/v1/audio/translations", post(openai::translations))
-        .route("/v1/models", get(openai::models))
-        .route("/actions", get(routes::actions))
-        .route("/models", get(models::list))
-        .route("/models/active", post(models::set_active))
-        .route("/models/download", post(models::download))
-        .route(
-            "/models/download/{name}",
-            get(models::download_status).delete(models::cancel_download),
-        )
-        // Uninstall a model (CRUD's D); a sibling of the static routes above.
-        .route("/models/{name}", axum::routing::delete(models::delete_model))
-        // Auxiliary models (diarization + VAD) — same shape as /models.
-        .route("/aux-models", get(aux_models::list))
-        .route("/aux-models/download", post(aux_models::download))
-        .route(
-            "/aux-models/download/{id}",
-            get(aux_models::download_status).delete(aux_models::cancel_download),
-        )
-        .route(
-            "/aux-models/{id}",
-            axum::routing::delete(aux_models::delete_model),
-        )
-        .route(
-            "/v1/sessions",
-            get(history::list_sessions).post(history::create_session),
-        )
-        .route(
-            "/v1/sessions/audio",
-            axum::routing::delete(history::bulk_clear_audio),
-        )
-        // Static path — registered alongside the other /v1/sessions/* siblings;
-        // matchit prefers it over the /{id} capture so "events" is never a id.
-        .route(
-            "/v1/sessions/events",
-            get(history::stream_session_events),
-        )
-        .route(
-            "/v1/sessions/{id}",
-            get(history::get_session)
-                .patch(history::patch_session)
-                .delete(history::delete_session),
-        )
-        .route("/v1/sessions/{id}/finals", post(history::append_final))
-        // The v2 action_runs write path (POST/DELETE /v1/sessions/{id}/runs) is
-        // retired — action_runs is now a read-only legacy source surfaced only
-        // via legacy-origin synthesis (retire-v2-recording-shell).
-        .route(
-            "/v1/sessions/{id}/audio",
-            post(history::upload_session_audio).get(history::stream_session_audio),
-        )
-        .route(
-            "/v1/meetings",
-            get(history::list_meetings).post(history::create_meeting),
-        )
-        .route(
-            "/v1/meetings/{id}",
-            get(history::get_meeting)
-                .patch(history::patch_meeting)
-                .delete(history::delete_meeting),
-        )
-        .route(
-            "/v1/meetings/{id}/audio",
-            post(history::upload_meeting_audio).get(history::stream_meeting_audio),
-        )
-        .route(
-            "/config/ai",
-            get(ai_config::get_config).put(ai_config::put_config),
-        )
-        .route("/config/ai/models", get(ai_config::list_models))
-        .route("/config/ai/test", post(ai_config::test_config))
-        .route("/status", get(routes::status))
-        .route("/", get(routes::discovery))
-        .layer(axum::extract::DefaultBodyLimit::max(
-            (state.config.max_file_size_bytes() + 1024 * 1024) as usize,
-        ))
-        .with_state(state);
+    // Body-size limit stays INNERMOST — applied before `.with_state()` so
+    // `require_token` runs before the size check and an unauthenticated
+    // oversized request returns 401, not 413 (load-bearing; do not reorder).
+    let body_limit = axum::extract::DefaultBodyLimit::max(
+        (state.config.max_file_size_bytes() + 1024 * 1024) as usize,
+    );
+    // Single source of truth: the 49 API routes and the OpenAPI document are
+    // assembled together on an `OpenApiRouter`, then `split_for_parts()` yields
+    // the plain `Router` (for the static mount, doc routes, and middleware) plus
+    // the generated `OpenApi`. `_api` is unused in release builds (the doc
+    // routes below are compiled out), hence the underscore.
+    let (router, _api) = openapi::api_router().layer(body_limit).split_for_parts();
+    let mut app: Router = router.with_state(state);
+
+    // Doc routes are DEBUG-ONLY: present under `make dev` / `cargo test`,
+    // compiled out of release builds (`make server` / `make desktop` / `make
+    // up`), where both paths fall through to a 404. Spec assembly above still
+    // runs in every build (only these two serving routes are conditional). They
+    // are attached to the plain `Router` after `split_for_parts()`, so they are
+    // absent from the generated document — matching the `/app` static mount.
+    #[cfg(debug_assertions)]
+    {
+        use utoipa_scalar::{Scalar, Servable};
+        let api = _api.clone();
+        app = app
+            .route(
+                "/openapi.json",
+                axum::routing::get(move || std::future::ready(axum::Json(api.clone()))),
+            )
+            .merge(Scalar::with_url("/docs", _api));
+    }
 
     if let Some(dir) = frontend_dir {
         if std::path::Path::new(dir).is_dir() {
@@ -283,6 +231,7 @@ fn overlay_cors() -> CorsLayer {
 mod tests {
     use super::*;
     use axum::body::Body;
+    use axum::routing::get;
     use tower::ServiceExt;
 
     fn guarded(token: Option<Arc<str>>) -> Router {

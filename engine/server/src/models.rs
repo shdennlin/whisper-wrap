@@ -50,6 +50,15 @@ impl DownloadJob {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/models",
+    tag = "models",
+    responses(
+        (status = 200, description = "Installed + registered ASR models with active/loaded state (ad-hoc JSON)."),
+        (status = 500, description = "Registry read error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn list(State(state): State<Arc<AppState>>) -> Result<Json<serde_json::Value>, ApiError> {
     let models = registry::list_models(&state.config).map_err(ApiError::internal)?;
     Ok(Json(json!({
@@ -62,7 +71,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Result<Json<serde_json:
     })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SwapRequest {
     name: String,
 }
@@ -85,6 +94,18 @@ pub fn registry_error_status(e: &registry::RegistryError) -> ApiError {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/models/active",
+    tag = "models",
+    request_body(content = SwapRequest, description = "The model name to load as the active engine."),
+    responses(
+        (status = 200, description = "Model activated (ad-hoc JSON status)."),
+        (status = 404, description = "Unknown model name.", body = crate::routes::ApiErrorBody),
+        (status = 409, description = "Model weights missing or unusable.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "Load failure.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn set_active(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SwapRequest>,
@@ -122,13 +143,25 @@ pub async fn set_active(
     })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct DownloadRequest {
     name: String,
 }
 
 /// Start (or report an already-running) download of a model's ggml
 /// weights. Returns immediately; poll GET /models/download/{name}.
+#[utoipa::path(
+    post,
+    path = "/models/download",
+    tag = "models",
+    request_body(content = DownloadRequest, description = "The model name to download."),
+    responses(
+        (status = 200, description = "Download started/queued (ad-hoc JSON with a progress handle)."),
+        (status = 404, description = "Unknown model name.", body = crate::routes::ApiErrorBody),
+        (status = 409, description = "A download for this model is already in progress.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "Download setup failure.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn download(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DownloadRequest>,
@@ -298,6 +331,16 @@ fn run_download(state: Arc<AppState>, name: String, spec: registry::DownloadSpec
 /// Request cancellation of an in-flight download. The worker notices the
 /// flag between chunks, removes the partial file, then flips the job to
 /// "cancelled" — poll GET /models/download/{name} to observe it land.
+#[utoipa::path(
+    delete,
+    path = "/models/download/{name}",
+    tag = "models",
+    params(("name" = String, Path, description = "Model name whose download to cancel.")),
+    responses(
+        (status = 200, description = "Download cancelled (ad-hoc JSON)."),
+        (status = 404, description = "No active download for that model.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn cancel_download(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -349,6 +392,18 @@ mod tests {
 
 /// Uninstall a model's on-disk weights (the "D" in model CRUD). Refuses to
 /// remove the currently-loaded model — switch away first.
+#[utoipa::path(
+    delete,
+    path = "/models/{name}",
+    tag = "models",
+    params(("name" = String, Path, description = "Model name to uninstall.")),
+    responses(
+        (status = 200, description = "Model weights removed (ad-hoc JSON)."),
+        (status = 404, description = "Unknown model name.", body = crate::routes::ApiErrorBody),
+        (status = 409, description = "Model weights missing or cannot be removed.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "Filesystem error removing the weights.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn delete_model(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,
@@ -370,6 +425,16 @@ pub async fn delete_model(
     Ok(Json(json!({"name": name, "removed": true})))
 }
 
+#[utoipa::path(
+    get,
+    path = "/models/download/{name}",
+    tag = "models",
+    params(("name" = String, Path, description = "Model name whose download progress to read.")),
+    responses(
+        (status = 200, description = "Current download progress (ad-hoc JSON)."),
+        (status = 404, description = "No active download for that model.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn download_status(
     State(state): State<Arc<AppState>>,
     AxumPath(name): AxumPath<String>,

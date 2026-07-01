@@ -88,6 +88,13 @@ fn dest_for(config: &whisper_wrap_core::Config, id: &str) -> Option<PathBuf> {
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/aux-models",
+    tag = "models",
+    operation_id = "aux_models_list",
+    responses((status = 200, description = "Auxiliary (diarization + VAD) models with install state (ad-hoc JSON)."))
+)]
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let models: Vec<_> = AUX_MODELS
         .iter()
@@ -108,13 +115,25 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     Json(json!({ "models": models }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct AuxDownloadRequest {
     id: String,
 }
 
 /// Start (or report an already-running) download. Returns immediately; poll
 /// GET /aux-models/download/{id}.
+#[utoipa::path(
+    post,
+    path = "/aux-models/download",
+    tag = "models",
+    operation_id = "aux_models_download",
+    request_body(content = AuxDownloadRequest, description = "The auxiliary model id to download."),
+    responses(
+        (status = 200, description = "Download started/queued (ad-hoc JSON with a progress handle)."),
+        (status = 404, description = "Unknown auxiliary model id.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "Download setup failure.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn download(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AuxDownloadRequest>,
@@ -211,6 +230,14 @@ fn run_aux_download(state: Arc<AppState>, id: String, url: String, dest: PathBuf
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/aux-models/download/{id}",
+    tag = "models",
+    operation_id = "aux_models_download_status",
+    params(("id" = String, Path, description = "Auxiliary model id whose download progress to read.")),
+    responses((status = 200, description = "Current download progress (ad-hoc JSON)."))
+)]
 pub async fn download_status(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -236,6 +263,18 @@ pub async fn download_status(
 }
 
 /// Uninstall an aux model (delete its ONNX file from disk).
+#[utoipa::path(
+    delete,
+    path = "/aux-models/{id}",
+    tag = "models",
+    operation_id = "aux_models_delete_model",
+    params(("id" = String, Path, description = "Auxiliary model id to uninstall.")),
+    responses(
+        (status = 200, description = "Auxiliary model weights removed (ad-hoc JSON)."),
+        (status = 404, description = "Unknown auxiliary model id.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "Filesystem error removing the weights.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn delete_model(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -251,6 +290,17 @@ pub async fn delete_model(
 
 /// Cancel an in-flight aux download (mirror of models::cancel_download, keyed
 /// by aux id). The worker notices the flag between chunks.
+#[utoipa::path(
+    delete,
+    path = "/aux-models/download/{id}",
+    tag = "models",
+    operation_id = "aux_models_cancel_download",
+    params(("id" = String, Path, description = "Auxiliary model id whose download to cancel.")),
+    responses(
+        (status = 200, description = "Download cancelled (ad-hoc JSON)."),
+        (status = 404, description = "No active download for that auxiliary model.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn cancel_download(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,

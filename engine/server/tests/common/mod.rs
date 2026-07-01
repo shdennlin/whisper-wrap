@@ -49,11 +49,22 @@ pub fn no_model_router(test: &str) -> Router {
 }
 
 pub fn no_model_app(test: &str) -> (Router, Arc<AppState>) {
+    no_model_app_inner(test, None)
+}
+
+/// Same zero-weights harness but with the `engine_token` gate enabled, so
+/// token-exemption / 401-vs-404 behavior can be exercised.
+pub fn no_model_router_with_token(test: &str, token: &str) -> Router {
+    no_model_app_inner(test, Some(token.to_owned())).0
+}
+
+fn no_model_app_inner(test: &str, engine_token: Option<String>) -> (Router, Arc<AppState>) {
     let base = sandbox(test);
     let reg_path = base.join("models.yaml");
     std::fs::write(&reg_path, REGISTRY_YAML).expect("write registry");
 
     let mut config = Config::from_env();
+    config.engine_token = engine_token;
     config.registry_path = reg_path;
     config.models_dir = base.join("models"); // empty — zero weights installed
     config.model_dir = None;

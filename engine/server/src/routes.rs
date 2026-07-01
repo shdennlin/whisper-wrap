@@ -56,6 +56,18 @@ impl IntoResponse for ApiError {
     }
 }
 
+/// The `{ "detail": string }` body every [`ApiError`] serializes to. `ApiError`
+/// itself is private and only implements `IntoResponse`, so it cannot derive
+/// `ToSchema`; this is the single reusable schema every fallible operation
+/// references for its non-200 error responses (rather than re-inlining the
+/// shape per handler).
+#[derive(utoipa::ToSchema)]
+pub struct ApiErrorBody {
+    /// Human-readable error description.
+    #[schema(example = "Unsupported Content-Type: text/plain")]
+    pub detail: String,
+}
+
 pub(crate) fn normalize_content_type(raw: Option<&str>) -> String {
     raw.unwrap_or("")
         .split(';')
@@ -151,7 +163,8 @@ pub(crate) async fn read_multipart_file(req: Request) -> Result<(Vec<u8>, String
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct TranscribeQuery {
     #[serde(default = "default_language")]
     language: String,
@@ -169,6 +182,27 @@ fn default_language() -> String {
     "auto".into()
 }
 
+#[utoipa::path(
+    post,
+    path = "/transcribe",
+    tag = "transcription",
+    params(TranscribeQuery),
+    request_body(
+        content_type = "application/octet-stream",
+        description = "Audio payload — raw bytes with an `audio/*` (or \
+            `application/octet-stream`) Content-Type, or `multipart/form-data` \
+            with a `file` part.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 200, description = "Transcription result — text plus timing/metadata (ad-hoc JSON object)."),
+        (status = 400, description = "Empty or unreadable audio body, or missing multipart `file` field.", body = ApiErrorBody),
+        (status = 413, description = "Audio exceeds the configured maximum file size.", body = ApiErrorBody),
+        (status = 415, description = "Unsupported Content-Type or media format.", body = ApiErrorBody),
+        (status = 500, description = "Audio decode or inference failure.", body = ApiErrorBody),
+        (status = 503, description = "No ASR model is loaded.", body = ApiErrorBody)
+    )
+)]
 pub async fn transcribe(
     State(state): State<Arc<AppState>>,
     Query(q): Query<TranscribeQuery>,
@@ -247,6 +281,13 @@ pub async fn transcribe(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/status",
+    tag = "system",
+    security(()),
+    responses((status = 200, description = "Engine health + active-model snapshot (ad-hoc JSON). Token-exempt."))
+)]
 pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let model = state.model_snapshot();
     let engine = state.engine_handle();
@@ -303,6 +344,13 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/",
+    tag = "system",
+    security(()),
+    responses((status = 200, description = "API discovery document — a hand-maintained list of top-level routes (ad-hoc JSON). Token-exempt."))
+)]
 pub async fn discovery() -> Json<serde_json::Value> {
     Json(json!({
         "endpoints": [
@@ -322,6 +370,12 @@ pub async fn discovery() -> Json<serde_json::Value> {
     }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/actions",
+    tag = "system",
+    responses((status = 200, description = "The prompt-action registry (categories + actions) as ad-hoc JSON."))
+)]
 pub async fn actions(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
         "actions": state.actions,

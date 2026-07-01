@@ -122,13 +122,25 @@ where
         .into_response()
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ModelQuery {
     model: Option<String>,
 }
 
 /// `POST /items/{id}/transcribe?model=` — transcribe the item's stored audio on
 /// the chosen model, snapshotting the transcript into a transcribe run (D3).
+#[utoipa::path(
+    post,
+    path = "/items/{id}/transcribe",
+    tag = "items",
+    params(("id" = String, Path, description = "Item (session or meeting) id."), ModelQuery),
+    responses(
+        (status = 202, description = "Transcription run accepted — returns the run descriptor; poll `GET /runs/{id}`."),
+        (status = 404, description = "No item or stored audio for that id.", body = crate::routes::ApiErrorBody),
+        (status = 409, description = "A transcription run is already in progress for the item.")
+    )
+)]
 pub async fn items_transcribe(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -272,7 +284,8 @@ fn transcript_text(db: &HistoryDb, item_id: &str) -> Option<String> {
     )
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct QualityQuery {
     quality: Option<String>,
 }
@@ -280,6 +293,18 @@ pub struct QualityQuery {
 /// `POST /items/{id}/diarize?quality=` — diarize the item's stored audio (D4).
 /// When the item has a transcript the diarization is merged into
 /// speaker-attributed segments; otherwise the raw speaker turns are recorded.
+#[utoipa::path(
+    post,
+    path = "/items/{id}/diarize",
+    tag = "items",
+    params(("id" = String, Path, description = "Item id."), QualityQuery),
+    responses(
+        (status = 202, description = "Diarization run accepted."),
+        (status = 400, description = "Invalid quality tier."),
+        (status = 404, description = "No item or stored audio for that id.", body = crate::routes::ApiErrorBody),
+        (status = 409, description = "A diarization run is already in progress for the item.")
+    )
+)]
 pub async fn items_diarize(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -338,7 +363,7 @@ pub async fn items_diarize(
     )
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct AiBody {
     prompt: String,
 }
@@ -347,6 +372,18 @@ pub struct AiBody {
 /// Hard DAG gate: the item must exist (404) and have a transcript (409); the
 /// LLM must be configured (503). `?model=` is recorded but does not switch the
 /// LLM until llm-provider-abstraction.
+#[utoipa::path(
+    post,
+    path = "/items/{id}/ai",
+    tag = "items",
+    params(("id" = String, Path, description = "Item id."), ModelQuery),
+    request_body(content = AiBody, description = "The prompt to run against the item's transcript."),
+    responses(
+        (status = 202, description = "AI run accepted."),
+        (status = 404, description = "No item for that id.", body = crate::routes::ApiErrorBody),
+        (status = 409, description = "The item has no transcript yet, or an AI run is already in progress.")
+    )
+)]
 pub async fn items_ai(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,

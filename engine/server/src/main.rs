@@ -11,6 +11,23 @@ use whisper_wrap_server::{build_router, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // `--dump-openapi <path>` regenerates the checked-in OpenAPI artifact and
+    // exits — no model, DB, or network needed (spec assembly is stateless and
+    // build-agnostic). This is how `docs/openapi.json` stays in sync for
+    // release/self-hosted consumers, who cannot reach the debug-only
+    // `GET /openapi.json` route.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--dump-openapi") {
+        let path = args
+            .get(pos + 1)
+            .context("--dump-openapi requires a <path> argument")?;
+        let spec = whisper_wrap_server::openapi::openapi_spec();
+        let json = serde_json::to_string_pretty(&spec).context("serialize OpenAPI")?;
+        std::fs::write(path, json).with_context(|| format!("write {path}"))?;
+        println!("wrote OpenAPI 3.1 document to {path}");
+        return Ok(());
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let config = Config::from_env();

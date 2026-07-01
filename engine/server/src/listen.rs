@@ -25,6 +25,22 @@ const MIN_FRAME_BYTES: usize = 200;
 const MAX_FRAME_BYTES: usize = 65_536;
 const CLOSE_UNSUPPORTED_DATA: u16 = 1003;
 
+#[utoipa::path(
+    get,
+    path = "/listen",
+    tag = "transcription",
+    description = "WebSocket endpoint for live captioning. The client performs a \
+        WebSocket upgrade, then streams 16 kHz mono `pcm_s16le` audio as binary \
+        frames. The server emits JSON text messages: \
+        `{\"type\":\"partial\"|\"final\",\"text\",\"start_ms\",\"end_ms\"}`, \
+        `{\"type\":\"warning\",\"message\":...}`, or `{\"type\":\"error\",\"message\":...}` \
+        followed by close code 1003. OpenAPI 3.1 cannot model the bidirectional \
+        frame protocol, so this entry is descriptive only and declares no request \
+        or response body schema.",
+    responses(
+        (status = 101, description = "Switching Protocols — the connection is upgraded to WebSocket.")
+    )
+)]
 pub async fn listen(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle(socket, state))
 }

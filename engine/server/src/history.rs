@@ -283,7 +283,8 @@ fn session_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>> 
 
 // ---------- sessions: endpoints ----------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListQuery {
     #[serde(default = "default_limit")]
     limit: i64,
@@ -351,6 +352,16 @@ fn default_limit() -> i64 {
     20
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sessions",
+    tag = "history",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Paged session list with item-metadata filters applied (ad-hoc JSON)."),
+        (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
@@ -378,6 +389,16 @@ pub async fn list_sessions(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{id}",
+    tag = "history",
+    params(("id" = String, Path, description = "Session id.")),
+    responses(
+        (status = 200, description = "The session with its items and finals (ad-hoc JSON)."),
+        (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn get_session(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -389,13 +410,24 @@ pub async fn get_session(
         .ok_or_else(|| not_found("session"))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SessionCreate {
     id: String,
     started_at: i64,
     mode: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sessions",
+    tag = "history",
+    request_body(content = SessionCreate, description = "New session metadata."),
+    responses(
+        (status = 200, description = "Session created (ad-hoc JSON with the new id)."),
+        (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SessionCreate>,
@@ -443,6 +475,18 @@ pub async fn create_session(
 /// live, and `KeepAlive` injects comment heartbeats so idle connections survive
 /// proxy timeouts. A subscriber that lags past the channel capacity gets one
 /// catch-up `changed` rather than an error.
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/events",
+    tag = "history",
+    description = "Server-Sent Events stream of session-list changes. On connect \
+        the server emits a `ready` event, then a `changed` event whenever any \
+        session is created, updated, or deleted; comment heartbeats keep idle \
+        connections alive. Clients re-fetch `GET /v1/sessions` on each `changed`.",
+    responses(
+        (status = 200, description = "An SSE stream of `ready` then `changed` events.", content_type = "text/event-stream")
+    )
+)]
 pub async fn stream_session_events(State(state): State<Arc<AppState>>) -> Response {
     let mut rx = state.sessions_changed.subscribe();
     let stream = async_stream::stream! {
@@ -464,7 +508,7 @@ pub async fn stream_session_events(State(state): State<Arc<AppState>>) -> Respon
         .into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SessionPatch {
     ended_at: Option<i64>,
     duration_ms: Option<i64>,
@@ -478,6 +522,18 @@ pub struct SessionPatch {
     category: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/v1/sessions/{id}",
+    tag = "history",
+    params(("id" = String, Path, description = "Session id.")),
+    request_body(content = SessionPatch, description = "Partial session update (title, item metadata, …)."),
+    responses(
+        (status = 200, description = "Updated session (ad-hoc JSON)."),
+        (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
+        (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn patch_session(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -526,6 +582,16 @@ pub async fn patch_session(
     Ok(Json(full))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/sessions/{id}",
+    tag = "history",
+    params(("id" = String, Path, description = "Session id.")),
+    responses(
+        (status = 200, description = "Session deleted."),
+        (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -550,7 +616,7 @@ pub async fn delete_session(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct FinalIn {
     text: String,
     start_ms: Option<i64>,
@@ -558,6 +624,18 @@ pub struct FinalIn {
     kind: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/sessions/{id}/finals",
+    tag = "history",
+    params(("id" = String, Path, description = "Session id.")),
+    request_body(content = FinalIn, description = "A finalized transcript segment to append to the session."),
+    responses(
+        (status = 200, description = "Segment appended."),
+        (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
+        (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn append_final(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -603,6 +681,22 @@ fn ensure_session(state: &AppState, id: &str) -> Result<(), ApiError> {
 
 // ---------- sessions: audio ----------
 
+#[utoipa::path(
+    post,
+    path = "/v1/sessions/{id}/audio",
+    tag = "history",
+    params(("id" = String, Path, description = "Session id.")),
+    request_body(
+        content_type = "multipart/form-data",
+        description = "Multipart upload carrying the session's audio blob in a `file` part.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 200, description = "Audio stored (ad-hoc JSON)."),
+        (status = 400, description = "Missing or malformed upload.", body = crate::routes::ApiErrorBody),
+        (status = 404, description = "No session with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn upload_session_audio(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -647,6 +741,16 @@ pub async fn upload_session_audio(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/sessions/{id}/audio",
+    tag = "history",
+    params(("id" = String, Path, description = "Session id.")),
+    responses(
+        (status = 200, description = "The stored audio blob (binary, original media type).", content_type = "application/octet-stream"),
+        (status = 404, description = "No session or no stored audio for that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn stream_session_audio(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -665,6 +769,15 @@ pub async fn stream_session_audio(
     serve_audio(path, mime, &state.config.audio_dir())
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/sessions/audio",
+    tag = "history",
+    responses(
+        (status = 200, description = "Cleared stored audio blobs across sessions (ad-hoc JSON summary)."),
+        (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn bulk_clear_audio(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let paths: Vec<String> = state.history.with(|c| {
         let mut stmt = c.prepare("SELECT audio_path FROM sessions WHERE audio_path IS NOT NULL")?;
@@ -780,6 +893,16 @@ fn meeting_full(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>> 
     .optional()
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/meetings",
+    tag = "history",
+    params(ListQuery),
+    responses(
+        (status = 200, description = "Paged meeting list with item-metadata filters applied (ad-hoc JSON)."),
+        (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn list_meetings(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
@@ -806,6 +929,16 @@ pub async fn list_meetings(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/meetings/{id}",
+    tag = "history",
+    params(("id" = String, Path, description = "Meeting id.")),
+    responses(
+        (status = 200, description = "The meeting with its items (ad-hoc JSON)."),
+        (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn get_meeting(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -817,7 +950,7 @@ pub async fn get_meeting(
         .ok_or_else(|| not_found("meeting"))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct MeetingCreate {
     pub id: String,
     pub filename: String,
@@ -861,6 +994,17 @@ pub fn insert_meeting(db: &HistoryDb, m: &MeetingCreate) -> Result<(), ApiError>
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/meetings",
+    tag = "history",
+    request_body(content = MeetingCreate, description = "New meeting metadata."),
+    responses(
+        (status = 200, description = "Meeting created (ad-hoc JSON with the new id)."),
+        (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
+        (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn create_meeting(
     State(state): State<Arc<AppState>>,
     Json(body): Json<MeetingCreate>,
@@ -895,7 +1039,7 @@ pub async fn create_meeting(
     Ok((StatusCode::CREATED, Json(full)).into_response())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct MeetingPatch {
     speaker_names: Option<Value>,
     filename: Option<String>,
@@ -906,6 +1050,18 @@ pub struct MeetingPatch {
     category: Option<String>,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/v1/meetings/{id}",
+    tag = "history",
+    params(("id" = String, Path, description = "Meeting id.")),
+    request_body(content = MeetingPatch, description = "Partial meeting update (title, item metadata, …)."),
+    responses(
+        (status = 200, description = "Updated meeting (ad-hoc JSON)."),
+        (status = 400, description = "Malformed body.", body = crate::routes::ApiErrorBody),
+        (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn patch_meeting(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -956,6 +1112,16 @@ pub async fn patch_meeting(
     ))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/v1/meetings/{id}",
+    tag = "history",
+    params(("id" = String, Path, description = "Meeting id.")),
+    responses(
+        (status = 200, description = "Meeting deleted."),
+        (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn delete_meeting(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -980,6 +1146,22 @@ pub async fn delete_meeting(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/meetings/{id}/audio",
+    tag = "history",
+    params(("id" = String, Path, description = "Meeting id.")),
+    request_body(
+        content_type = "multipart/form-data",
+        description = "Multipart upload carrying the meeting's audio blob in a `file` part.",
+        content = Vec<u8>
+    ),
+    responses(
+        (status = 200, description = "Audio stored (ad-hoc JSON)."),
+        (status = 400, description = "Missing or malformed upload.", body = crate::routes::ApiErrorBody),
+        (status = 404, description = "No meeting with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn upload_meeting_audio(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -1046,6 +1228,16 @@ pub async fn upload_meeting_audio(
     })))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/meetings/{id}/audio",
+    tag = "history",
+    params(("id" = String, Path, description = "Meeting id.")),
+    responses(
+        (status = 200, description = "The stored audio blob (binary, original media type).", content_type = "application/octet-stream"),
+        (status = 404, description = "No meeting or no stored audio for that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn stream_meeting_audio(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,

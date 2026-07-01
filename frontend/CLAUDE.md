@@ -112,6 +112,12 @@ you edit `foo.ts`, its `foo.test.ts` is your regression net; run it.
 ## Where to look when unsure
 
 - Build/test/run details, test tiers, macOS E2E limits → [`README.md`](./README.md).
+- **Engine API contract** — endpoints, params, request/response shapes →
+  [`../docs/openapi.json`](../docs/openapi.json), generated from the router (the
+  machine-readable source of truth; feed it to a client generator or API explorer).
+  Interactive explorer under `make dev`: **`http://localhost:12000/docs`** (the
+  engine's own port, **dev builds only** — not Vite's `:5173`). Overview:
+  [`../docs/API.md`](../docs/API.md).
 - Frontend architecture decisions, designer collaboration model, open/closed boundary →
   the private umbrella's frontend-engineering notes.
 - Manual verification walkthrough → [`CHECKLIST.md`](./CHECKLIST.md).

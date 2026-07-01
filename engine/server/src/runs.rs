@@ -22,7 +22,7 @@ use crate::routes::ApiError;
 use crate::state::AppState;
 
 /// The five lifecycle states every run reports (job-status contract).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RunStatus {
     Queued,
@@ -57,7 +57,7 @@ impl RunStatus {
 
 /// The operation a run records. The `runs` table is the eventual superset of
 /// all three kinds; this change writes only `Diarize` (the meeting pipeline).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RunKind {
     Transcribe,
@@ -89,7 +89,7 @@ impl RunKind {
 /// synthesized at list time from a session's `finals` / legacy `action_runs`,
 /// so a read surface sees one unified history without reconciling the storage
 /// split. Synthesized runs are never re-runnable.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RunOrigin {
     Stage,
@@ -100,7 +100,7 @@ pub enum RunOrigin {
 /// The job-status contract JSON returned by `GET /runs/{id}`. `params` is
 /// stored in the table (D1) but deliberately NOT part of the status contract,
 /// so it does not appear here.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunRecord {
     pub id: String,
     pub item_id: String,
@@ -393,6 +393,16 @@ pub fn list_unified(db: &HistoryDb, item_id: &str) -> Result<Vec<RunRecord>, Api
 /// `GET /runs/{id}` (D5): the job-status contract for any run, served from the
 /// persisted row — so it answers correctly after a restart, when no in-memory
 /// job remains. An unknown id is a 404 with the standard error envelope.
+#[utoipa::path(
+    get,
+    path = "/runs/{id}",
+    tag = "items",
+    params(("id" = String, Path, description = "Run id.")),
+    responses(
+        (status = 200, description = "The run's job-status contract plus result snapshot.", body = RunRecord),
+        (status = 404, description = "No run with that id.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn get_run(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,
@@ -408,6 +418,16 @@ pub async fn get_run(
 /// each with its job-status contract + result snapshot. The run inspector
 /// (fe-item-detail-runs) reads this to show the re-runnable pipeline history.
 /// An item with no runs returns an empty list (not a 404).
+#[utoipa::path(
+    get,
+    path = "/items/{id}/runs",
+    tag = "items",
+    params(("id" = String, Path, description = "Item id.")),
+    responses(
+        (status = 200, description = "All runs for the item (oldest first) as `{ \"runs\": RunRecord[] }`; an empty list when the item has no runs."),
+        (status = 500, description = "History store error.", body = crate::routes::ApiErrorBody)
+    )
+)]
 pub async fn list_item_runs(
     State(state): State<Arc<AppState>>,
     AxumPath(id): AxumPath<String>,

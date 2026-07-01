@@ -22,6 +22,13 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum = { version = "0.8", features = ["multipart", "ws"] }
+# OpenAPI 3.1 generation (compile-time). utoipa-axum 0.2 targets axum 0.8;
+# utoipa-scalar serves the interactive explorer. All three are MIT/Apache-2.0
+# (compatible with this crate's GPL-3.0-or-later). OpenAPI 3.1 is utoipa 5.x's
+# default output — no `yaml` feature (we emit JSON).
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+utoipa-scalar = { version = "0.3", features = ["axum"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 async-stream = "0.3"

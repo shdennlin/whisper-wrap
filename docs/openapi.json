@@ -1,0 +1,2486 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "whisper-wrap engine API",
+    "description": "HTTP/WebSocket/SSE API for the whisper-wrap transcription engine.",
+    "license": {
+      "name": "GPL-3.0-or-later",
+      "identifier": "GPL-3.0-or-later"
+    },
+    "version": "3.0.0-beta.1"
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "discovery",
+        "responses": {
+          "200": {
+            "description": "API discovery document — a hand-maintained list of top-level routes (ad-hoc JSON). Token-exempt."
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/actions": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "actions",
+        "responses": {
+          "200": {
+            "description": "The prompt-action registry (categories + actions) as ad-hoc JSON."
+          }
+        }
+      }
+    },
+    "/ask": {
+      "post": {
+        "tags": [
+          "transcription"
+        ],
+        "operationId": "ask",
+        "parameters": [
+          {
+            "name": "stream",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Optional per-call model override (llm-provider-abstraction). Absent\nselects the active provider's default model.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "log",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Either a JSON body `{\"text\": \"…\"}` for a text question, or raw/multipart audio (`audio/*`, `application/octet-stream`, or `multipart/form-data` with a `file` part) to transcribe-then-ask.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Answer. When `stream=true` the response is a `text/event-stream` (SSE) of incremental `data:` chunks terminated by a final event; otherwise a single JSON answer object."
+          },
+          "400": {
+            "description": "Empty or malformed body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Content-Type or media format.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Transcription or LLM failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No ASR model loaded (audio input) or no LLM provider configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/aux-models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "operationId": "aux_models_list",
+        "responses": {
+          "200": {
+            "description": "Auxiliary (diarization + VAD) models with install state (ad-hoc JSON)."
+          }
+        }
+      }
+    },
+    "/aux-models/download": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Start (or report an already-running) download. Returns immediately; poll\nGET /aux-models/download/{id}.",
+        "operationId": "aux_models_download",
+        "requestBody": {
+          "description": "The auxiliary model id to download.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuxDownloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Download started/queued (ad-hoc JSON with a progress handle)."
+          },
+          "404": {
+            "description": "Unknown auxiliary model id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Download setup failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/aux-models/download/{id}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "operationId": "aux_models_download_status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Auxiliary model id whose download progress to read.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current download progress (ad-hoc JSON)."
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Cancel an in-flight aux download (mirror of models::cancel_download, keyed\nby aux id). The worker notices the flag between chunks.",
+        "operationId": "aux_models_cancel_download",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Auxiliary model id whose download to cancel.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Download cancelled (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "No active download for that auxiliary model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/aux-models/{id}": {
+      "delete": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Uninstall an aux model (delete its ONNX file from disk).",
+        "operationId": "aux_models_delete_model",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Auxiliary model id to uninstall.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Auxiliary model weights removed (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "Unknown auxiliary model id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Filesystem error removing the weights.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config/ai": {
+      "get": {
+        "tags": [
+          "ai-config"
+        ],
+        "summary": "`GET /config/ai` — masked read of the active config.",
+        "operationId": "get_config",
+        "responses": {
+          "200": {
+            "description": "The masked, read-safe AI provider config.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiConfigView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ai-config"
+        ],
+        "summary": "`PUT /config/ai` — validate, save, swap the live client, return the masked\nview. Invalid provider -> 400. Empty `apiKey` keeps the stored key.",
+        "operationId": "put_config",
+        "requestBody": {
+          "description": "Partial AI provider config update (camelCase). Unknown keys are ignored; the runtime accepts a lenient JSON object.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated masked config.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiConfigView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or invalid config body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/models": {
+      "get": {
+        "tags": [
+          "ai-config"
+        ],
+        "summary": "`GET /config/ai/models` — list provider models using the SUBMITTED\nprovider/base-url/key. Any fetch failure -> 200 with `models: []` + a\nnon-null `error` (never a 5xx).",
+        "operationId": "list_models",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseUrl",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "apiKey",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available models for the given provider/baseUrl/apiKey, or an error descriptor embedded in the JSON."
+          }
+        }
+      }
+    },
+    "/config/ai/test": {
+      "post": {
+        "tags": [
+          "ai-config"
+        ],
+        "summary": "`POST /config/ai/test` — build a transient client from the submitted body,\ndo one minimal non-streaming `ask`, report `{ ok, error }`. Never persists.",
+        "operationId": "test_config",
+        "requestBody": {
+          "description": "Provider credentials/settings to test-connect against.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Connectivity test result `{ok, …}` (failures are reported in the body, not as a non-200 status)."
+          }
+        }
+      }
+    },
+    "/items/{id}/ai": {
+      "post": {
+        "tags": [
+          "items"
+        ],
+        "summary": "`POST /items/{id}/ai?model=` — run a prompt over the item's transcript (D5).\nHard DAG gate: the item must exist (404) and have a transcript (409); the\nLLM must be configured (503). `?model=` is recorded but does not switch the\nLLM until llm-provider-abstraction.",
+        "operationId": "items_ai",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Item id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The prompt to run against the item's transcript.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "AI run accepted."
+          },
+          "404": {
+            "description": "No item for that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The item has no transcript yet, or an AI run is already in progress."
+          }
+        }
+      }
+    },
+    "/items/{id}/diarize": {
+      "post": {
+        "tags": [
+          "items"
+        ],
+        "summary": "`POST /items/{id}/diarize?quality=` — diarize the item's stored audio (D4).\nWhen the item has a transcript the diarization is merged into\nspeaker-attributed segments; otherwise the raw speaker turns are recorded.",
+        "operationId": "items_diarize",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Item id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quality",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Diarization run accepted."
+          },
+          "400": {
+            "description": "Invalid quality tier."
+          },
+          "404": {
+            "description": "No item or stored audio for that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A diarization run is already in progress for the item."
+          }
+        }
+      }
+    },
+    "/items/{id}/runs": {
+      "get": {
+        "tags": [
+          "items"
+        ],
+        "summary": "`GET /items/{id}/runs` — every run recorded against an item (oldest first),\neach with its job-status contract + result snapshot. The run inspector\n(fe-item-detail-runs) reads this to show the re-runnable pipeline history.\nAn item with no runs returns an empty list (not a 404).",
+        "operationId": "list_item_runs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Item id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All runs for the item (oldest first) as `{ \"runs\": RunRecord[] }`; an empty list when the item has no runs."
+          },
+          "500": {
+            "description": "History store error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items/{id}/transcribe": {
+      "post": {
+        "tags": [
+          "items"
+        ],
+        "summary": "`POST /items/{id}/transcribe?model=` — transcribe the item's stored audio on\nthe chosen model, snapshotting the transcript into a transcribe run (D3).",
+        "operationId": "items_transcribe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Item (session or meeting) id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Transcription run accepted — returns the run descriptor; poll `GET /runs/{id}`."
+          },
+          "404": {
+            "description": "No item or stored audio for that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A transcription run is already in progress for the item."
+          }
+        }
+      }
+    },
+    "/listen": {
+      "get": {
+        "tags": [
+          "transcription"
+        ],
+        "description": "WebSocket endpoint for live captioning. The client performs a WebSocket upgrade, then streams 16 kHz mono `pcm_s16le` audio as binary frames. The server emits JSON text messages: `{\"type\":\"partial\"|\"final\",\"text\",\"start_ms\",\"end_ms\"}`, `{\"type\":\"warning\",\"message\":...}`, or `{\"type\":\"error\",\"message\":...}` followed by close code 1003. OpenAPI 3.1 cannot model the bidirectional frame protocol, so this entry is descriptive only and declares no request or response body schema.",
+        "operationId": "listen",
+        "responses": {
+          "101": {
+            "description": "Switching Protocols — the connection is upgraded to WebSocket."
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "Installed + registered ASR models with active/loaded state (ad-hoc JSON)."
+          },
+          "500": {
+            "description": "Registry read error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/active": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "operationId": "set_active",
+        "requestBody": {
+          "description": "The model name to load as the active engine.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Model activated (ad-hoc JSON status)."
+          },
+          "404": {
+            "description": "Unknown model name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Model weights missing or unusable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Load failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/download": {
+      "post": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Start (or report an already-running) download of a model's ggml\nweights. Returns immediately; poll GET /models/download/{name}.",
+        "operationId": "download",
+        "requestBody": {
+          "description": "The model name to download.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Download started/queued (ad-hoc JSON with a progress handle)."
+          },
+          "404": {
+            "description": "Unknown model name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A download for this model is already in progress.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Download setup failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/download/{name}": {
+      "get": {
+        "tags": [
+          "models"
+        ],
+        "operationId": "download_status",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Model name whose download progress to read.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current download progress (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "No active download for that model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Request cancellation of an in-flight download. The worker notices the\nflag between chunks, removes the partial file, then flips the job to\n\"cancelled\" — poll GET /models/download/{name} to observe it land.",
+        "operationId": "cancel_download",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Model name whose download to cancel.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Download cancelled (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "No active download for that model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{name}": {
+      "delete": {
+        "tags": [
+          "models"
+        ],
+        "summary": "Uninstall a model's on-disk weights (the \"D\" in model CRUD). Refuses to\nremove the currently-loaded model — switch away first.",
+        "operationId": "delete_model",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Model name to uninstall.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model weights removed (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "Unknown model name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Model weights missing or cannot be removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Filesystem error removing the weights.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runs/{id}": {
+      "get": {
+        "tags": [
+          "items"
+        ],
+        "summary": "`GET /runs/{id}` (D5): the job-status contract for any run, served from the\npersisted row — so it answers correctly after a restart, when no in-memory\njob remains. An unknown id is a 404 with the standard error envelope.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's job-status contract plus result snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "Engine health + active-model snapshot (ad-hoc JSON). Token-exempt."
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/transcribe": {
+      "post": {
+        "tags": [
+          "transcription"
+        ],
+        "operationId": "transcribe",
+        "parameters": [
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Optional per-request ASR model (per-request-asr-model). Absent selects\nthe active engine; present selects that model with no global swap.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "log",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Audio payload — raw bytes with an `audio/*` (or `application/octet-stream`) Content-Type, or `multipart/form-data` with a `file` part.",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription result — text plus timing/metadata (ad-hoc JSON object)."
+          },
+          "400": {
+            "description": "Empty or unreadable audio body, or missing multipart `file` field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Audio exceeds the configured maximum file size.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Content-Type or media format.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Audio decode or inference failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No ASR model is loaded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transcribe/meeting": {
+      "post": {
+        "tags": [
+          "transcription"
+        ],
+        "operationId": "submit",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "quality",
+            "in": "query",
+            "description": "fast (default) | balanced — diarization quality tier.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Optional per-request ASR model (stage-run-endpoints D7). Absent selects\nthe active engine — the v2 behavior.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Multipart upload with a `file` part carrying the meeting audio. Query params select the filename, diarization quality tier (`fast`|`balanced`), and optional per-request ASR model.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted — returns a job descriptor `{id, status, …}`; poll `GET /transcribe/meeting/{id}` for progress."
+          },
+          "400": {
+            "description": "Invalid quality tier or malformed upload (ad-hoc `{detail:{error,reason}}` body)."
+          },
+          "413": {
+            "description": "Audio exceeds the configured maximum file size."
+          },
+          "415": {
+            "description": "Unsupported Content-Type or media format."
+          }
+        }
+      }
+    },
+    "/transcribe/meeting/{id}": {
+      "get": {
+        "tags": [
+          "transcription"
+        ],
+        "operationId": "poll",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting job id returned by the submit call.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current job status and, when finished, the result (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "No job with that id."
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "transcription"
+        ],
+        "operationId": "cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting job id to cancel.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation requested for an in-flight job."
+          },
+          "404": {
+            "description": "No job with that id."
+          },
+          "409": {
+            "description": "Job already finished (done/error/cancelled)."
+          }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": [
+          "openai-compat"
+        ],
+        "operationId": "transcriptions",
+        "requestBody": {
+          "description": "OpenAI-compatible transcription request — `multipart/form-data` with a `file` part (audio) plus optional `model`/`language`/`response_format` fields.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription in OpenAI JSON shape (e.g. `{\"text\": …}`)."
+          },
+          "400": {
+            "description": "Malformed request or missing `file` part."
+          },
+          "413": {
+            "description": "Audio exceeds the configured maximum file size."
+          },
+          "415": {
+            "description": "Unsupported media format."
+          },
+          "500": {
+            "description": "Decode or inference failure."
+          },
+          "503": {
+            "description": "No ASR model loaded."
+          }
+        }
+      }
+    },
+    "/v1/audio/translations": {
+      "post": {
+        "tags": [
+          "openai-compat"
+        ],
+        "operationId": "translations",
+        "requestBody": {
+          "description": "OpenAI-compatible translation request (transcribe + translate to English) — `multipart/form-data` with a `file` part plus optional `model`/`response_format` fields.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "English translation in OpenAI JSON shape (e.g. `{\"text\": …}`)."
+          },
+          "400": {
+            "description": "Malformed request or missing `file` part."
+          },
+          "413": {
+            "description": "Audio exceeds the configured maximum file size."
+          },
+          "415": {
+            "description": "Unsupported media format."
+          },
+          "500": {
+            "description": "Decode or inference failure."
+          },
+          "503": {
+            "description": "No ASR model loaded."
+          }
+        }
+      }
+    },
+    "/v1/meetings": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "list_meetings",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paged meeting list with item-metadata filters applied (ad-hoc JSON)."
+          },
+          "500": {
+            "description": "History store error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "create_meeting",
+        "requestBody": {
+          "description": "New meeting metadata.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meeting created (ad-hoc JSON with the new id)."
+          },
+          "400": {
+            "description": "Malformed body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "History store error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/meetings/{id}": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "get_meeting",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The meeting with its items (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "No meeting with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "delete_meeting",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Meeting deleted."
+          },
+          "404": {
+            "description": "No meeting with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "patch_meeting",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Partial meeting update (title, item metadata, …).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetingPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated meeting (ad-hoc JSON)."
+          },
+          "400": {
+            "description": "Malformed body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No meeting with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/meetings/{id}/audio": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "stream_meeting_audio",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored audio blob (binary, original media type).",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "No meeting or no stored audio for that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "upload_meeting_audio",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Meeting id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Multipart upload carrying the meeting's audio blob in a `file` part.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Audio stored (ad-hoc JSON)."
+          },
+          "400": {
+            "description": "Missing or malformed upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No meeting with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "openai-compat"
+        ],
+        "operationId": "openai_models",
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible model list `{object:\"list\", data:[…]}` describing the active ASR model."
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "list_sessions",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "starred",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paged session list with item-metadata filters applied (ad-hoc JSON)."
+          },
+          "500": {
+            "description": "History store error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "create_session",
+        "requestBody": {
+          "description": "New session metadata.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Session created (ad-hoc JSON with the new id)."
+          },
+          "400": {
+            "description": "Malformed body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "History store error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/audio": {
+      "delete": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "bulk_clear_audio",
+        "responses": {
+          "200": {
+            "description": "Cleared stored audio blobs across sessions (ad-hoc JSON summary)."
+          },
+          "500": {
+            "description": "History store error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/events": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "summary": "`GET /v1/sessions/events` — Server-Sent Events stream (live-library-push).",
+        "description": "Server-Sent Events stream of session-list changes. On connect the server emits a `ready` event, then a `changed` event whenever any session is created, updated, or deleted; comment heartbeats keep idle connections alive. Clients re-fetch `GET /v1/sessions` on each `changed`.",
+        "operationId": "stream_session_events",
+        "responses": {
+          "200": {
+            "description": "An SSE stream of `ready` then `changed` events.",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "get_session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session with its items and finals (ad-hoc JSON)."
+          },
+          "404": {
+            "description": "No session with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "delete_session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Session deleted."
+          },
+          "404": {
+            "description": "No session with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "patch_session",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Partial session update (title, item metadata, …).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated session (ad-hoc JSON)."
+          },
+          "400": {
+            "description": "Malformed body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/audio": {
+      "get": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "stream_session_audio",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored audio blob (binary, original media type).",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "No session or no stored audio for that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "upload_session_audio",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Multipart upload carrying the session's audio blob in a `file` part.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Audio stored (ad-hoc JSON)."
+          },
+          "400": {
+            "description": "Missing or malformed upload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}/finals": {
+      "post": {
+        "tags": [
+          "history"
+        ],
+        "operationId": "append_final",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A finalized transcript segment to append to the session.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinalIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Segment appended."
+          },
+          "400": {
+            "description": "Malformed body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AiBody": {
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string"
+          }
+        }
+      },
+      "AiConfigUpdate": {
+        "type": "object",
+        "description": "Update body for `PUT /config/ai`. camelCase on the wire.",
+        "required": [
+          "provider"
+        ],
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "systemPrompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AiConfigView": {
+        "type": "object",
+        "description": "The masked, read-safe view of the active config. Wire shape is camelCase.",
+        "required": [
+          "provider",
+          "baseUrl",
+          "model",
+          "keySet",
+          "keyHint",
+          "systemPromptSet"
+        ],
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "keyHint": {
+            "type": "string"
+          },
+          "keySet": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "systemPromptSet": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiErrorBody": {
+        "type": "object",
+        "description": "The `{ \"detail\": string }` body every [`ApiError`] serializes to. `ApiError`\nitself is private and only implements `IntoResponse`, so it cannot derive\n`ToSchema`; this is the single reusable schema every fallible operation\nreferences for its non-200 error responses (rather than re-inlining the\nshape per handler).",
+        "required": [
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Human-readable error description.",
+            "example": "Unsupported Content-Type: text/plain"
+          }
+        }
+      },
+      "AuxDownloadRequest": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "DownloadRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "FinalIn": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "end_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "MeetingCreate": {
+        "type": "object",
+        "required": [
+          "id",
+          "filename",
+          "result"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {},
+          "speaker_names": {},
+          "speakers_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "MeetingPatch": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "speaker_names": {},
+          "starred": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RunKind": {
+        "type": "string",
+        "description": "The operation a run records. The `runs` table is the eventual superset of\nall three kinds; this change writes only `Diarize` (the meeting pipeline).",
+        "enum": [
+          "transcribe",
+          "diarize",
+          "ai"
+        ]
+      },
+      "RunOrigin": {
+        "type": "string",
+        "description": "Provenance of a run in the item listing (unify-run-ledger). `Stage` is a\nreal row in the `runs` ledger; `Capture` and `Legacy` are read-only runs\nsynthesized at list time from a session's `finals` / legacy `action_runs`,\nso a read surface sees one unified history without reconciling the storage\nsplit. Synthesized runs are never re-runnable.",
+        "enum": [
+          "stage",
+          "capture",
+          "legacy"
+        ]
+      },
+      "RunRecord": {
+        "type": "object",
+        "description": "The job-status contract JSON returned by `GET /runs/{id}`. `params` is\nstored in the table (D1) but deliberately NOT part of the status contract,\nso it does not appear here.",
+        "required": [
+          "id",
+          "item_id",
+          "kind",
+          "status",
+          "progress",
+          "created_at",
+          "updated_at",
+          "origin"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RunKind"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "$ref": "#/components/schemas/RunOrigin",
+            "description": "Provenance (unify-run-ledger): `stage` for a real ledger row,\n`capture`/`legacy` for a run synthesized at list time. Ledger reads are\nalways `stage`; the synthesizers set the other two."
+          },
+          "progress": {
+            "type": "number",
+            "format": "double"
+          },
+          "result": {
+            "description": "The run's immutable result snapshot (stage-run-endpoints, D8), parsed\nfrom `result_json`. Serialized as `result`: null when the run has no\nsnapshot. Additive to the job-status contract."
+          },
+          "result_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RunStatus": {
+        "type": "string",
+        "description": "The five lifecycle states every run reports (job-status contract).",
+        "enum": [
+          "queued",
+          "running",
+          "done",
+          "error",
+          "cancelled"
+        ]
+      },
+      "SessionCreate": {
+        "type": "object",
+        "required": [
+          "id",
+          "started_at",
+          "mode"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SessionPatch": {
+        "type": "object",
+        "properties": {
+          "audio_mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audio_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audio_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "starred": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SwapRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TestBody": {
+        "type": "object",
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "engine_token_bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "engine_token_cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "engine_token"
+      }
+    }
+  },
+  "security": [
+    {
+      "engine_token_bearer": []
+    },
+    {
+      "engine_token_cookie": []
+    }
+  ]
+}
