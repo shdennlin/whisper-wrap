@@ -464,7 +464,7 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
         captured["name"] = name
         # Mirror the registry shape: every CT2 variant SHALL have
         # `local_dir` and SHOULD have `compute_type` (used to keep CPU
-        # inference at int8_float16 rather than the float32 default).
+        # inference quantised rather than falling back to the float32 default).
         return {
             "format": "ct2",
             "local_dir": f"{name}-ct2",
@@ -474,8 +474,6 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
     monkeypatch.setattr(registry, "resolve_ct2_variant_info", fake_resolve_info)
     # MeetingAnalyzer.from_config does `from app.services.registry import …`
     # at call time, so patching the attribute on the module suffices.
-    # Pretend we're on Linux so the macOS int8_float16→int8 downgrade
-    # doesn't trigger here — that path is exercised by its own test below.
     monkeypatch.setattr("sys.platform", "linux")
 
     monkeypatch.setenv("MEETING_MODEL_NAME", "some-other-model")
@@ -488,17 +486,19 @@ def test_analyzer_uses_registry_ct2_path(monkeypatch):
     assert analyzer.ct2_model_dir.endswith("some-other-model-ct2")
     assert analyzer.hf_token == "abc"
     assert analyzer.diarization_pipeline_name == "pyannote/speaker-diarization-3.1"
-    # The compute_type from the registry SHALL flow through; without this
-    # WhisperX would default to float32 on CPU (~4x slower).
-    assert analyzer.compute_type == "int8_float16"
+    # The meeting ct2 ASR runs on CPU on every platform (device is never wired
+    # to CUDA in from_config), so the registry's int8_float16 is downgraded to
+    # int8 here too — CPU has no float16 SIMD path. Regression guard for the
+    # Linux-CPU crash "target device or backend do not support int8_float16".
+    assert analyzer.compute_type == "int8"
 
 
 def test_analyzer_downgrades_int8_float16_on_macos_cpu(monkeypatch):
     """Apple Silicon CPU has no float16 SIMD path, so CTranslate2 rejects
     int8_float16 with `ValueError: target device or backend do not support`.
     `from_config` SHALL transparently downgrade to int8 (which IS supported
-    on CPU and gives the same ~3x speedup over float32) when running on
-    darwin so the meeting endpoint just works."""
+    on CPU and gives the same ~3x speedup over float32) so the meeting
+    endpoint just works."""
     from app.config import Config
     from app.services import registry
 
@@ -512,6 +512,33 @@ def test_analyzer_downgrades_int8_float16_on_macos_cpu(monkeypatch):
         },
     )
     monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setenv("MEETING_MODEL_NAME", "breeze-asr-25")
+    monkeypatch.setenv("HF_TOKEN", "x")
+    cfg = Config()
+
+    analyzer = MeetingAnalyzer.from_config(cfg)
+    assert analyzer.compute_type == "int8"
+
+
+def test_analyzer_downgrades_int8_float16_on_linux_cpu(monkeypatch):
+    """Linux CPU also lacks the float16 SIMD path — the meeting ct2 ASR runs
+    on CPU on Linux too (device is never wired to CUDA in from_config), so
+    int8_float16 SHALL downgrade to int8 here as well. Without this the
+    endpoint crashes with "target device or backend do not support efficient
+    int8_float16 computation" (the original Linux-deployment bug)."""
+    from app.config import Config
+    from app.services import registry
+
+    monkeypatch.setattr(
+        registry,
+        "resolve_ct2_variant_info",
+        lambda name: {
+            "format": "ct2",
+            "local_dir": f"{name}-ct2",
+            "compute_type": "int8_float16",
+        },
+    )
+    monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.setenv("MEETING_MODEL_NAME", "breeze-asr-25")
     monkeypatch.setenv("HF_TOKEN", "x")
     cfg = Config()

@@ -128,8 +128,6 @@ class MeetingAnalyzer:
         int8, which is supported and gives the same ~3x speedup over
         float32 without needing a separate registry entry.
         """
-        import sys
-
         from app.services.registry import (
             DEFAULT_MODELS_ROOT,
             resolve_ct2_variant_info,
@@ -137,9 +135,14 @@ class MeetingAnalyzer:
 
         variant = resolve_ct2_variant_info(config.MEETING_MODEL_NAME)
         compute_type = variant.get("compute_type") or "default"
-        # Apple Silicon CPU doesn't have the float16 SIMD path CTranslate2
-        # needs for int8_float16. int8 is the supported equivalent.
-        if compute_type == "int8_float16" and sys.platform == "darwin":
+        # The meeting ct2 ASR always runs on CPU (see __init__ `device` default
+        # and config.py: "CTranslate2 ASR stays on CPU regardless"). No CPU —
+        # macOS or Linux — has the float16 SIMD path int8_float16 needs, so
+        # CTranslate2 raises "target device or backend do not support efficient
+        # int8_float16" on either. Map to int8 (supported everywhere on CPU,
+        # same ~3x speedup over float32). The old guard only covered darwin,
+        # which crashed the Linux-CPU path.
+        if compute_type == "int8_float16":
             compute_type = "int8"
 
         # Resolve torch device for align + diarize stages. "auto" tries the
