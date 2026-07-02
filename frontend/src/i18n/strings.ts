@@ -183,7 +183,7 @@ export const STRINGS = {
     "meeting.subtitle":
       "Upload a meeting recording to get speaker-labelled transcripts with optional word-level timestamps.",
     "meeting.upload.title": "Choose audio file or drop here",
-    "meeting.upload.hint": "WAV, MP3, M4A, FLAC, OGG — up to 100 MB",
+    "meeting.upload.hint": "WAV, MP3, M4A, FLAC, OGG — up to 300 MB",
     "meeting.confirm.metaProbing": "{size} · reading duration…",
     "meeting.confirm.meta": "{size} · {duration}",
     "meeting.confirm.metaNoDuration": "{size}",
@@ -421,7 +421,7 @@ export const STRINGS = {
     "meeting.subtitle":
       "上傳會議錄音，取得按講者區分的逐字稿，可選擇加上字級時間戳。",
     "meeting.upload.title": "選擇音訊檔或拖曳到這裡",
-    "meeting.upload.hint": "WAV、MP3、M4A、FLAC、OGG — 最大 100 MB",
+    "meeting.upload.hint": "WAV、MP3、M4A、FLAC、OGG — 最大 300 MB",
     "meeting.confirm.metaProbing": "{size} · 讀取時長中…",
     "meeting.confirm.meta": "{size} · {duration}",
     "meeting.confirm.metaNoDuration": "{size}",

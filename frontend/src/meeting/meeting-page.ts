@@ -1104,15 +1104,20 @@ export function createMeetingPage(
     renderSidebar();
   });
 
-  // Backend MAX_FILE_SIZE_MB=100 → 100 MB max upload. Pre-validate
-  // client-side so the user sees the limit immediately instead of
-  // waiting through ffmpeg + libmagic for the server to return 413.
-  const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+  // Manual mirror of the backend MAX_FILE_SIZE_MB (currently 300). Pre-validate
+  // client-side so the user sees the limit immediately instead of waiting
+  // through ffmpeg + libmagic for the server to return 413. NOTE: this is a
+  // hardcoded shadow of the server config — keep it in sync if MAX_FILE_SIZE_MB
+  // changes (or wire it to /status to remove the drift).
+  const MAX_UPLOAD_MB = 300;
+  const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
   function checkFileSize(file: File): boolean {
     if (file.size <= MAX_UPLOAD_BYTES) return true;
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-    showError(t("meeting.error.tooLarge", { size: sizeMB, limit: "100" }));
+    showError(
+      t("meeting.error.tooLarge", { size: sizeMB, limit: String(MAX_UPLOAD_MB) }),
+    );
     // Clear the input so the same file can be re-picked after the user
     // shrinks it externally (without this, the OS-side picker treats
     // "same file as last" as a no-op and `change` never re-fires).
