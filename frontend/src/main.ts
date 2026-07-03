@@ -38,10 +38,10 @@ import { HealthMonitor } from "./health/health-monitor";
 import { copyToClipboard } from "./platform/clipboard";
 import { toast, toastWithAction } from "./ui/toast";
 import { maybeShowFirstRunGate } from "./ui/first-run-gate";
-import {
-  type ActionTemplate,
-  type ActionsResponse,
-  type Category,
+import type {
+  ActionTemplate,
+  ActionsResponse,
+  Category,
 } from "./ui/actions-bar";
 import { SettingsPanel, loadSettings } from "./ui/settings-panel";
 import { refreshAllSurfaces } from "./ui/refresh-surfaces";
@@ -57,6 +57,8 @@ import { openAiActionModal } from "./ui/ai-action-modal";
 import { runStage, pollRun } from "./library/runs-api";
 import { renderModels } from "./ui/models-view";
 import { renderSettings } from "./ui/settings-view";
+import { renderLicense } from "./ui/license-view";
+import { wireLicenseMenu } from "./ui/license-menu";
 import { ModelManager } from "./ui/model-manager";
 import { AuxModelManager } from "./ui/aux-model-manager";
 import { mountHomeView, type HomeViewHandle } from "./ui/home-view";
@@ -143,8 +145,7 @@ function svgIcon(
   }
   return svg;
 }
-const MOON_PATH =
-  "M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z";
+const MOON_PATH = "M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z";
 const SUN_RAYS =
   "M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41";
 const GEAR_PATH =
@@ -174,7 +175,9 @@ function paintThemeButton(resolved: ResolvedTheme): void {
   // describes what clicking does (i.e. the opposite). Mirrors GitHub /
   // Vercel / macOS behaviour where the icon is a status indicator.
   if (resolved === "dark") {
-    themeIcon.replaceChildren(svgIcon({ tag: "path", attrs: { d: MOON_PATH } }));
+    themeIcon.replaceChildren(
+      svgIcon({ tag: "path", attrs: { d: MOON_PATH } }),
+    );
     themeLabel.textContent = t("theme.labelDark");
     themeToggle.setAttribute("aria-label", t("theme.toggleAriaToLight"));
     themeToggle.title = t("theme.toggleAriaToLight");
@@ -428,7 +431,8 @@ doneAiBtn.addEventListener("click", () => {
       const runId = await runStage(itemId, "ai", { prompt: instruction });
       const done = await pollRun(runId);
       const answer = (done.result as { answer?: string } | null)?.answer;
-      if (typeof answer !== "string") throw new Error(done.error ?? "ai run failed");
+      if (typeof answer !== "string")
+        throw new Error(done.error ?? "ai run failed");
       return answer;
     },
     model: aiModelStatus,
@@ -534,7 +538,10 @@ const appShell = mountAppShell(appRoot, {
     // on Library the renderView wouldn't re-run and the star filter wouldn't
     // apply. `replace` always dispatches hashchange, forcing the re-render.
     const onLibrary = parseViewHash(window.location.hash).name === "library";
-    navigateToView({ name: "library" }, onLibrary ? { replace: true } : undefined);
+    navigateToView(
+      { name: "library" },
+      onLibrary ? { replace: true } : undefined,
+    );
   },
   // Enriched sidebar (fe-visual-polish): counts + recents from the same
   // unified item list the Library uses; failure degrades to the plain nav.
@@ -567,8 +574,7 @@ const appShell = mountAppShell(appRoot, {
       void renderDetail(container, view.itemId);
     } else if (view.name === "models") {
       renderModels(container, {
-        mount: (host) =>
-          new ModelManager(host, { onActiveChange: () => {} }),
+        mount: (host) => new ModelManager(host, { onActiveChange: () => {} }),
         mountAux: (host) =>
           new AuxModelManager(host, { onInstalled: () => {} }),
       });
@@ -577,7 +583,8 @@ const appShell = mountAppShell(appRoot, {
         mount: (host) =>
           new SettingsPanel({
             root: host,
-            enumerateDevices: async () => navigator.mediaDevices.enumerateDevices(),
+            enumerateDevices: async () =>
+              navigator.mediaDevices.enumerateDevices(),
             onChange: (s) => store.setRetention(s.retention),
             clearAllAudio: () => store.bulkClearAudio(),
             onToast: (text) => toast(text),
@@ -585,9 +592,20 @@ const appShell = mountAppShell(appRoot, {
             showExperimental: profile.showExperimental,
           }),
       });
+    } else if (view.name === "license") {
+      // fe-license-tab: the desktop-only license view. renderLicense reads the
+      // command bridge + surface itself and redirects to the profile default on
+      // a non-desktop surface (a hand-typed #license hash on web).
+      renderLicense(container);
     }
   },
 });
+
+// fe-license-tab: subscribe the macOS app-menu License… bridge at shell boot.
+// The desktop shell focuses the main window and emits "open-license"; here we
+// navigate to the in-shell license view. `tauriListen` returns null in a plain
+// browser, so this is silently skipped on the web surface.
+wireLicenseMenu({ listen: tauriListen });
 
 // Relocate the backend indicator + theme toggle into the shell toolbar
 // (their legacy header is no longer mounted). Inserted before the model pill
@@ -693,7 +711,6 @@ onRouteChange((route) => {
 // mode-card module stays in the tree (unreferenced here) until fe-visual-polish
 // confirms no other consumer.
 
-
 function openSettings(): void {
   settingsModal.hidden = false;
   document.addEventListener("keydown", onSettingsKey);
@@ -796,7 +813,10 @@ if (profile.surface === "desktop") {
   });
 
   // One-time hint when a paste runs without macOS Accessibility permission.
-  wirePastePermissionHint({ listen: tauriListen, showHint: (msg) => toast(msg) });
+  wirePastePermissionHint({
+    listen: tauriListen,
+    showHint: (msg) => toast(msg),
+  });
 }
 
 // ---- Recording lifecycle (recording-controller-extract) --------------------
@@ -902,7 +922,10 @@ function button(label: string): HTMLButtonElement {
  *  capable devices this returns false so the answer pane behaves like a
  *  static placeholder. */
 function isTouchDevice(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+  if (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function"
+  ) {
     return false;
   }
   return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
@@ -916,5 +939,9 @@ function micPermissionModal(detail: string): void {
 
 function reportError(e: unknown): void {
   console.error(e);
-  toast(t("app.errorPrefix", { message: e instanceof Error ? e.message : String(e) }));
+  toast(
+    t("app.errorPrefix", {
+      message: e instanceof Error ? e.message : String(e),
+    }),
+  );
 }

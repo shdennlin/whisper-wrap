@@ -20,6 +20,13 @@ describe("parseViewHash", () => {
     expect(parseViewHash("#/library")).toEqual({ name: "library" });
     expect(parseViewHash("#/models")).toEqual({ name: "models" });
     expect(parseViewHash("#/settings")).toEqual({ name: "settings" });
+    expect(parseViewHash("#/license")).toEqual({ name: "license" });
+  });
+
+  it("routes the License hash to the License view (parses on every surface)", () => {
+    // fe-license-tab: the router parses #/license totally regardless of
+    // surface — desktop-only gating lives in the view/profile layer, not here.
+    expect(parseViewHash("#/license")).toEqual({ name: "license" });
   });
 
   it("maps an item route to detail with the id", () => {
@@ -39,6 +46,7 @@ describe("viewToHash round-trips through parseViewHash", () => {
       { name: "library" },
       { name: "models" },
       { name: "settings" },
+      { name: "license" },
       { name: "detail", itemId: "x" },
     ];
     for (const v of views) {

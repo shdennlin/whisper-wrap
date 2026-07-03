@@ -11,6 +11,7 @@
  *   "#/item/<id>"         -> detail{itemId}
  *   "#/models"            -> models
  *   "#/settings"          -> settings
+ *   "#/license"           -> license
  *   anything else         -> home
  */
 
@@ -19,7 +20,10 @@ export type View =
   | { name: "library" }
   | { name: "detail"; itemId: string }
   | { name: "models" }
-  | { name: "settings" };
+  | { name: "settings" }
+  // fe-license-tab: License is a first-class view. The router parses its hash
+  // on every surface; desktop-only gating lives in the profile/view layer.
+  | { name: "license" };
 
 const HOME: View = { name: "home" };
 
@@ -29,6 +33,7 @@ export function parseViewHash(hash: string): View {
   if (path === "/library") return { name: "library" };
   if (path === "/models") return { name: "models" };
   if (path === "/settings") return { name: "settings" };
+  if (path === "/license") return { name: "license" };
   if (path.startsWith("/item/")) {
     const id = path.slice("/item/".length);
     // Reject empty ("/item/") and multi-segment ("/item/a/b") ids.
@@ -48,6 +53,8 @@ export function viewToHash(view: View): string {
       return "#/models";
     case "settings":
       return "#/settings";
+    case "license":
+      return "#/license";
     case "detail":
       return `#/item/${view.itemId}`;
   }

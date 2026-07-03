@@ -38,7 +38,10 @@ export interface SurfaceProfile {
 const DESKTOP: SurfaceProfile = {
   surface: "desktop",
   defaultView: "library",
-  nav: ["home", "library", "models", "settings"],
+  // fe-license-tab: License is a desktop-only sidebar destination — appended
+  // here (and absent from WEB) so web builds never render the item, the same
+  // lever that already hides Models on web.
+  nav: ["home", "library", "models", "settings", "license"],
   homeDensity: "full",
   showDesktopShortcuts: true,
   showExperimental: true,

@@ -30,17 +30,25 @@ describe("mountAppShell", () => {
   });
 
   it("boots on Home with its placeholder active", () => {
-    expect(root.querySelector(".nav-item.active")?.getAttribute("data-view")).toBe("home");
     expect(
-      root.querySelector(".shell-view .view-placeholder")?.getAttribute("data-view"),
+      root.querySelector(".nav-item.active")?.getAttribute("data-view"),
+    ).toBe("home");
+    expect(
+      root
+        .querySelector(".shell-view .view-placeholder")
+        ?.getAttribute("data-view"),
     ).toBe("home");
   });
 
   it("navigating swaps the active nav item and the view body", () => {
     navigateToView({ name: "library" }, { replace: true });
-    expect(root.querySelector(".nav-item.active")?.getAttribute("data-view")).toBe("library");
     expect(
-      root.querySelector(".shell-view .view-placeholder")?.getAttribute("data-view"),
+      root.querySelector(".nav-item.active")?.getAttribute("data-view"),
+    ).toBe("library");
+    expect(
+      root
+        .querySelector(".shell-view .view-placeholder")
+        ?.getAttribute("data-view"),
     ).toBe("library");
   });
 
@@ -113,7 +121,9 @@ describe("mountAppShell — REC pill", () => {
     recCb({ active: true, elapsedLabel: "00:12" });
     navigateToView({ name: "library" }, { replace: true });
     (pill() as HTMLButtonElement).click();
-    expect(root.querySelector(".nav-item.active")?.getAttribute("data-view")).toBe("home");
+    expect(
+      root.querySelector(".nav-item.active")?.getAttribute("data-view"),
+    ).toBe("home");
   });
 
   it("is removed when recording stops", () => {
@@ -269,6 +279,33 @@ describe("mountAppShell — nav from profile", () => {
   it("defaults to the full nav when no profile nav is given", () => {
     shell = mountAppShell(root);
     expect(navViews()).toEqual(["home", "library", "models", "settings"]);
+  });
+
+  // fe-license-tab: License is a desktop-only bottom-section item, gated by the
+  // surface profile's nav list (the same navSet lever that hides Models on web).
+  it("renders the License item next to Settings when 'license' is in the nav list", () => {
+    shell = mountAppShell(root, {
+      nav: ["home", "library", "models", "settings", "license"],
+    });
+    expect(navViews()).toEqual([
+      "home",
+      "library",
+      "models",
+      "settings",
+      "license",
+    ]);
+    // Pinned in the bottom section, right after Settings.
+    const settings = root.querySelector(
+      '.shell-sidebar [data-view="settings"]',
+    )!;
+    expect(settings.nextElementSibling?.getAttribute("data-view")).toBe(
+      "license",
+    );
+  });
+
+  it("omits the License item when 'license' is not in the nav list (web)", () => {
+    shell = mountAppShell(root, { nav: ["home", "library", "settings"] });
+    expect(navViews()).not.toContain("license");
   });
 });
 

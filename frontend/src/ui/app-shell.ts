@@ -24,13 +24,21 @@ import { t } from "../i18n";
 // come from the surface profile's `nav` (Models is absent on the web surface);
 // filtering the registry keeps the canonical order regardless of the profile
 // array's order.
-type NavName = Extract<View["name"], "home" | "library" | "models" | "settings">;
-const NAV_REGISTRY: { view: View; label: string; section: "top" | "bottom" }[] = [
-  { view: { name: "home" }, label: "Home", section: "top" },
-  { view: { name: "library" }, label: "Library", section: "top" },
-  { view: { name: "models" }, label: "Models", section: "bottom" },
-  { view: { name: "settings" }, label: "Settings", section: "bottom" },
-];
+type NavName = Extract<
+  View["name"],
+  "home" | "library" | "models" | "settings" | "license"
+>;
+// fe-license-tab: License is a bottom-section item pinned right after Settings.
+// It only renders when "license" is in the surface profile's nav (desktop) —
+// the same navSet lever that hides Models on web — so it stays out of DEFAULT_NAV.
+const NAV_REGISTRY: { view: View; label: string; section: "top" | "bottom" }[] =
+  [
+    { view: { name: "home" }, label: "Home", section: "top" },
+    { view: { name: "library" }, label: "Library", section: "top" },
+    { view: { name: "models" }, label: "Models", section: "bottom" },
+    { view: { name: "settings" }, label: "Settings", section: "bottom" },
+    { view: { name: "license" }, label: "License", section: "bottom" },
+  ];
 const DEFAULT_NAV: NavName[] = ["home", "library", "models", "settings"];
 
 export interface SidebarSummary {

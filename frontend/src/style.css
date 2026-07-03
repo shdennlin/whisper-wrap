@@ -2607,6 +2607,41 @@ body { min-height: 100vh; }
 .shell-view { flex: 1; min-width: 0; overflow: auto; padding: 16px; }
 .shell-view .view-placeholder { color: var(--muted); }
 
+/* License view (fe-license-tab): ports surfaces/license-ui/license.css onto the
+   frontend's design tokens + the card-row (.mrow-frame) framing sibling views
+   use. Class names are the behavior contract carried over from the MVP. */
+.license-body { display: flex; flex-direction: column; gap: 12px; }
+.license-prompt { margin: 0; color: var(--muted); }
+.license-offline-hint { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); }
+.license-field { display: flex; flex-direction: column; gap: 4px; }
+.license-field-label, .license-row-label { font-size: 11.5px; color: var(--muted); }
+.license-field input {
+  padding: 8px 10px; font-size: 13px; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.license-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12.5px;
+}
+.license-row:last-of-type { border-bottom: none; }
+.license-activate, .license-deactivate {
+  align-self: flex-start; padding: 8px 16px; font-size: 12.5px;
+  border-radius: 8px; cursor: pointer; border: 1px solid var(--border);
+}
+.license-activate {
+  background: var(--accent); color: var(--bg); border-color: var(--accent);
+  font-weight: 600;
+}
+.license-deactivate { background: var(--surface); color: var(--fg); }
+.license-view button:disabled, .license-view input:disabled {
+  opacity: 0.55; cursor: default;
+}
+.license-error {
+  margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 12px;
+  color: var(--danger, #f85149);
+  background: color-mix(in srgb, var(--danger, #f85149) 12%, transparent);
+}
+
 /* fe-item-library cutover: the existing app now lives inside the shell's Home
    view (homeHost) instead of directly at #app. Replicate the old #app flex
    root, and let it fill the Home view flush (no shell padding). */

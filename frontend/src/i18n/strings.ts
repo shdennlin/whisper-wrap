@@ -90,7 +90,8 @@ export const STRINGS = {
     "history.sessionNotFound": "That session is no longer available.",
     "history.addActionRun": "+ AI Action",
     "history.deleteRunButton": "Delete",
-    "history.deleteRunConfirm": "Delete this AI response? This cannot be undone.",
+    "history.deleteRunConfirm":
+      "Delete this AI response? This cannot be undone.",
     "history.runTimestamp": "{timestamp}",
     "history.backToShell": "← Back",
     "history.viewAll": "View all",
@@ -111,7 +112,8 @@ export const STRINGS = {
     "answer.copied": "Copied ✓",
     "answer.copyFailed": "Copy failed",
 
-    "audio.playerExpired": "Audio expired (evicted to stay within storage budget)",
+    "audio.playerExpired":
+      "Audio expired (evicted to stay within storage budget)",
     "audio.playerNoAudio": "No audio available",
     "audio.playerLoading": "Loading audio…",
     "audio.playerError": "Could not decode audio",
@@ -148,8 +150,7 @@ export const STRINGS = {
     "settings.liveIdleHint":
       "Auto-stop after this long with no new caption — handy when you forget to stop after a meeting.",
     "settings.liveMaxLabel": "Maximum recording length (minutes, 0 = never)",
-    "settings.liveMaxHint":
-      "Hard cap counted from start. Default 4 h.",
+    "settings.liveMaxHint": "Hard cap counted from start. Default 4 h.",
 
     "settings.audioSaveLabel": "Save audio for replay",
     "settings.audioSaveHint":
@@ -176,7 +177,8 @@ export const STRINGS = {
     "settings.autoPauseMediaHint":
       "Pauses Music or Spotify when recording starts and resumes it when you're done, so it doesn't play over your capture.",
     "settings.audioBudgetLabel": "Audio storage budget (MB)",
-    "settings.audioBudgetHint": "10–1000 MB. Oldest recordings are dropped when full.",
+    "settings.audioBudgetHint":
+      "10–1000 MB. Oldest recordings are dropped when full.",
     "settings.audioClearAllButton": "Clear all stored audio",
     "settings.audioClearAllConfirm":
       "Delete every saved audio recording? Transcripts will be kept.",
@@ -204,10 +206,8 @@ export const STRINGS = {
     "toast.answerAutoCopied": "AI response auto-copied to clipboard",
     "toast.autoStopMax":
       "Reached {minutes}-minute limit, auto-stopped recording",
-    "toast.autoStopIdle":
-      "Idle for {minutes} minutes, auto-stopped recording",
-    "toast.tenMinReached":
-      "Reached 10-minute limit, auto-stopped recording",
+    "toast.autoStopIdle": "Idle for {minutes} minutes, auto-stopped recording",
+    "toast.tenMinReached": "Reached 10-minute limit, auto-stopped recording",
 
     "paste.needsPermission":
       "Auto-paste needs macOS Accessibility permission. Grant it in System Settings → Privacy & Security → Accessibility, then try again.",
@@ -281,19 +281,16 @@ export const STRINGS = {
     "meeting.error.loadFailed": "Failed to load that analysis: {message}",
     "meeting.error.stillRunning":
       "This job is still running. Refresh the page in a moment to see results.",
-    "meeting.error.jobErrored":
-      "That job ended with error: {message}",
+    "meeting.error.jobErrored": "That job ended with error: {message}",
     "meeting.error.jobCancelled": "That job was cancelled.",
     "meeting.unavailable.default": "Meeting analysis is unavailable.",
     "meeting.unavailable.noToken": "HF_TOKEN is not configured",
     "meeting.unavailable.noExtras": "meeting extras not installed",
     "meeting.sidebar.title": "Recent analyses",
-    "meeting.sidebar.empty":
-      "No analyses yet — upload a file to get started.",
+    "meeting.sidebar.empty": "No analyses yet — upload a file to get started.",
     "meeting.sidebar.deleteTooltip": "Delete this analysis",
     "meeting.sidebar.deleteConfirm": "Confirm?",
-    "meeting.sidebar.deleteConfirmTitle":
-      "Click again to delete (within 3 s)",
+    "meeting.sidebar.deleteConfirmTitle": "Click again to delete (within 3 s)",
 
     "home.heroTitle": "Start recording",
     "home.heroSubtitle":
@@ -311,11 +308,14 @@ export const STRINGS = {
     "rec.doneTitle": "Recording complete",
     "rec.pillAria": "Recording in progress — back to the recording view",
     "rec.liveCaptions": "Live captions",
-    "rec.liveCaptionsApprox": "Live captions are approximate — re-transcribe after stopping for higher quality",
-    "rec.liveCaptionsUnavailable": "Live captions aren't available for the current model",
+    "rec.liveCaptionsApprox":
+      "Live captions are approximate — re-transcribe after stopping for higher quality",
+    "rec.liveCaptionsUnavailable":
+      "Live captions aren't available for the current model",
     "rec.transcribe": "Transcribe",
     "rec.reTranscribe": "Re-transcribe (higher quality)",
-    "rec.reTranscribeWarn": "This is a long recording; re-transcribing will take a while. Continue?",
+    "rec.reTranscribeWarn":
+      "This is a long recording; re-transcribing will take a while. Continue?",
     "overlay.transcribing": "Transcribing…",
     "overlay.escAgainToCancel": "Press ESC again to cancel recording",
     "home.activityTitle": "Activity",
@@ -341,7 +341,8 @@ export const STRINGS = {
     "aiProvider.modelLabel": "Model",
     "aiProvider.modelPlaceholder": "Model name (e.g. gpt-4o-mini)",
     "aiProvider.apiKeyLabel": "API key",
-    "aiProvider.apiKeyHintSet": "A key is set ({hint}) — leave blank to keep it",
+    "aiProvider.apiKeyHintSet":
+      "A key is set ({hint}) — leave blank to keep it",
     "aiProvider.apiKeyHintUnset": "No key set",
     "aiProvider.apiKeyPlaceholder": "Paste a new key to replace it",
     "aiProvider.refreshModels": "Refresh models",
@@ -372,10 +373,12 @@ export const STRINGS = {
     "detail.statusDone": "Done",
     "detail.statusError": "Error",
     "detail.rerunKind": "Re-run {kind}",
-    "detail.rerunNeedsAudio": "No saved recording to re-run on (audio wasn't kept for this capture)",
+    "detail.rerunNeedsAudio":
+      "No saved recording to re-run on (audio wasn't kept for this capture)",
     "detail.rerunFailed": "Re-run failed: {error}",
     "detail.aiEnhance": "✨ AI Enhance",
-    "detail.aiGateNeedsTranscript": "Needs a completed transcribe run first (DAG prerequisite)",
+    "detail.aiGateNeedsTranscript":
+      "Needs a completed transcribe run first (DAG prerequisite)",
     "detail.delete": "🗑 Delete",
     "detail.deleteConfirm": "Delete this item? This cannot be undone.",
     "detail.deleteFailed": "Delete failed: {error}",
@@ -402,7 +405,8 @@ export const STRINGS = {
     "model.cancel": "Cancel",
     "model.loading": "Loading…",
     "model.remove": "Remove",
-    "model.removeConfirm": "Remove model “{name}”? You can download it again later.",
+    "model.removeConfirm":
+      "Remove model “{name}”? You can download it again later.",
     "model.removeFailed": "Remove failed: {error}",
     "model.loadError": "Could not load models: {error}",
     "model.switchFailed": "Switch failed: {error}",
@@ -412,7 +416,8 @@ export const STRINGS = {
     // ---- Auxiliary model manager ----
     "aux.stageDiarize": "Speaker separation",
     "aux.stageVad": "Live (VAD)",
-    "aux.diarizeNote": "Needs a segmentation model + one embedding model (pick fast or balanced).",
+    "aux.diarizeNote":
+      "Needs a segmentation model + one embedding model (pick fast or balanced).",
     "aux.required": "Required",
     "aux.recommended": "Recommended",
     "aux.installed": "Installed",
@@ -452,6 +457,23 @@ export const STRINGS = {
     "settingsView.title": "Settings",
     "settingsView.searchPlaceholder": "Search settings…",
     "settingsView.searchAria": "Search settings",
+
+    // ---- License view (fe-license-tab) ----
+    "license.title": "License",
+    "license.deviceLabel": "Device name",
+    "license.devicePlaceholder": "This device",
+    "license.keyLabel": "License key",
+    "license.keyPlaceholder": "Paste your license key",
+    "license.activate": "Activate",
+    "license.deactivate": "Deactivate",
+    "license.rowLicense": "License",
+    "license.lifetime": "Lifetime",
+    "license.rowDevice": "Device",
+    "license.rowOfflineUntil": "Offline access until",
+    "license.offlineHint": "Extends automatically whenever this device is online.",
+    "license.expiredPrompt":
+      "This license has expired. Re-activate to continue using it.",
+    "license.invalidFallback": "This license could not be verified.",
   },
 
   "zh-TW": {
@@ -601,7 +623,8 @@ export const STRINGS = {
     "settings.globalHotkeyHint":
       "在任何 app 按 ⌥Space 即可聚焦 whisper-wrap 並開始快速語音錄音（僅桌面版）。",
     "settings.shortcutLabel": "快捷鍵",
-    "settings.shortcutHint": "點擊後按下想要的組合鍵（需包含修飾鍵）。按 Esc 取消。",
+    "settings.shortcutHint":
+      "點擊後按下想要的組合鍵（需包含修飾鍵）。按 Esc 取消。",
     "settings.shortcutCapturing": "請按鍵…",
     "settings.autoPasteLabel": "錄音結束後自動貼上逐字稿",
     "settings.autoPasteHint":
@@ -659,8 +682,7 @@ export const STRINGS = {
     "meeting.viewTab": "會議",
     "meeting.liveTab": "即時",
     "meeting.title": "會議分析",
-    "meeting.subtitle":
-      "上傳會議錄音，取得按講者區分的逐字稿，含字級時間戳。",
+    "meeting.subtitle": "上傳會議錄音，取得按講者區分的逐字稿，含字級時間戳。",
     "meeting.upload.title": "選擇音訊檔或拖曳到這裡",
     "meeting.upload.hint": "WAV、MP3、M4A、FLAC、OGG — 最大 100 MB",
     "meeting.confirm.metaProbing": "{size} · 讀取時長中…",
@@ -718,8 +740,7 @@ export const STRINGS = {
     "meeting.error.loadFailed": "無法載入這份分析：{message}",
     "meeting.error.stillRunning":
       "這份分析還在執行中，稍後重新整理頁面即可看到結果。",
-    "meeting.error.jobErrored":
-      "該分析以錯誤結束：{message}",
+    "meeting.error.jobErrored": "該分析以錯誤結束：{message}",
     "meeting.error.jobCancelled": "該分析已取消。",
     "meeting.unavailable.default": "會議分析功能無法使用。",
     "meeting.unavailable.noToken": "尚未設定 HF_TOKEN",
@@ -746,11 +767,13 @@ export const STRINGS = {
     "rec.doneTitle": "錄音完成",
     "rec.pillAria": "錄音中 — 回到錄音畫面",
     "rec.liveCaptions": "即時字幕",
-    "rec.liveCaptionsApprox": "即時字幕為近似結果 — 結束後可重新轉錄以取得更高品質",
+    "rec.liveCaptionsApprox":
+      "即時字幕為近似結果 — 結束後可重新轉錄以取得更高品質",
     "rec.liveCaptionsUnavailable": "目前的模型不支援即時字幕",
     "rec.transcribe": "轉錄",
     "rec.reTranscribe": "重新轉錄（更高品質）",
-    "rec.reTranscribeWarn": "這是一段較長的錄音；重新轉錄需要一些時間。要繼續嗎？",
+    "rec.reTranscribeWarn":
+      "這是一段較長的錄音；重新轉錄需要一些時間。要繼續嗎？",
     "overlay.transcribing": "轉錄中…",
     "overlay.escAgainToCancel": "再按一次 ESC 取消錄音",
     "home.activityTitle": "活動",
@@ -846,7 +869,8 @@ export const STRINGS = {
     // ---- Auxiliary model manager ----
     "aux.stageDiarize": "講者分離",
     "aux.stageVad": "即時 (VAD)",
-    "aux.diarizeNote": "需要「分割模型」+「一個嵌入模型」(快速 / 平衡擇一即可)。",
+    "aux.diarizeNote":
+      "需要「分割模型」+「一個嵌入模型」(快速 / 平衡擇一即可)。",
     "aux.required": "必要",
     "aux.recommended": "推薦",
     "aux.installed": "已安裝",
@@ -863,7 +887,8 @@ export const STRINGS = {
       "講者分離 / VAD 模型下載需要較新的引擎 —— 請用 make desktop 重新啟動(重建 engine)後再試。",
     "aux.removeConfirm": "移除「{label}」?之後可重新下載。",
     "aux.diarize-segmentation.label": "講者分割模型",
-    "aux.diarize-segmentation.desc": "找出語音區段與講者切換點(何時換人說話)。講者分離必備。",
+    "aux.diarize-segmentation.desc":
+      "找出語音區段與講者切換點(何時換人說話)。講者分離必備。",
     "aux.diarize-embedding-fast.label": "講者嵌入(快速)",
     "aux.diarize-embedding-fast.desc":
       "把聲音轉成聲紋以區分講者 — 快速版(CAM++),體積小、夠用。與「平衡」擇一。",
@@ -871,7 +896,8 @@ export const STRINGS = {
     "aux.diarize-embedding-balanced.desc":
       "聲紋區分的高準確版(ERes2NetV2),更準但更大、更慢。與「快速」擇一。",
     "aux.vad-silero.label": "Silero VAD",
-    "aux.vad-silero.desc": "偵測語音/靜音,讓即時字幕斷句更準。未安裝則退回較粗的 RMS 音量法。",
+    "aux.vad-silero.desc":
+      "偵測語音/靜音,讓即時字幕斷句更準。未安裝則退回較粗的 RMS 音量法。",
 
     // ---- AI action modal ----
     "aiModal.title": "AI 回應",
@@ -884,5 +910,21 @@ export const STRINGS = {
     "settingsView.title": "設定",
     "settingsView.searchPlaceholder": "搜尋設定…",
     "settingsView.searchAria": "搜尋設定",
+
+    // ---- License view (fe-license-tab) ----
+    "license.title": "授權",
+    "license.deviceLabel": "裝置名稱",
+    "license.devicePlaceholder": "這台裝置",
+    "license.keyLabel": "授權金鑰",
+    "license.keyPlaceholder": "貼上你的授權金鑰",
+    "license.activate": "啟用",
+    "license.deactivate": "取消啟用",
+    "license.rowLicense": "授權",
+    "license.lifetime": "終身有效",
+    "license.rowDevice": "裝置",
+    "license.rowOfflineUntil": "離線可用至",
+    "license.offlineHint": "裝置連網時會自動延長。",
+    "license.expiredPrompt": "此授權已過期，請重新啟用以繼續使用。",
+    "license.invalidFallback": "無法驗證此授權。",
   },
 } as const;

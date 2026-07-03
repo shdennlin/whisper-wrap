@@ -36,7 +36,7 @@ optionally the Playwright `mocked` tier for visual/flow regression.
 ## View map — which file is which screen
 
 Routes live in `src/routing/view-route.ts`; the route set is
-`home · library · models · settings · overlay · detail`.
+`home · library · models · settings · license · overlay · detail`.
 
 | Screen | File | What it is |
 |--------|------|-----------|
@@ -47,6 +47,7 @@ Routes live in `src/routing/view-route.ts`; the route set is
 | Detail | `src/ui/detail-view.ts` | a single item's transcript / runs / actions |
 | Models | `src/ui/models-view.ts` | model registry / download management |
 | Settings | `src/ui/settings-view.ts` + `src/ui/settings-panel.ts` | settings UI |
+| License | `src/ui/license-view.ts` | desktop-only license activation/status (hidden on web via surface profile) |
 | Global overlay | `src/overlay/` (`overlay-app.ts`, `overlay-capture.ts`, `overlay-waveform.ts`) | the floating quick-capture window (separate WebView surface) |
 
 Many smaller components also live in `src/ui/` (e.g. `toast.ts`, `modal-prompt.ts`,

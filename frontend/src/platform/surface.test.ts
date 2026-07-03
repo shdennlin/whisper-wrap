@@ -36,6 +36,8 @@ describe("surfaceProfile", () => {
     expect(p.homeDensity).toBe("compact");
     expect(p.nav).toEqual(["home", "library", "settings"]);
     expect(p.nav).not.toContain("models");
+    // fe-license-tab: the License item is desktop-only — web never renders it.
+    expect(p.nav).not.toContain("license");
     expect(p.modelsAccess).toBe("hidden");
     expect(p.showDesktopShortcuts).toBe(false);
     expect(p.showExperimental).toBe(false);
@@ -46,8 +48,10 @@ describe("surfaceProfile", () => {
     expect(p.surface).toBe("desktop");
     expect(p.defaultView).toBe("library");
     expect(p.homeDensity).toBe("full");
-    expect(p.nav).toEqual(["home", "library", "models", "settings"]);
+    expect(p.nav).toEqual(["home", "library", "models", "settings", "license"]);
     expect(p.nav).toContain("models");
+    // fe-license-tab: License is a desktop-only sidebar destination.
+    expect(p.nav).toContain("license");
     expect(p.modelsAccess).toBe("full");
     expect(p.showDesktopShortcuts).toBe(true);
     expect(p.showExperimental).toBe(true);
