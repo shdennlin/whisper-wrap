@@ -32,6 +32,7 @@ models:
   breeze-asr-25:
     description: "MediaTek Breeze ASR 25 — Taiwanese Mandarin + English code-switching"
     languages: [zh-TW, en]
+    tags: [code-switching]
     license: "See model card (MediaTek Research, Whisper-based)"
     default: true
     recommended: true
@@ -56,6 +57,7 @@ models:
   large-v3-turbo:
     description: "OpenAI Whisper large-v3-turbo — multilingual fallback"
     languages: [multilingual]
+    tags: [fast]
     license: "MIT (OpenAI Whisper)"
     size: "1.6 GB"
     speed: 8.5
@@ -80,6 +82,7 @@ models:
   whisper-large-v3:
     description: "OpenAI Whisper large-v3 — highest accuracy, multilingual"
     languages: [multilingual]
+    tags: [high-accuracy]
     license: "MIT (OpenAI Whisper)"
     recommended: true
     size: "2.9 GB"
@@ -95,6 +98,7 @@ models:
   whisper-small:
     description: "OpenAI Whisper small — balanced speed and accuracy, multilingual"
     languages: [multilingual]
+    tags: [balanced]
     license: "MIT (OpenAI Whisper)"
     recommended: true
     size: "466 MB"
@@ -110,6 +114,7 @@ models:
   whisper-base:
     description: "OpenAI Whisper base — fast, multilingual"
     languages: [multilingual]
+    tags: [fast]
     license: "MIT (OpenAI Whisper)"
     size: "142 MB"
     speed: 8.8
@@ -124,6 +129,7 @@ models:
   whisper-tiny:
     description: "OpenAI Whisper tiny — fastest, lowest accuracy, multilingual"
     languages: [multilingual]
+    tags: [fast]
     license: "MIT (OpenAI Whisper)"
     size: "75 MB"
     speed: 9.5

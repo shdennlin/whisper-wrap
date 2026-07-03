@@ -13,6 +13,7 @@ interface RowSpec {
   recommended?: boolean;
   size?: string;
   languages?: string[];
+  tags?: string[];
   speed?: number;
   accuracy?: number;
 }
@@ -27,6 +28,7 @@ function modelsResponse(active: string, loaded: boolean, rows: RowSpec[]) {
       license: null,
       size: r.size ?? null,
       languages: r.languages ?? [],
+      tags: r.tags ?? [],
       recommended: r.recommended ?? false,
       speed: r.speed ?? null,
       accuracy: r.accuracy ?? null,
@@ -375,5 +377,87 @@ describe("ModelManager load flow", () => {
     );
     expect(onActiveChange).toHaveBeenCalled();
     expect(actionText(root, "breeze")).toBe("Active");
+  });
+});
+
+describe("ModelManager language/tag filter", () => {
+  const rows = [
+    { name: "breeze-asr-25", installed: true, runnable: true, languages: ["zh-TW", "en"], tags: ["code-switching"] },
+    { name: "large-v3-turbo", installed: true, runnable: true, languages: ["multilingual"], tags: ["fast"] },
+    { name: "whisper-tiny", installed: true, runnable: true, languages: ["multilingual"], tags: ["fast"] },
+  ];
+
+  const visibleNames = (root: HTMLElement): (string | undefined)[] =>
+    [...root.querySelectorAll<HTMLElement>(".model-rows .model-row")].map((r) => r.dataset.name);
+
+  const optionCheckbox = (root: HTMLElement, value: string): HTMLInputElement | undefined =>
+    [...root.querySelectorAll<HTMLInputElement>(".model-filter-option input")].find(
+      (c) => c.value === value,
+    );
+
+  it("shows all rows with no filter selected", async () => {
+    mockFetch(() => modelsResponse("breeze-asr-25", true, rows));
+    const root = mount();
+    new ModelManager(root);
+    await flush();
+    expect(visibleNames(root)).toEqual(["breeze-asr-25", "large-v3-turbo", "whisper-tiny"]);
+  });
+
+  it("selecting the zh-TW option leaves only breeze-asr-25 visible", async () => {
+    mockFetch(() => modelsResponse("breeze-asr-25", true, rows));
+    const root = mount();
+    new ModelManager(root);
+    await flush();
+
+    const cb = optionCheckbox(root, "zh-TW");
+    expect(cb).toBeTruthy();
+    cb!.checked = true;
+    cb!.dispatchEvent(new Event("change"));
+
+    expect(visibleNames(root)).toEqual(["breeze-asr-25"]);
+  });
+
+  it("selecting the fast tag shows the two multilingual fast models (OR over union)", async () => {
+    mockFetch(() => modelsResponse("breeze-asr-25", true, rows));
+    const root = mount();
+    new ModelManager(root);
+    await flush();
+
+    const cb = optionCheckbox(root, "fast");
+    cb!.checked = true;
+    cb!.dispatchEvent(new Event("change"));
+
+    expect(visibleNames(root)).toEqual(["large-v3-turbo", "whisper-tiny"]);
+  });
+
+  it("clearing the selection restores all rows", async () => {
+    mockFetch(() => modelsResponse("breeze-asr-25", true, rows));
+    const root = mount();
+    new ModelManager(root);
+    await flush();
+
+    const cb = optionCheckbox(root, "zh-TW");
+    cb!.checked = true;
+    cb!.dispatchEvent(new Event("change"));
+    expect(visibleNames(root)).toEqual(["breeze-asr-25"]);
+
+    cb!.checked = false;
+    cb!.dispatchEvent(new Event("change"));
+    expect(visibleNames(root)).toEqual(["breeze-asr-25", "large-v3-turbo", "whisper-tiny"]);
+  });
+
+  it("separates options into distinct Language and Tag groups (each sorted)", async () => {
+    mockFetch(() => modelsResponse("breeze-asr-25", true, rows));
+    const root = mount();
+    new ModelManager(root);
+    await flush();
+
+    const groupValues = (group: string): string[] => {
+      const el = root.querySelector<HTMLElement>(`.model-filter-group[data-group="${group}"]`);
+      expect(el).toBeTruthy();
+      return [...el!.querySelectorAll<HTMLInputElement>("input")].map((c) => c.value);
+    };
+    expect(groupValues("language")).toEqual(["en", "multilingual", "zh-TW"]);
+    expect(groupValues("tag")).toEqual(["code-switching", "fast"]);
   });
 });

@@ -17,6 +17,7 @@
  */
 
 import { modalConfirm } from "./modal-prompt";
+import { filterModels } from "./model-filter";
 import { t } from "../i18n";
 import { client } from "../api/client";
 import type { components } from "../api/generated/openapi";
@@ -50,6 +51,11 @@ export class ModelManager {
   private activeLoaded = false;
   private models: ModelEntry[] = [];
   private tab: "all" | "recommended" = "all";
+  /** Selected language/tag filter tokens (OR semantics); empty = show all. */
+  private selectedFilters: string[] = [];
+  /** The rows container — re-rendered on tab/filter change without rebuilding
+   *  the filter control, so the multi-select disclosure stays open. */
+  private rowsHost: HTMLElement = document.createElement("div");
 
   constructor(
     private readonly root: HTMLElement,
@@ -78,15 +84,114 @@ export class ModelManager {
     }
   }
 
-  /** Render the tab bar + the filtered rows (re-run on tab switch, no refetch). */
+  /** Render the tab bar + language/tag filter + the filtered rows (re-run on
+   *  tab switch, no refetch). */
   private renderView(): void {
     this.root.textContent = "";
     this.root.appendChild(this.renderTabs());
-    const rows =
+    const filter = this.renderFilter();
+    if (filter) this.root.appendChild(filter);
+    this.rowsHost = document.createElement("div");
+    this.rowsHost.className = "model-rows";
+    this.root.appendChild(this.rowsHost);
+    this.renderRows();
+  }
+
+  /** Fill the rows container from the active tab AND the language/tag filter.
+   *  Split from renderView so a filter toggle re-renders rows only, leaving
+   *  the filter disclosure open. */
+  private renderRows(): void {
+    this.rowsHost.textContent = "";
+    const byTab =
       this.tab === "recommended" ? this.models.filter((m) => m.recommended) : this.models;
-    for (const m of rows) {
-      this.root.appendChild(this.renderRow(m, m.name === this.activeName));
+    for (const m of filterModels(byTab, this.selectedFilters)) {
+      this.rowsHost.appendChild(this.renderRow(m, m.name === this.activeName));
     }
+  }
+
+  /** The distinct, sorted values a facet accessor yields across the models.
+   *  Defensive `?? []` mirrors renderRow's `m.languages?.length` guard: a row
+   *  may arrive without these arrays (older mocks / partial data), and the
+   *  whole picker must never crash on building the option set. */
+  private facetOptions(pick: (m: ModelEntry) => string[] | undefined): string[] {
+    const set = new Set<string>();
+    for (const m of this.models) {
+      for (const v of pick(m) ?? []) set.add(v);
+    }
+    return [...set].sort();
+  }
+
+  /** A multi-select disclosure with SEPARATE "Language" and "Tag" groups. OR
+   *  semantics across everything selected (a row shows when any selected value
+   *  is among its languages or tags); a cleared selection shows all rows within
+   *  the tab. Returns null when there is nothing to filter by. */
+  private renderFilter(): HTMLElement | null {
+    const languages = this.facetOptions((m) => m.languages);
+    const tags = this.facetOptions((m) => m.tags);
+    if (languages.length === 0 && tags.length === 0) return null;
+
+    const details = document.createElement("details");
+    details.className = "model-filter";
+
+    const summary = document.createElement("summary");
+    summary.className = "model-filter-summary";
+    const setSummary = (): void => {
+      const n = this.selectedFilters.length;
+      summary.textContent =
+        n === 0 ? t("model.filterAll") : t("model.filterCount", { count: String(n) });
+    };
+    setSummary();
+    details.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "model-filter-options";
+    if (languages.length) {
+      list.appendChild(this.renderFilterGroup("language", t("model.filterLangGroup"), languages, setSummary));
+    }
+    if (tags.length) {
+      list.appendChild(this.renderFilterGroup("tag", t("model.filterTagGroup"), tags, setSummary));
+    }
+    details.appendChild(list);
+    return details;
+  }
+
+  /** One labeled group of filter checkboxes (a facet). `onToggle` refreshes the
+   *  summary; toggling re-renders rows only, leaving the disclosure open. */
+  private renderFilterGroup(
+    group: string,
+    label: string,
+    options: string[],
+    onToggle: () => void,
+  ): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "model-filter-group";
+    wrap.dataset.group = group;
+
+    const heading = document.createElement("span");
+    heading.className = "model-filter-group-label";
+    heading.textContent = label;
+    wrap.appendChild(heading);
+
+    for (const opt of options) {
+      const optLabel = document.createElement("label");
+      optLabel.className = "model-filter-option";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = opt;
+      cb.checked = this.selectedFilters.includes(opt);
+      cb.addEventListener("change", () => {
+        this.selectedFilters = cb.checked
+          ? [...this.selectedFilters, opt]
+          : this.selectedFilters.filter((v) => v !== opt);
+        onToggle();
+        this.renderRows();
+      });
+      const text = document.createElement("span");
+      text.textContent = opt;
+      optLabel.append(cb, text);
+      wrap.appendChild(optLabel);
+    }
+    return wrap;
   }
 
   private renderTabs(): HTMLElement {

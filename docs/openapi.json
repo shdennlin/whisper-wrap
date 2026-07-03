@@ -3088,6 +3088,7 @@
           "name",
           "languages",
           "recommended",
+          "tags",
           "formats",
           "installed",
           "runnable"
@@ -3148,6 +3149,12 @@
               "null"
             ],
             "format": "double"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

@@ -53,6 +53,10 @@ struct ModelEntry {
     /// Rough 0–10 ratings for the picker (display-only, curated).
     speed: Option<f64>,
     accuracy: Option<f64>,
+    /// Free-form display/filter metadata, e.g. ["code-switching","fast"].
+    /// Display/filter only — never affects resolution, runnable, or downloads.
+    #[serde(default)]
+    tags: Vec<String>,
     variants: Vec<Variant>,
 }
 
@@ -171,6 +175,8 @@ pub struct ModelListing {
     pub recommended: bool,
     pub speed: Option<f64>,
     pub accuracy: Option<f64>,
+    /// Free-form display/filter metadata (display only).
+    pub tags: Vec<String>,
     pub formats: Vec<String>,
     pub installed: bool,
     /// True when this model has a ggml variant (v3 can run it).
@@ -192,6 +198,7 @@ pub fn list_models(config: &Config) -> Result<Vec<ModelListing>, RegistryError> 
             recommended: entry.recommended,
             speed: entry.speed,
             accuracy: entry.accuracy,
+            tags: entry.tags.clone(),
             formats: entry.variants.iter().map(|v| v.format.clone()).collect(),
             installed: resolve_named_model(config, name).is_ok(),
             runnable: entry.variants.iter().any(|v| v.format == "ggml"),
@@ -275,6 +282,9 @@ mod tests {
 models:
   breeze-asr-25:
     description: "test"
+    tags:
+      - code-switching
+      - fast
     variants:
       - format: ct2
         local_dir: breeze-asr-25-ct2
@@ -300,6 +310,66 @@ models:
             Some("ggml-breeze-asr-25-q6_k.bin")
         );
         assert_eq!(ggml.quant.as_deref(), Some("q6_k"));
+    }
+
+    #[test]
+    fn tags_parse_and_default_empty() {
+        // A declared `tags` list parses to exactly those strings in order;
+        // an entry that omits the key defaults to an empty vec (parse still
+        // succeeds). Tags are display/filter metadata only.
+        let reg: RegistryFile = serde_yaml::from_str(SAMPLE).unwrap();
+        assert_eq!(
+            reg.models["breeze-asr-25"].tags,
+            vec!["code-switching".to_string(), "fast".to_string()]
+        );
+        assert!(reg.models["ct2-only"].tags.is_empty());
+    }
+
+    #[test]
+    fn tags_flow_through_to_listing() {
+        let base = std::env::temp_dir().join("ww-registry-tags-test");
+        let _ = std::fs::create_dir_all(&base);
+        let reg_path = base.join("models.yaml");
+        std::fs::write(&reg_path, SAMPLE).unwrap();
+
+        let mut config = Config::from_env();
+        config.registry_path = reg_path;
+        config.models_dir = base.join("models-empty");
+        config.model_dir = None;
+
+        let listings = list_models(&config).unwrap();
+        let breeze = listings.iter().find(|l| l.name == "breeze-asr-25").unwrap();
+        assert_eq!(breeze.tags, vec!["code-switching".to_string(), "fast".to_string()]);
+        let ct2 = listings.iter().find(|l| l.name == "ct2-only").unwrap();
+        assert!(ct2.tags.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shipped_registry_breeze_has_backfilled_tags() {
+        // Regression guard on the real registry/models.yaml backfill: the
+        // shipped breeze-asr-25 row MUST surface tags == [code-switching] and
+        // languages == [zh-TW, en] through list_models. Guards the tag data,
+        // not just the schema (which SAMPLE-based tests cover).
+        let real_registry =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/models.yaml");
+
+        let mut config = Config::from_env();
+        config.registry_path = PathBuf::from(real_registry);
+        config.models_dir = std::env::temp_dir().join("ww-registry-shipped-empty");
+        config.model_dir = None;
+
+        let listings = list_models(&config).unwrap();
+        let breeze = listings
+            .iter()
+            .find(|l| l.name == "breeze-asr-25")
+            .expect("breeze-asr-25 in shipped registry");
+        assert_eq!(breeze.tags, vec!["code-switching".to_string()]);
+        assert_eq!(
+            breeze.languages,
+            vec!["zh-TW".to_string(), "en".to_string()]
+        );
     }
 
     #[test]

@@ -64,6 +64,7 @@ struct ModelEntry {
     recommended: bool,
     speed: Option<f64>,
     accuracy: Option<f64>,
+    tags: Vec<String>,
     formats: Vec<String>,
     installed: bool,
     runnable: bool,
@@ -627,6 +628,7 @@ mod wire_shape_tests {
                 recommended: true,
                 speed: Some(1.5),
                 accuracy: None,
+                tags: vec!["fast".to_string()],
                 formats: vec!["ggml".to_string()],
                 installed: false,
                 runnable: true,
@@ -646,6 +648,7 @@ mod wire_shape_tests {
                     "recommended": true,
                     "speed": 1.5,
                     "accuracy": null,
+                    "tags": ["fast"],
                     "formats": ["ggml"],
                     "installed": false,
                     "runnable": true

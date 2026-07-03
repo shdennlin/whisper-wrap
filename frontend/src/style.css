@@ -2433,6 +2433,34 @@ body { min-height: 100vh; }
   border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.78rem; cursor: pointer;
 }
 .model-tab.on { color: var(--fg); border-color: var(--accent); }
+/* Language/tag multi-select filter: a disclosure whose summary is a pill and
+   whose options drop into a bordered panel of checkboxes. */
+.model-filter { position: relative; margin-bottom: 0.5rem; }
+.model-filter-summary {
+  display: inline-block; list-style: none; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.78rem;
+}
+.model-filter-summary::-webkit-details-marker { display: none; }
+.model-filter[open] > .model-filter-summary { color: var(--fg); border-color: var(--accent); }
+.model-filter-options {
+  position: absolute; z-index: 5; margin-top: 6px; min-width: 180px;
+  display: flex; flex-direction: column; gap: 0.15rem;
+  border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem;
+  background: var(--bg, #0d1117); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.model-filter-group { display: flex; flex-direction: column; gap: 0.15rem; }
+.model-filter-group + .model-filter-group { margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid var(--border); }
+.model-filter-group-label {
+  font-size: 0.66rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); padding: 0 0.25rem 0.1rem;
+}
+.model-filter-option {
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.78rem; color: var(--fg); cursor: pointer;
+  padding: 0.15rem 0.25rem; border-radius: 5px;
+}
+.model-filter-option:hover { background: var(--border); }
 /* Speed/accuracy ratings: "速度 ●●●●○ 8.5" — dots coloured by tier. */
 .model-row-ratings { display: flex; gap: 0.9rem; font-size: 0.7rem; color: var(--muted); margin-top: 0.15rem; }
 .model-rating { display: inline-flex; align-items: center; gap: 0.35rem; }

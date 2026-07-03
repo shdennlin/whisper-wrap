@@ -1000,6 +1000,7 @@ export interface components {
             size?: string | null;
             /** Format: double */
             speed?: number | null;
+            tags: string[];
         };
         /**
          * @description `GET /models` success body: the active model name, whether its weights are
