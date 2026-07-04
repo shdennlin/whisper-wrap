@@ -269,7 +269,10 @@ fn view_from(resolved: &Config) -> AiConfigView {
         base_url,
         model: client.model().to_owned(),
         key_set: raw_key.is_some(),
-        key_hint: raw_key.as_deref().map(AiConfigStore::mask).unwrap_or_default(),
+        key_hint: raw_key
+            .as_deref()
+            .map(AiConfigStore::mask)
+            .unwrap_or_default(),
         system_prompt_set: resolved
             .gemini_system_prompt
             .as_deref()
@@ -412,7 +415,10 @@ pub async fn test_config(Json(body): Json<TestBody>) -> Json<AiTestResult> {
         let base = body.base_url.trim_end_matches('/');
         if !base.is_empty() {
             if let Err(e) = llm::validate_outbound_url(base).await {
-                return Json(AiTestResult { ok: false, error: Some(e) });
+                return Json(AiTestResult {
+                    ok: false,
+                    error: Some(e),
+                });
             }
         }
         config.llm_base_url = Some(body.base_url.clone()).filter(|u| !u.is_empty());
@@ -421,8 +427,14 @@ pub async fn test_config(Json(body): Json<TestBody>) -> Json<AiTestResult> {
     }
     let client = LlmClient::from_config(&config);
     match client.ask("ping", None).await {
-        Ok(_) => Json(AiTestResult { ok: true, error: None }),
-        Err(e) => Json(AiTestResult { ok: false, error: Some(e.to_string()) }),
+        Ok(_) => Json(AiTestResult {
+            ok: true,
+            error: None,
+        }),
+        Err(e) => Json(AiTestResult {
+            ok: false,
+            error: Some(e.to_string()),
+        }),
     }
 }
 
@@ -434,7 +446,11 @@ mod tests {
     // byte-for-byte to the `json!()` the handler produced before it was typed.
     #[test]
     fn ai_test_result_success_matches_wire_shape() {
-        let got = serde_json::to_value(AiTestResult { ok: true, error: None }).unwrap();
+        let got = serde_json::to_value(AiTestResult {
+            ok: true,
+            error: None,
+        })
+        .unwrap();
         // Success path emitted `{ "ok": true, "error": null }` — `error` is
         // present as null, not omitted.
         let expected = json!({ "ok": true, "error": serde_json::Value::Null });

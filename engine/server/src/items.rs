@@ -437,7 +437,11 @@ pub async fn items_ai(
         "ai",
         move |st| async move {
             let input = format!("{prompt}\n\nTranscript:\n{transcript}");
-            let answer = st.llm().ask(&input, None).await.map_err(|e| e.to_string())?;
+            let answer = st
+                .llm()
+                .ask(&input, None)
+                .await
+                .map_err(|e| e.to_string())?;
             // Record the prompt so the Detail view can show which prompt produced
             // this answer (`prompt` is only borrowed by the format above).
             Ok(json!({ "answer": answer, "prompt": prompt }))

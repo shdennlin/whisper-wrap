@@ -394,7 +394,11 @@ pub fn list_unified(db: &HistoryDb, item_id: &str) -> Result<Vec<RunRecord>, Api
         }
     }
     runs.extend(synth_legacy_ai_runs(db, item_id));
-    runs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    runs.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     Ok(runs)
 }
 

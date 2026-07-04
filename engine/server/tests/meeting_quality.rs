@@ -106,7 +106,11 @@ async fn poll_does_not_503_on_a_balanced_only_install() {
     touch(&state.config.diarize_emb_model_balanced);
 
     // Omitted quality resolves to the installed (balanced) tier → job created.
-    let resp = router.clone().oneshot(submit("")).await.expect("infallible");
+    let resp = router
+        .clone()
+        .oneshot(submit(""))
+        .await
+        .expect("infallible");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let job_id = body_json(resp).await["job_id"]
         .as_str()

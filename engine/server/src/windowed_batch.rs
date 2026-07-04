@@ -12,15 +12,15 @@ use std::sync::Arc;
 
 use serde_json::json;
 use tokio::sync::mpsc;
+use whisper_wrap_core::asr::AsrError;
 use whisper_wrap_core::postprocess::{filter_empty_transcription, FilterDecision};
+use whisper_wrap_core::stream::PartialConsensusFilter;
 use whisper_wrap_core::stream::{
     BYTES_PER_SAMPLE, MAX_BUFFER_BYTES, PARTIAL_INTERVAL_MS, PARTIAL_WINDOW_BYTES, SAMPLE_RATE,
     SILENCE_DURATION_MS,
 };
-use whisper_wrap_core::stream::PartialConsensusFilter;
 use whisper_wrap_core::vad::VadBackend;
 use whisper_wrap_core::{AsrBackend, StreamSession, StreamStep};
-use whisper_wrap_core::asr::AsrError;
 
 /// Sample-count versions of the byte-based core constants (the session
 /// buffers `f32` samples; the driver already decoded the wire PCM).
@@ -365,7 +365,13 @@ mod parity_tests {
     ) -> (WindowedBatchSession, mpsc::Receiver<String>) {
         let (tx, rx) = mpsc::channel::<String>(8);
         (
-            WindowedBatchSession::new(engine, Box::new(RmsVad::default()), filter_enabled, filter_min_ms, tx),
+            WindowedBatchSession::new(
+                engine,
+                Box::new(RmsVad::default()),
+                filter_enabled,
+                filter_min_ms,
+                tx,
+            ),
             rx,
         )
     }
@@ -503,6 +509,9 @@ mod parity_tests {
             serde_json::json!({"type": "warning", "message": "buffer overflow, oldest audio dropped"})
                 .to_string()
         );
-        assert!(rx.try_recv().is_err(), "warning must fire once per overflow event");
+        assert!(
+            rx.try_recv().is_err(),
+            "warning must fire once per overflow event"
+        );
     }
 }

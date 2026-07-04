@@ -487,11 +487,31 @@ pub struct DiscoveryResponse {
 pub async fn discovery() -> Json<DiscoveryResponse> {
     Json(DiscoveryResponse {
         endpoints: vec![
-            EndpointDescriptor::new("POST", "/transcribe", "Transcribe an audio body (multipart or raw)"),
-            EndpointDescriptor::new("WS", "/listen", "Live captions over WebSocket (pcm_s16le frames)"),
-            EndpointDescriptor::new("POST", "/ask", "Audio or text question, Gemini answer (?stream=true for SSE)"),
-            EndpointDescriptor::new("POST", "/v1/audio/transcriptions", "OpenAI-compatible transcription"),
-            EndpointDescriptor::new("POST", "/v1/audio/translations", "OpenAI-compatible translation (English out)"),
+            EndpointDescriptor::new(
+                "POST",
+                "/transcribe",
+                "Transcribe an audio body (multipart or raw)",
+            ),
+            EndpointDescriptor::new(
+                "WS",
+                "/listen",
+                "Live captions over WebSocket (pcm_s16le frames)",
+            ),
+            EndpointDescriptor::new(
+                "POST",
+                "/ask",
+                "Audio or text question, Gemini answer (?stream=true for SSE)",
+            ),
+            EndpointDescriptor::new(
+                "POST",
+                "/v1/audio/transcriptions",
+                "OpenAI-compatible transcription",
+            ),
+            EndpointDescriptor::new(
+                "POST",
+                "/v1/audio/translations",
+                "OpenAI-compatible translation (English out)",
+            ),
             EndpointDescriptor::new("GET", "/v1/models", "OpenAI-compatible model list"),
             EndpointDescriptor::new("GET", "/actions", "Prompt-action templates"),
             EndpointDescriptor::new("GET", "/models", "Registry models + installed status"),
@@ -562,7 +582,9 @@ mod response_wire_shape_tests {
         let s = TranscribeResponse {
             text: "hello world".to_owned(),
             language: Some("en".to_owned()),
-            segments: Some(vec![json!({ "text": "hello world", "start": 0.0, "end": 1.5 })]),
+            segments: Some(vec![
+                json!({ "text": "hello world", "start": 0.0, "end": 1.5 }),
+            ]),
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),

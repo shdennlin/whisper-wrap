@@ -168,8 +168,12 @@ pub async fn download(
     State(state): State<Arc<AppState>>,
     Json(req): Json<AuxDownloadRequest>,
 ) -> Result<Json<AuxDownloadResponse>, ApiError> {
-    let m = find(&req.id)
-        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("unknown aux model {}", req.id)))?;
+    let m = find(&req.id).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            format!("unknown aux model {}", req.id),
+        )
+    })?;
     let dest = dest_for(&state.config, &req.id)
         .ok_or_else(|| ApiError::internal(format!("no dest for {}", req.id)))?;
 
@@ -255,7 +259,10 @@ fn run_aux_download(state: Arc<AppState>, id: String, url: String, dest: PathBuf
                 let _ = std::fs::remove_file(&part);
                 return set("error", Some(format!("finalize download failed: {e}")));
             }
-            log::info!("aux model {id} downloaded ({bytes} bytes) → {}", dest.display());
+            log::info!(
+                "aux model {id} downloaded ({bytes} bytes) → {}",
+                dest.display()
+            );
             set("done", None);
         }
         Ok(CopyOutcome::Cancelled) => {
@@ -368,10 +375,7 @@ pub async fn delete_model(
         std::fs::remove_file(&dest).map_err(ApiError::internal)?;
         log::info!("removed aux model {id} → {}", dest.display());
     }
-    Ok(Json(AuxDeleteModelResponse {
-        id,
-        removed: true,
-    }))
+    Ok(Json(AuxDeleteModelResponse { id, removed: true }))
 }
 
 /// `DELETE /aux-models/download/{id}` acknowledgement: the aux id and the
@@ -430,7 +434,11 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for m in AUX_MODELS {
             let dest = dest_for(&c, m.id).expect("every catalogue id has a dest");
-            assert!(seen.insert(dest.clone()), "duplicate dest path: {}", dest.display());
+            assert!(
+                seen.insert(dest.clone()),
+                "duplicate dest path: {}",
+                dest.display()
+            );
         }
     }
 

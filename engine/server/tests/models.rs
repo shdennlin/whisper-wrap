@@ -254,12 +254,13 @@ async fn download_endpoint_installs_full_parakeet_artifact_set() {
     // set, aggregated byte counters, all four artifacts installed, and
     // GET /models flips to installed=true.
     let (router, state) = no_model_app("parakeet-dl-full");
-    let fixture = Router::new().route(
-        &format!("{FIXTURE_PREFIX}/{{file}}"),
-        get(|AxumPath(file): AxumPath<String>| async move {
-            (StatusCode::OK, artifact_bytes(&file))
-        }),
-    );
+    let fixture =
+        Router::new().route(
+            &format!("{FIXTURE_PREFIX}/{{file}}"),
+            get(|AxumPath(file): AxumPath<String>| async move {
+                (StatusCode::OK, artifact_bytes(&file))
+            }),
+        );
     let base = spawn_fixture(fixture).await;
     // HF_ENDPOINT is the hf-hub ecosystem's endpoint override; the only
     // test in this binary that reads it, so no cross-test race.
@@ -277,14 +278,17 @@ async fn download_endpoint_installs_full_parakeet_artifact_set() {
     // Poll GET /models/download/{name} until installed (or terminal error).
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let (status, body) =
-            get_json(router.clone(), &format!("/models/download/{MODEL}")).await;
+        let (status, body) = get_json(router.clone(), &format!("/models/download/{MODEL}")).await;
         assert_eq!(status, StatusCode::OK);
         if body["installed"] == json!(true) {
             break;
         }
         assert_ne!(body["status"], json!("error"), "download failed: {body}");
-        assert_ne!(body["status"], json!("cancelled"), "download cancelled: {body}");
+        assert_ne!(
+            body["status"],
+            json!("cancelled"),
+            "download cancelled: {body}"
+        );
         assert!(Instant::now() < deadline, "timed out waiting: {body}");
         tokio::time::sleep(Duration::from_millis(25)).await;
     }

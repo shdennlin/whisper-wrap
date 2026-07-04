@@ -549,7 +549,8 @@ pub async fn cancel(
         Json(CancelResponse {
             job_id: id,
             status: "cancel_requested".to_string(),
-            note: "actual cancellation may take up to one pipeline stage to take effect".to_string(),
+            note: "actual cancellation may take up to one pipeline stage to take effect"
+                .to_string(),
         }),
     )
         .into_response()
@@ -887,7 +888,8 @@ mod tests {
         let resp = CancelResponse {
             job_id: "job123".to_string(),
             status: "cancel_requested".to_string(),
-            note: "actual cancellation may take up to one pipeline stage to take effect".to_string(),
+            note: "actual cancellation may take up to one pipeline stage to take effect"
+                .to_string(),
         };
         assert_eq!(
             serde_json::to_value(&resp).unwrap(),

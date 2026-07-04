@@ -261,7 +261,6 @@ impl OpenAiCompatProvider {
             "stream": stream,
         })
     }
-
 }
 
 /// Attach bearer auth only when a non-empty key is present (keyless local
@@ -676,7 +675,9 @@ mod tests {
         assert!(is_blocked_ip(&"fe80::1".parse::<IpAddr>().unwrap()));
         assert!(is_blocked_ip(&"fd00:ec2::254".parse::<IpAddr>().unwrap()));
         assert!(is_blocked_ip(&"::".parse::<IpAddr>().unwrap()));
-        assert!(is_blocked_ip(&"::ffff:169.254.169.254".parse::<IpAddr>().unwrap()));
+        assert!(is_blocked_ip(
+            &"::ffff:169.254.169.254".parse::<IpAddr>().unwrap()
+        ));
         // Loopback and RFC1918 stay ALLOWED — Ollama / LAN proxies are valid.
         assert!(!is_blocked_ip(&"127.0.0.1".parse::<IpAddr>().unwrap()));
         assert!(!is_blocked_ip(&"::1".parse::<IpAddr>().unwrap()));
@@ -689,19 +690,31 @@ mod tests {
     async fn validate_outbound_url_rejects_bad_scheme_and_metadata() {
         // Non-http schemes rejected.
         assert!(validate_outbound_url("file:///etc/passwd").await.is_err());
-        assert!(validate_outbound_url("gopher://127.0.0.1:70").await.is_err());
-        assert!(validate_outbound_url("not a url").await.is_err());
-        // IP-literal metadata rejected (no DNS needed).
-        assert!(validate_outbound_url("http://169.254.169.254/latest/meta-data")
+        assert!(validate_outbound_url("gopher://127.0.0.1:70")
             .await
             .is_err());
-        assert!(validate_outbound_url("http://[fe80::1]:8080").await.is_err());
+        assert!(validate_outbound_url("not a url").await.is_err());
+        // IP-literal metadata rejected (no DNS needed).
+        assert!(
+            validate_outbound_url("http://169.254.169.254/latest/meta-data")
+                .await
+                .is_err()
+        );
+        assert!(validate_outbound_url("http://[fe80::1]:8080")
+            .await
+            .is_err());
         // Loopback / LAN allowed (Ollama, self-hosted proxy).
-        assert!(validate_outbound_url("http://127.0.0.1:11434/v1").await.is_ok());
-        assert!(validate_outbound_url("http://192.168.1.50:4000/v1").await.is_ok());
+        assert!(validate_outbound_url("http://127.0.0.1:11434/v1")
+            .await
+            .is_ok());
+        assert!(validate_outbound_url("http://192.168.1.50:4000/v1")
+            .await
+            .is_ok());
         // Hostname resolution path: localhost resolves to loopback -> allowed
         // (no external network needed).
-        assert!(validate_outbound_url("http://localhost:11434/v1").await.is_ok());
+        assert!(validate_outbound_url("http://localhost:11434/v1")
+            .await
+            .is_ok());
     }
 
     #[test]
