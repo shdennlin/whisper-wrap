@@ -45,7 +45,10 @@ export interface RecordingControllerDeps {
   store: HistoryStore;
   healthMonitor: HealthMonitor;
   recLayer: RecordingLayer;
-  liveStrategy: LiveStrategy;
+  /** The CURRENT live-caption strategy. A getter (not a value) because the
+   *  capability is refined asynchronously from GET /models after boot — the
+   *  active model may expose native streaming (asr-backend-nemotron). */
+  liveStrategy: () => LiveStrategy;
   settingsPanel: SettingsPanel;
   /** Refresh every data surface after a capture changes the library. */
   onLibraryChanged: () => void;
@@ -149,11 +152,12 @@ export function createRecordingController(
    * "approximate, re-transcribe for quality" hint.
    */
   function syncLiveToggle(): void {
+    const strategy = liveStrategy();
     recLayer.setLiveToggle({
-      available: liveStrategy !== "none",
-      on: liveCaptionsEnabled && liveStrategy !== "none",
+      available: strategy !== "none",
+      on: liveCaptionsEnabled && strategy !== "none",
       hint:
-        liveStrategy === "none"
+        strategy === "none"
           ? t("rec.liveCaptionsUnavailable")
           : t("rec.liveCaptionsApprox"),
     });
@@ -162,10 +166,11 @@ export function createRecordingController(
   /** Build + attach the windowed-batch live sink to the running session. Wires
    *  its partial/final captions into the transcript + the session record. */
   function attachLiveSink(): void {
-    if (!captureSession || liveStrategy === "none") return;
+    const strategy = liveStrategy();
+    if (!captureSession || strategy === "none") return;
     const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProto}//${window.location.host}/listen`;
-    const sink = createLiveSink(liveStrategy, { wsUrl });
+    const sink = createLiveSink(strategy, { wsUrl });
     if (!sink) return;
     liveSink = sink;
     sink.onPartial((text) => {
@@ -230,7 +235,7 @@ export function createRecordingController(
     const capturing =
       captureSession?.state === "recording" || captureSession?.state === "paused";
     if (!capturing) return;
-    if (on && liveStrategy !== "none") attachLiveSink();
+    if (on && liveStrategy() !== "none") attachLiveSink();
     else detachLiveSink();
   }
 
@@ -307,7 +312,7 @@ export function createRecordingController(
     liveTimeout.start();
 
     // Attach the live caption sink when the user has live captions enabled.
-    if (liveCaptionsEnabled && liveStrategy !== "none") attachLiveSink();
+    if (liveCaptionsEnabled && liveStrategy() !== "none") attachLiveSink();
   }
 
   async function togglePause(): Promise<void> {

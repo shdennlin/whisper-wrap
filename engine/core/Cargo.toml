@@ -14,9 +14,16 @@ whisper-rs.workspace = true
 infer = "0.16"
 uuid = { version = "1", features = ["v4"] }
 sherpa-rs = { version = "0.6", features = ["download-binaries"], optional = true }
+parakeet-rs = { version = "0.3", optional = true }
+
+[dev-dependencies]
+# Wav reading for the ignored real-model parakeet test (already in the
+# tree transitively via parakeet-rs).
+hound = "3.5"
 
 [features]
 diarize = ["dep:sherpa-rs"]
+parakeet = ["dep:parakeet-rs"]
 
 [lints]
 workspace = true

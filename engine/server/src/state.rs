@@ -6,7 +6,9 @@ use tokio::sync::broadcast;
 
 use axum::http::StatusCode;
 use whisper_wrap_core::actions::{Action, Category};
-use whisper_wrap_core::{registry, Config, ResolvedModel, WhisperEngine};
+use whisper_wrap_core::asr::AsrError;
+use whisper_wrap_core::registry::BackendKind;
+use whisper_wrap_core::{registry, AsrBackend, Config, ResolvedModel, WhisperEngine};
 
 use crate::ai_config::AiConfigStore;
 use crate::history::HistoryDb;
@@ -14,6 +16,33 @@ use crate::llm::LlmClient;
 use crate::meeting::MeetingState;
 use crate::models::{registry_error_status, DownloadState};
 use crate::routes::ApiError;
+
+/// Load the ASR engine a resolved model needs — the ONE place the
+/// `BackendKind` → concrete-runtime mapping lives. Blocking (model load);
+/// callers on the async path wrap it in `spawn_blocking`.
+pub fn load_backend(resolved: &ResolvedModel) -> Result<Arc<dyn AsrBackend>, AsrError> {
+    match resolved.backend {
+        BackendKind::WhisperGgml => {
+            Ok(Arc::new(WhisperEngine::load(&resolved.bin_path)?) as Arc<dyn AsrBackend>)
+        }
+        BackendKind::ParakeetNemotron => {
+            #[cfg(feature = "parakeet")]
+            {
+                // For parakeet, `bin_path` is the ONNX artifact DIRECTORY.
+                Ok(
+                    Arc::new(whisper_wrap_core::ParakeetBackend::load(&resolved.bin_path)?)
+                        as Arc<dyn AsrBackend>,
+                )
+            }
+            #[cfg(not(feature = "parakeet"))]
+            {
+                Err(AsrError::Load(
+                    "engine built without parakeet feature".into(),
+                ))
+            }
+        }
+    }
+}
 
 pub struct AppState {
     pub config: Config,
@@ -23,13 +52,13 @@ pub struct AppState {
     /// no engine so the first-run download flow can run; transcription
     /// endpoints return 503 until `POST /models/active` loads one. This is the
     /// DEFAULT engine, used whenever a request does not name a model.
-    pub engine: RwLock<Option<Arc<WhisperEngine>>>,
+    pub engine: RwLock<Option<Arc<dyn AsrBackend>>>,
     /// Per-request ASR engines keyed by model name (per-request-asr-model).
     /// Holds only NON-active models a request asked for, loaded lazily and
     /// reused without touching the active engine. No eviction yet (the cache
     /// grows with the set of distinct models requested) — bounded eviction is
     /// the cross-cutting cache work. Mirrors the meeting per-tier diarizer cache.
-    pub engines: Mutex<HashMap<String, Arc<WhisperEngine>>>,
+    pub engines: Mutex<HashMap<String, Arc<dyn AsrBackend>>>,
     /// RwLock'd `Arc` so `PUT /config/ai` can hot-swap the live client without
     /// a restart (ai-provider-settings D2). Readers use `state.llm()`.
     pub llm: RwLock<Arc<LlmClient>>,
@@ -56,7 +85,7 @@ impl AppState {
     pub fn new(
         config: Config,
         model: ResolvedModel,
-        engine: Option<WhisperEngine>,
+        engine: Option<Arc<dyn AsrBackend>>,
         llm: LlmClient,
         ai_config: AiConfigStore,
         actions: Vec<Action>,
@@ -66,7 +95,7 @@ impl AppState {
         AppState {
             config,
             model: RwLock::new(model),
-            engine: RwLock::new(engine.map(Arc::new)),
+            engine: RwLock::new(engine),
             engines: Mutex::new(HashMap::new()),
             llm: RwLock::new(Arc::new(llm)),
             ai_config,
@@ -106,7 +135,7 @@ impl AppState {
     }
 
     /// The loaded engine, or `None` before a model is loaded (fresh install).
-    pub fn engine_handle(&self) -> Option<Arc<WhisperEngine>> {
+    pub fn engine_handle(&self) -> Option<Arc<dyn AsrBackend>> {
         self.engine.read().expect("engine lock").clone()
     }
 
@@ -116,9 +145,9 @@ impl AppState {
     /// "no model loaded" when none is loaded (the default path, unchanged). Any
     /// other name resolves the model and gets-or-loads it from the name-keyed
     /// cache, with no effect on the active engine. The cache lock is released
-    /// around the blocking `WhisperEngine::load` so a cold load does not
+    /// around the blocking [`load_backend`] so a cold load does not
     /// serialize other lookups; a hit reuses the loaded `Arc`.
-    pub fn engine_for(&self, name: Option<&str>) -> Result<Arc<WhisperEngine>, ApiError> {
+    pub fn engine_for(&self, name: Option<&str>) -> Result<Arc<dyn AsrBackend>, ApiError> {
         let active = self.model.read().expect("model lock").name.clone();
         if name.is_none() || name == Some(active.as_str()) {
             return self
@@ -144,7 +173,7 @@ impl AppState {
             "loading per-request ASR model into cache: {}",
             resolved.name
         );
-        let engine = Arc::new(WhisperEngine::load(&resolved.bin_path).map_err(ApiError::internal)?);
+        let engine = load_backend(&resolved).map_err(ApiError::internal)?;
 
         // Get-or-insert: another request may have loaded the same model while
         // this one was blocked on the load.
@@ -155,5 +184,78 @@ impl AppState {
 
     pub fn model_snapshot(&self) -> ResolvedModel {
         self.model.read().expect("model lock").clone()
+    }
+}
+
+#[cfg(test)]
+mod load_backend_tests {
+    //! Task 7.2: `load_backend` is the single BackendKind → runtime mapping.
+    use super::*;
+
+    fn sandbox(test: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ww-load-backend-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create sandbox");
+        dir
+    }
+
+    fn resolved(backend: BackendKind, bin_path: std::path::PathBuf) -> ResolvedModel {
+        ResolvedModel {
+            name: "test-model".into(),
+            bin_path,
+            format: if backend == BackendKind::ParakeetNemotron {
+                "onnx"
+            } else {
+                "ggml"
+            },
+            quant: None,
+            coreml_encoder: None,
+            backend,
+        }
+    }
+
+    #[cfg(feature = "parakeet")]
+    #[test]
+    fn parakeet_model_routes_to_the_parakeet_loader() {
+        // A parakeet ResolvedModel (bin_path = artifact DIR with garbage
+        // artifacts) must be loaded by the parakeet runtime — proven without
+        // real weights: the parakeet loader's failure differs from what the
+        // whisper loader says for the very same path.
+        let dir = sandbox("parakeet-branch");
+        for f in [
+            "encoder.onnx",
+            "encoder.onnx.data",
+            "decoder_joint.onnx",
+            "tokenizer.model",
+        ] {
+            std::fs::write(dir.join(f), b"not a real model").expect("touch artifact");
+        }
+        let err = match load_backend(&resolved(BackendKind::ParakeetNemotron, dir.clone())) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("dummy artifacts must not load"),
+        };
+        let whisper_err = WhisperEngine::load(&dir)
+            .err()
+            .expect("whisper cannot load a directory")
+            .to_string();
+        assert_ne!(
+            err, whisper_err,
+            "parakeet model must not be fed to the whisper loader"
+        );
+    }
+
+    #[test]
+    fn whisper_model_routes_to_the_whisper_loader() {
+        let dir = sandbox("whisper-branch");
+        let bin = dir.join("ggml-missing.bin");
+        let err = match load_backend(&resolved(BackendKind::WhisperGgml, bin.clone())) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("missing weights must not load"),
+        };
+        let whisper_err = WhisperEngine::load(&bin)
+            .err()
+            .expect("missing weights cannot load")
+            .to_string();
+        assert_eq!(err, whisper_err, "whisper models keep the whisper loader");
     }
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  capabilityFromModels,
   createLiveSink,
   resolveLiveStrategy,
 } from "./live-caption-strategy";
@@ -14,10 +15,40 @@ describe("resolveLiveStrategy", () => {
     expect(resolveLiveStrategy({ localWhisper: false })).toBe("none");
   });
 
-  it("prefers native-stream when the ASR exposes it (future seam)", () => {
+  it("prefers native-stream when the ASR exposes it", () => {
     expect(
       resolveLiveStrategy({ localWhisper: true, nativeStream: true }),
     ).toBe("native-stream");
+  });
+});
+
+describe("capabilityFromModels", () => {
+  const listing = {
+    active: "parakeet-nemotron-1",
+    models: [
+      { name: "breeze-asr-25", supports_native_stream: false },
+      { name: "parakeet-nemotron-1", supports_native_stream: true },
+    ],
+  };
+
+  it("derives native-stream from the ACTIVE model row", () => {
+    expect(resolveLiveStrategy(capabilityFromModels(listing))).toBe(
+      "native-stream",
+    );
+  });
+
+  it("keeps windowed-batch for an active whisper model", () => {
+    expect(
+      resolveLiveStrategy(
+        capabilityFromModels({ ...listing, active: "breeze-asr-25" }),
+      ),
+    ).toBe("windowed-batch");
+  });
+
+  it("falls back to windowed-batch when the active row is missing", () => {
+    expect(
+      resolveLiveStrategy(capabilityFromModels({ ...listing, active: "ghost" })),
+    ).toBe("windowed-batch");
   });
 });
 
@@ -27,9 +58,31 @@ describe("createLiveSink", () => {
     (globalThis as unknown as { WebSocket: unknown }).WebSocket = realWS;
   });
 
-  it("returns null for none and for the unwired native-stream", () => {
+  it("returns null only for none", () => {
     expect(createLiveSink("none", { wsUrl: "ws://x/listen" })).toBeNull();
-    expect(createLiveSink("native-stream", { wsUrl: "ws://x/listen" })).toBeNull();
+  });
+
+  it("returns the same listen-socket sink for native-stream (server dispatches)", () => {
+    const urls: string[] = [];
+    class FakeWS {
+      onopen: (() => void) | null = null;
+      onclose: (() => void) | null = null;
+      onmessage: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readyState = 0;
+      constructor(url: string) {
+        urls.push(url);
+      }
+      send(): void {}
+      close(): void {}
+    }
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = FakeWS;
+
+    const sink = createLiveSink("native-stream", { wsUrl: "ws://x/listen" });
+    expect(sink).not.toBeNull();
+    void sink!.open();
+    expect(urls).toEqual(["ws://x/listen"]);
+    void sink!.close();
   });
 
   it("returns a listen-socket-backed sink for windowed-batch", () => {

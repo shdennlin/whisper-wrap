@@ -26,11 +26,32 @@ pub enum RegistryError {
     UnknownModel(String),
     #[error("model {0:?} has no ggml variant (v3 engine is ggml-only)")]
     NoGgmlVariant(String),
+    #[error("model {0:?} has no onnx variant (required for parakeet-nemotron backend)")]
+    NoOnnxVariant(String),
     #[error("model file not found: {0} — fetch it via POST /models/download (Models screen in the app)")]
     ModelFileMissing(PathBuf),
     #[error("MODEL_DIR {0} contains no .bin model file")]
     EmptyModelDir(PathBuf),
 }
+
+/// Which inference backend runs a model. Per-entry in the registry;
+/// absent means `whisper-ggml` so every pre-existing entry parses
+/// (and resolves) exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackendKind {
+    #[default]
+    WhisperGgml,
+    ParakeetNemotron,
+}
+
+/// ONNX artifact files a parakeet-nemotron model needs on disk.
+const PARAKEET_ARTIFACTS: [&str; 4] = [
+    "encoder.onnx",
+    "encoder.onnx.data",
+    "decoder_joint.onnx",
+    "tokenizer.model",
+];
 
 #[derive(Debug, Deserialize)]
 struct RegistryFile {
@@ -57,6 +78,9 @@ struct ModelEntry {
     /// Display/filter only — never affects resolution, runnable, or downloads.
     #[serde(default)]
     tags: Vec<String>,
+    /// Inference backend for this model; defaults to whisper-ggml.
+    #[serde(default)]
+    backend: BackendKind,
     variants: Vec<Variant>,
 }
 
@@ -75,10 +99,14 @@ struct Variant {
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
     pub name: String,
+    /// Path to the model weights. For whisper-ggml this is the `.bin`
+    /// file; for parakeet-nemotron it is the artifact DIRECTORY holding
+    /// the ONNX file set (encoder/decoder/tokenizer).
     pub bin_path: PathBuf,
     pub format: &'static str,
     pub quant: Option<String>,
     pub coreml_encoder: Option<PathBuf>,
+    pub backend: BackendKind,
 }
 
 pub fn resolve_active_model(config: &Config) -> Result<ResolvedModel, RegistryError> {
@@ -133,6 +161,11 @@ fn resolve_named_model_inner(
         .models
         .get(name)
         .ok_or_else(|| RegistryError::UnknownModel(name.to_owned()))?;
+
+    if entry.backend == BackendKind::ParakeetNemotron {
+        return resolve_parakeet(config, name, entry, require_file);
+    }
+
     let variant = entry
         .variants
         .iter()
@@ -160,7 +193,43 @@ fn resolve_named_model_inner(
             .filter(|p| p.exists()),
         quant: variant.quant.clone(),
         format: "ggml",
+        backend: BackendKind::WhisperGgml,
         bin_path,
+    })
+}
+
+/// Resolve a parakeet-nemotron model: the `onnx` variant names the local
+/// artifact directory; `bin_path` is that DIRECTORY (not a file). Strict
+/// mode requires the full ONNX artifact set inside it.
+fn resolve_parakeet(
+    config: &Config,
+    name: &str,
+    entry: &ModelEntry,
+    require_file: bool,
+) -> Result<ResolvedModel, RegistryError> {
+    let variant = entry
+        .variants
+        .iter()
+        .find(|v| v.format == "onnx")
+        .ok_or_else(|| RegistryError::NoOnnxVariant(name.to_owned()))?;
+    let artifact_dir = config
+        .models_dir
+        .join(variant.local_dir.as_deref().unwrap_or(name));
+    if require_file {
+        for f in PARAKEET_ARTIFACTS {
+            let path = artifact_dir.join(f);
+            if !path.is_file() {
+                return Err(RegistryError::ModelFileMissing(path));
+            }
+        }
+    }
+    Ok(ResolvedModel {
+        name: name.to_owned(),
+        bin_path: artifact_dir,
+        format: "onnx",
+        quant: None,
+        coreml_encoder: None,
+        backend: BackendKind::ParakeetNemotron,
     })
 }
 
@@ -179,8 +248,14 @@ pub struct ModelListing {
     pub tags: Vec<String>,
     pub formats: Vec<String>,
     pub installed: bool,
-    /// True when this model has a ggml variant (v3 can run it).
+    /// True when this model has a variant its backend can run
+    /// (ggml for whisper-ggml, onnx for parakeet-nemotron).
     pub runnable: bool,
+    /// Inference backend for this model (kebab-case in JSON).
+    pub backend: BackendKind,
+    /// True when the backend transcribes a live stream natively
+    /// (parakeet-nemotron), rather than via chunked whisper passes.
+    pub supports_native_stream: bool,
 }
 
 pub fn list_models(config: &Config) -> Result<Vec<ModelListing>, RegistryError> {
@@ -201,7 +276,15 @@ pub fn list_models(config: &Config) -> Result<Vec<ModelListing>, RegistryError> 
             tags: entry.tags.clone(),
             formats: entry.variants.iter().map(|v| v.format.clone()).collect(),
             installed: resolve_named_model(config, name).is_ok(),
-            runnable: entry.variants.iter().any(|v| v.format == "ggml"),
+            runnable: {
+                let required = match entry.backend {
+                    BackendKind::WhisperGgml => "ggml",
+                    BackendKind::ParakeetNemotron => "onnx",
+                };
+                entry.variants.iter().any(|v| v.format == required)
+            },
+            backend: entry.backend,
+            supports_native_stream: entry.backend == BackendKind::ParakeetNemotron,
         })
         .collect())
 }
@@ -247,6 +330,55 @@ pub fn ggml_download_spec(config: &Config, name: &str) -> Result<DownloadSpec, R
     })
 }
 
+/// The registry-declared backend for `name`. The download endpoint branches
+/// on this to pick the single-file (ggml) vs multi-file (parakeet) plan.
+pub fn model_backend(config: &Config, name: &str) -> Result<BackendKind, RegistryError> {
+    let raw = std::fs::read_to_string(&config.registry_path)?;
+    let registry: RegistryFile = serde_yaml::from_str(&raw)?;
+    registry
+        .models
+        .get(name)
+        .map(|e| e.backend)
+        .ok_or_else(|| RegistryError::UnknownModel(name.to_owned()))
+}
+
+/// The multi-file download plan for a parakeet-nemotron model: one
+/// [`DownloadSpec`] per ONNX artifact (the same four files strict resolve
+/// requires), all sharing the onnx variant's `repo_id`/`subfolder` and
+/// landing in `models_dir/<local_dir>/`.
+pub fn parakeet_download_spec(
+    config: &Config,
+    name: &str,
+) -> Result<Vec<DownloadSpec>, RegistryError> {
+    let raw = std::fs::read_to_string(&config.registry_path)?;
+    let registry: RegistryFile = serde_yaml::from_str(&raw)?;
+    let entry = registry
+        .models
+        .get(name)
+        .ok_or_else(|| RegistryError::UnknownModel(name.to_owned()))?;
+    let variant = entry
+        .variants
+        .iter()
+        .find(|v| v.format == "onnx")
+        .ok_or_else(|| RegistryError::NoOnnxVariant(name.to_owned()))?;
+    let repo_id = variant.repo_id.clone().ok_or_else(|| {
+        RegistryError::UnknownModel(format!("{name} onnx variant has no repo_id"))
+    })?;
+    let dest_dir = config
+        .models_dir
+        .join(variant.local_dir.as_deref().unwrap_or(name));
+    Ok(PARAKEET_ARTIFACTS
+        .iter()
+        .map(|f| DownloadSpec {
+            repo_id: repo_id.clone(),
+            filename: (*f).to_owned(),
+            subfolder: variant.subfolder.clone(),
+            dest_dir: dest_dir.clone(),
+            dest_file: dest_dir.join(f),
+        })
+        .collect())
+}
+
 fn resolve_model_dir_override(dir: &Path, name: &str) -> Result<ResolvedModel, RegistryError> {
     let bin_path = if dir.is_file() {
         dir.to_path_buf()
@@ -259,6 +391,7 @@ fn resolve_model_dir_override(dir: &Path, name: &str) -> Result<ResolvedModel, R
         format: "ggml",
         quant: None,
         coreml_encoder: None,
+        backend: BackendKind::WhisperGgml,
     })
 }
 
@@ -298,6 +431,14 @@ models:
     variants:
       - format: ct2
         local_dir: x
+  parakeet-tdt-0.6b:
+    description: "parakeet test"
+    backend: parakeet-nemotron
+    variants:
+      - format: onnx
+        local_dir: parakeet-tdt-0.6b-onnx
+        repo_id: "test-org/parakeet-fixture"
+        subfolder: streaming-onnx
 "#;
 
     #[test]
@@ -403,6 +544,247 @@ models:
         assert_eq!(m.name, "breeze-asr-25");
         assert!(m.bin_path.ends_with("ggml-breeze-asr-25-q6_k.bin"));
         assert!(!m.bin_path.is_file());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backend_defaults_to_whisper_ggml() {
+        // Entries that omit `backend` MUST parse to WhisperGgml so every
+        // pre-existing registry row keeps resolving exactly as before.
+        let reg: RegistryFile = serde_yaml::from_str(SAMPLE).unwrap();
+        assert_eq!(reg.models["breeze-asr-25"].backend, BackendKind::WhisperGgml);
+        assert_eq!(reg.models["ct2-only"].backend, BackendKind::WhisperGgml);
+        assert_eq!(
+            reg.models["parakeet-tdt-0.6b"].backend,
+            BackendKind::ParakeetNemotron
+        );
+    }
+
+    #[test]
+    fn ggml_resolution_unchanged_for_default_backend() {
+        // A backend-less entry still resolves via the ggml variant with an
+        // unchanged spec — and now reports backend == WhisperGgml.
+        let base = std::env::temp_dir().join("ww-registry-ggml-backend-test");
+        let _ = std::fs::create_dir_all(&base);
+        let reg_path = base.join("models.yaml");
+        std::fs::write(&reg_path, SAMPLE).unwrap();
+
+        let mut config = Config::from_env();
+        config.registry_path = reg_path;
+        config.models_dir = base.join("models-empty");
+        config.model_dir = None;
+
+        let m = resolve_named_model_lenient(&config, "breeze-asr-25").unwrap();
+        assert_eq!(m.backend, BackendKind::WhisperGgml);
+        assert_eq!(m.format, "ggml");
+        assert!(m.bin_path.ends_with("ggml-breeze-asr-25-q6_k.bin"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn listing_exposes_backend_and_native_stream() {
+        let base = std::env::temp_dir().join("ww-registry-backend-listing-test");
+        let _ = std::fs::create_dir_all(&base);
+        let reg_path = base.join("models.yaml");
+        std::fs::write(&reg_path, SAMPLE).unwrap();
+
+        let mut config = Config::from_env();
+        config.registry_path = reg_path;
+        config.models_dir = base.join("models-empty");
+        config.model_dir = None;
+
+        let listings = list_models(&config).unwrap();
+        let parakeet = listings
+            .iter()
+            .find(|l| l.name == "parakeet-tdt-0.6b")
+            .unwrap();
+        assert_eq!(parakeet.backend, BackendKind::ParakeetNemotron);
+        assert!(parakeet.supports_native_stream);
+        // Runnable because it has an onnx variant (parakeet's runnable rule).
+        assert!(parakeet.runnable);
+
+        let breeze = listings.iter().find(|l| l.name == "breeze-asr-25").unwrap();
+        assert_eq!(breeze.backend, BackendKind::WhisperGgml);
+        assert!(!breeze.supports_native_stream);
+        assert!(breeze.runnable);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parakeet_download_spec_covers_all_artifacts() {
+        // The multi-file download plan for a parakeet-nemotron model: one
+        // DownloadSpec per ONNX artifact, all four, sharing the onnx
+        // variant's repo/subfolder and landing in models_dir/<local_dir>/.
+        let base = std::env::temp_dir().join("ww-registry-parakeet-dlspec-test");
+        let _ = std::fs::create_dir_all(&base);
+        let reg_path = base.join("models.yaml");
+        std::fs::write(&reg_path, SAMPLE).unwrap();
+
+        let mut config = Config::from_env();
+        config.registry_path = reg_path;
+        config.models_dir = base.join("models");
+        config.model_dir = None;
+
+        let specs = parakeet_download_spec(&config, "parakeet-tdt-0.6b").unwrap();
+        let names: Vec<&str> = specs.iter().map(|s| s.filename.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "encoder.onnx",
+                "encoder.onnx.data",
+                "decoder_joint.onnx",
+                "tokenizer.model"
+            ]
+        );
+        let dest_dir = config.models_dir.join("parakeet-tdt-0.6b-onnx");
+        for s in &specs {
+            assert_eq!(s.repo_id, "test-org/parakeet-fixture");
+            assert_eq!(s.subfolder.as_deref(), Some("streaming-onnx"));
+            assert_eq!(s.dest_dir, dest_dir);
+            assert_eq!(s.dest_file, dest_dir.join(&s.filename));
+        }
+
+        // A model without an onnx variant has no parakeet download plan.
+        assert!(matches!(
+            parakeet_download_spec(&config, "breeze-asr-25"),
+            Err(RegistryError::NoOnnxVariant(_))
+        ));
+        assert!(matches!(
+            parakeet_download_spec(&config, "ghost"),
+            Err(RegistryError::UnknownModel(_))
+        ));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn model_backend_reads_registry_entry() {
+        let base = std::env::temp_dir().join("ww-registry-model-backend-test");
+        let _ = std::fs::create_dir_all(&base);
+        let reg_path = base.join("models.yaml");
+        std::fs::write(&reg_path, SAMPLE).unwrap();
+
+        let mut config = Config::from_env();
+        config.registry_path = reg_path;
+        config.models_dir = base.join("models");
+        config.model_dir = None;
+
+        assert_eq!(
+            model_backend(&config, "breeze-asr-25").unwrap(),
+            BackendKind::WhisperGgml
+        );
+        assert_eq!(
+            model_backend(&config, "parakeet-tdt-0.6b").unwrap(),
+            BackendKind::ParakeetNemotron
+        );
+        assert!(matches!(
+            model_backend(&config, "ghost"),
+            Err(RegistryError::UnknownModel(_))
+        ));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shipped_registry_has_nemotron_streaming() {
+        // Regression guard on the real registry/models.yaml: the shipped
+        // nemotron-3.5-streaming row must surface the parakeet-nemotron
+        // backend (→ native streaming) and a 4-artifact download plan
+        // against the altunenes/parakeet-rs ONNX repo.
+        let real_registry =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/models.yaml");
+
+        let mut config = Config::from_env();
+        config.registry_path = PathBuf::from(real_registry);
+        config.models_dir = std::env::temp_dir().join("ww-registry-shipped-empty");
+        config.model_dir = None;
+
+        let listings = list_models(&config).unwrap();
+        let nemotron = listings
+            .iter()
+            .find(|l| l.name == "nemotron-3.5-streaming")
+            .expect("nemotron-3.5-streaming in shipped registry");
+        assert_eq!(nemotron.backend, BackendKind::ParakeetNemotron);
+        assert!(nemotron.supports_native_stream);
+        assert!(nemotron.runnable);
+        assert_eq!(
+            nemotron.tags,
+            vec!["streaming".to_string(), "realtime".to_string()]
+        );
+        assert_eq!(nemotron.languages, vec!["multilingual".to_string()]);
+        assert_eq!(nemotron.size.as_deref(), Some("~2.6 GB"));
+
+        let specs = parakeet_download_spec(&config, "nemotron-3.5-streaming").unwrap();
+        assert_eq!(specs.len(), 4);
+        for s in &specs {
+            assert_eq!(s.repo_id, "altunenes/parakeet-rs");
+            assert_eq!(
+                s.subfolder.as_deref(),
+                Some("nemotron-3.5-asr-streaming-0.6b-onnx")
+            );
+            assert!(s.dest_dir.ends_with("nemotron-3.5-streaming-onnx"));
+        }
+    }
+
+    #[test]
+    fn backend_kind_serializes_kebab_case() {
+        assert_eq!(
+            serde_yaml::to_string(&BackendKind::ParakeetNemotron).unwrap(),
+            "parakeet-nemotron\n"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&BackendKind::WhisperGgml).unwrap(),
+            "whisper-ggml\n"
+        );
+    }
+
+    #[test]
+    fn parakeet_lenient_resolves_strict_requires_artifacts() {
+        // Lenient resolve returns the spec (bin_path = artifact DIR) even
+        // with nothing on disk; strict resolve requires all four ONNX
+        // artifact files to exist.
+        let base = std::env::temp_dir().join("ww-registry-parakeet-resolve-test");
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::create_dir_all(&base);
+        let reg_path = base.join("models.yaml");
+        std::fs::write(&reg_path, SAMPLE).unwrap();
+
+        let mut config = Config::from_env();
+        config.registry_path = reg_path;
+        config.models_dir = base.join("models");
+        config.model_dir = None;
+
+        let m = resolve_named_model_lenient(&config, "parakeet-tdt-0.6b").unwrap();
+        assert_eq!(m.backend, BackendKind::ParakeetNemotron);
+        assert_eq!(m.format, "onnx");
+        assert!(m.bin_path.ends_with("parakeet-tdt-0.6b-onnx"));
+        assert_eq!(m.quant, None);
+        assert!(m.coreml_encoder.is_none());
+
+        // Strict: fails while any of the four artifact files is missing.
+        assert!(matches!(
+            resolve_named_model(&config, "parakeet-tdt-0.6b"),
+            Err(RegistryError::ModelFileMissing(_))
+        ));
+
+        // Create three of four — still missing.
+        let dir = config.models_dir.join("parakeet-tdt-0.6b-onnx");
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["encoder.onnx", "encoder.onnx.data", "decoder_joint.onnx"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        assert!(matches!(
+            resolve_named_model(&config, "parakeet-tdt-0.6b"),
+            Err(RegistryError::ModelFileMissing(_))
+        ));
+
+        // All four present — strict resolve succeeds.
+        std::fs::write(dir.join("tokenizer.model"), b"x").unwrap();
+        let m = resolve_named_model(&config, "parakeet-tdt-0.6b").unwrap();
+        assert_eq!(m.backend, BackendKind::ParakeetNemotron);
 
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -989,6 +989,12 @@ export interface components {
         ModelEntry: {
             /** Format: double */
             accuracy?: number | null;
+            /**
+             * @description Inference backend kind, kebab-case: `"whisper-ggml"` or
+             *     `"parakeet-nemotron"` (mirrors `registry::BackendKind`'s serde
+             *     rename_all = "kebab-case").
+             */
+            backend: string;
             description?: string | null;
             formats: string[];
             installed: boolean;
@@ -1000,6 +1006,11 @@ export interface components {
             size?: string | null;
             /** Format: double */
             speed?: number | null;
+            /**
+             * @description True when the backend transcribes a live stream natively
+             *     (parakeet-nemotron), rather than via chunked whisper passes.
+             */
+            supports_native_stream: boolean;
             tags: string[];
         };
         /**

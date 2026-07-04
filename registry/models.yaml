@@ -140,3 +140,22 @@ models:
         filename: ggml-tiny.bin
         local_dir: whisper-tiny-ggml
         default_on: [darwin, linux]
+
+  # --- NVIDIA Nemotron streaming ASR (parakeet-nemotron backend) ------------
+  # Multi-file ONNX artifact set (encoder + encoder.onnx.data + decoder_joint
+  # + tokenizer); the download endpoint fetches all four as one job and the
+  # model counts as installed only when the full set is present.
+  nemotron-3.5-streaming:
+    description: "NVIDIA Nemotron 3.5 streaming — native real-time captions, 40 languages"
+    languages: [multilingual]
+    license: "OpenMDW-1.1 (NVIDIA, commercial OK)"
+    tags: [streaming, realtime]
+    backend: parakeet-nemotron
+    size: "~2.6 GB"
+    speed: 9.0
+    accuracy: 7.0
+    variants:
+      - format: onnx
+        local_dir: nemotron-3.5-streaming-onnx
+        repo_id: "altunenes/parakeet-rs"
+        subfolder: nemotron-3.5-asr-streaming-0.6b-onnx

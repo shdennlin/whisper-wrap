@@ -30,8 +30,9 @@ import {
   type ResolvedTheme,
 } from "./theme";
 import {
+  capabilityFromModels,
   resolveLiveStrategy,
-  type LiveStrategy,
+  type AsrCapability,
 } from "./capture/live-caption-strategy";
 import { loadLiveCaptions } from "./capture/mode-store";
 import { HealthMonitor } from "./health/health-monitor";
@@ -824,13 +825,19 @@ if (profile.surface === "desktop") {
 // audio persistence, upload-retry UI, and health gating moved verbatim into
 // createRecordingController(deps). main.ts builds the deps and binds the
 // card / recbar / home-toggle handlers (above) to the controller instance.
-/** Active ASR live capability → strategy (local Whisper → windowed-batch). */
-const liveStrategy: LiveStrategy = resolveLiveStrategy({ localWhisper: true });
+/**
+ * Active ASR live capability → strategy. Boots as local-Whisper
+ * (windowed-batch) and is refined from GET /models below: a native-streaming
+ * active model (parakeet) flips the strategy to native-stream. The sink is
+ * the same WS /listen either way (the SERVER dispatches per active model) —
+ * the strategy value drives the UI affordances.
+ */
+let asrCapability: AsrCapability = { localWhisper: true };
 rec = createRecordingController({
   store,
   healthMonitor,
   recLayer,
-  liveStrategy,
+  liveStrategy: () => resolveLiveStrategy(asrCapability),
   settingsPanel,
   onLibraryChanged: refreshAll,
   wsIndicatorHost,
@@ -848,6 +855,18 @@ rec = createRecordingController({
     doneItemId = sessionId;
   },
 });
+// Refine the live capability from the model listing once it answers (a
+// boot-time snapshot; an offline boot keeps the windowed-batch default).
+void client
+  .GET("/models")
+  .then(({ data }) => {
+    if (!data) return;
+    asrCapability = capabilityFromModels(data);
+    rec.syncLiveToggle();
+  })
+  .catch(() => {
+    /* backend unreachable at boot — keep the default capability */
+  });
 
 // ---- Background-tab freshness ---------------------------------------------
 // When the user backgrounds the PWA, calls /transcribe (Shortcut / curl /

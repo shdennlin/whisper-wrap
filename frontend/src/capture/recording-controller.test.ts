@@ -170,7 +170,7 @@ function makeDeps(
     healthMonitor:
       healthMonitor as unknown as RecordingControllerDeps["healthMonitor"],
     recLayer: makeRecLayerMock(),
-    liveStrategy: "windowed-batch",
+    liveStrategy: () => "windowed-batch" as const,
     settingsPanel:
       settingsPanel as unknown as RecordingControllerDeps["settingsPanel"],
     onLibraryChanged: vi.fn(),

@@ -13,7 +13,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
-use whisper_wrap_core::{registry, WhisperEngine};
+use whisper_wrap_core::registry;
 
 use crate::routes::ApiError;
 use crate::state::AppState;
@@ -68,6 +68,13 @@ struct ModelEntry {
     formats: Vec<String>,
     installed: bool,
     runnable: bool,
+    /// Inference backend kind, kebab-case: `"whisper-ggml"` or
+    /// `"parakeet-nemotron"` (mirrors `registry::BackendKind`'s serde
+    /// rename_all = "kebab-case").
+    backend: String,
+    /// True when the backend transcribes a live stream natively
+    /// (parakeet-nemotron), rather than via chunked whisper passes.
+    supports_native_stream: bool,
 }
 
 /// `GET /models` success body: the active model name, whether its weights are
@@ -172,14 +179,14 @@ pub async fn set_active(
         resolved.name,
         resolved.bin_path.display()
     );
-    let bin_path = resolved.bin_path.clone();
-    let engine = tokio::task::spawn_blocking(move || WhisperEngine::load(&bin_path))
+    let to_load = resolved.clone();
+    let engine = tokio::task::spawn_blocking(move || crate::state::load_backend(&to_load))
         .await
         .map_err(ApiError::internal)?
         .map_err(ApiError::internal)?;
-    let load_time_ms = engine.load_time_ms;
+    let load_time_ms = engine.load_time_ms();
 
-    *state.engine.write().expect("engine lock") = Some(Arc::new(engine));
+    *state.engine.write().expect("engine lock") = Some(engine);
     *state.model.write().expect("model lock") = resolved;
 
     Ok(Json(SetActiveResponse {
@@ -207,8 +214,49 @@ pub struct DownloadResponse {
     already_present: Option<bool>,
 }
 
+/// Hugging Face endpoint (honors the hf-hub ecosystem's `HF_ENDPOINT`
+/// override — mirrors, and the integration tests' local fixture server).
+fn hf_endpoint() -> String {
+    std::env::var("HF_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://huggingface.co".to_owned())
+}
+
+/// `{base}/{repo_id}/resolve/main/[{subfolder}/]{filename}` — the same URL
+/// shape the single-file ggml path builds.
+fn artifact_url(base: &str, spec: &registry::DownloadSpec) -> String {
+    let remote = match &spec.subfolder {
+        Some(sub) => format!("{sub}/{}", spec.filename),
+        None => spec.filename.clone(),
+    };
+    format!("{base}/{}/resolve/main/{remote}", spec.repo_id)
+}
+
+/// Job-map admission shared by both download flavors: when a download for
+/// `name` is already live, answer with its "downloading" state; otherwise
+/// register a fresh job and let the caller spawn the worker.
+fn mark_downloading(state: &AppState, name: &str) -> Option<Json<DownloadResponse>> {
+    let mut jobs = state.downloads.jobs.lock().expect("dl lock");
+    if let Some(j) = jobs.get(name) {
+        if j.status == "downloading" {
+            return Some(Json(DownloadResponse {
+                name: name.to_owned(),
+                status: "downloading".to_string(),
+                already_present: None,
+            }));
+        }
+    }
+    jobs.insert(name.to_owned(), DownloadJob::started());
+    None
+}
+
 /// Start (or report an already-running) download of a model's ggml
 /// weights. Returns immediately; poll GET /models/download/{name}.
+//
+// parakeet-nemotron models download their whole ONNX artifact set as one
+// job — same endpoint, same polling contract (plain comment: doc comments
+// feed the utoipa operation description / checked-in openapi.json).
 #[utoipa::path(
     post,
     path = "/models/download",
@@ -225,14 +273,52 @@ pub async fn download(
     State(state): State<Arc<AppState>>,
     Json(req): Json<DownloadRequest>,
 ) -> Result<Json<DownloadResponse>, ApiError> {
-    let spec = registry::ggml_download_spec(&state.config, &req.name).map_err(|e| {
-        use whisper_wrap_core::registry::RegistryError as E;
-        match &e {
-            E::UnknownModel(_) | E::NoGgmlVariant(_) => {
-                ApiError::new(StatusCode::NOT_FOUND, e.to_string())
+    use whisper_wrap_core::registry::{BackendKind, RegistryError as E};
+
+    let backend = registry::model_backend(&state.config, &req.name).map_err(|e| match &e {
+        E::UnknownModel(_) => ApiError::new(StatusCode::NOT_FOUND, e.to_string()),
+        _ => ApiError::internal(e),
+    })?;
+
+    // parakeet-nemotron: the whole ONNX artifact set is ONE logical unit —
+    // one job, sequential files, aggregated progress, all-or-nothing install.
+    if backend == BackendKind::ParakeetNemotron {
+        let specs = registry::parakeet_download_spec(&state.config, &req.name).map_err(|e| {
+            match &e {
+                E::UnknownModel(_) | E::NoOnnxVariant(_) => {
+                    ApiError::new(StatusCode::NOT_FOUND, e.to_string())
+                }
+                _ => ApiError::internal(e),
             }
-            _ => ApiError::internal(e),
+        })?;
+        // "Installed" means the FULL set — a partial set (crash leftovers)
+        // re-downloads everything rather than reporting already_present.
+        if specs.iter().all(|s| s.dest_file.is_file()) {
+            return Ok(Json(DownloadResponse {
+                name: req.name.clone(),
+                status: "done".to_string(),
+                already_present: Some(true),
+            }));
         }
+        if let Some(resp) = mark_downloading(&state, &req.name) {
+            return Ok(resp);
+        }
+        let st = Arc::clone(&state);
+        let name = req.name.clone();
+        let endpoint = hf_endpoint();
+        tokio::task::spawn_blocking(move || run_parakeet_download(st, name, specs, endpoint));
+        return Ok(Json(DownloadResponse {
+            name: req.name,
+            status: "downloading".to_string(),
+            already_present: None,
+        }));
+    }
+
+    let spec = registry::ggml_download_spec(&state.config, &req.name).map_err(|e| match &e {
+        E::UnknownModel(_) | E::NoGgmlVariant(_) => {
+            ApiError::new(StatusCode::NOT_FOUND, e.to_string())
+        }
+        _ => ApiError::internal(e),
     })?;
 
     if spec.dest_file.is_file() {
@@ -243,18 +329,8 @@ pub async fn download(
         }));
     }
 
-    {
-        let mut jobs = state.downloads.jobs.lock().expect("dl lock");
-        if let Some(j) = jobs.get(&req.name) {
-            if j.status == "downloading" {
-                return Ok(Json(DownloadResponse {
-                    name: req.name.clone(),
-                    status: "downloading".to_string(),
-                    already_present: None,
-                }));
-            }
-        }
-        jobs.insert(req.name.clone(), DownloadJob::started());
+    if let Some(resp) = mark_downloading(&state, &req.name) {
+        return Ok(resp);
     }
 
     let st = Arc::clone(&state);
@@ -397,6 +473,142 @@ fn run_download(state: Arc<AppState>, name: String, spec: registry::DownloadSpec
     }
 }
 
+/// Multi-file worker for a parakeet-nemotron model: fetches the whole ONNX
+/// artifact set SEQUENTIALLY under one job — one cancel flag, byte counters
+/// aggregated across files (`total_bytes` = sum of HEAD content-lengths when
+/// every file reports one, else `None`).
+///
+/// All-or-nothing install: on failure or cancel partway, the in-flight
+/// `.part` AND every artifact this run already completed are removed, so the
+/// model can never be left looking part-installed (strict resolve requires
+/// the full set). Skips the HF-cache fast path the single-file flow has —
+/// per-file cache hits would poke holes in that atomicity for a repo that is
+/// realistically never in the shared cache.
+///
+/// Public so the integration tests can drive it against a local fixture
+/// endpoint; not part of the HTTP surface.
+#[doc(hidden)]
+pub fn run_parakeet_download(
+    state: Arc<AppState>,
+    name: String,
+    specs: Vec<registry::DownloadSpec>,
+    base_url: String,
+) {
+    let set = |status: &'static str, err: Option<String>| {
+        if let Some(j) = state.downloads.jobs.lock().expect("dl lock").get_mut(&name) {
+            j.status = status;
+            j.error = err;
+        }
+    };
+    let Some(first) = specs.first() else {
+        return set("error", Some("empty artifact set".to_string()));
+    };
+    if let Err(e) = std::fs::create_dir_all(&first.dest_dir) {
+        return set("error", Some(e.to_string()));
+    }
+    let cancel = match state.downloads.jobs.lock().expect("dl lock").get(&name) {
+        Some(j) => Arc::clone(&j.cancel),
+        None => return,
+    };
+
+    // Best-effort total: sum of HEAD content-lengths across the set. Any
+    // unknown length leaves the total None (indeterminate progress bar),
+    // never a wrong number.
+    let mut total: Option<u64> = Some(0);
+    for spec in &specs {
+        total = match ureq::head(&artifact_url(&base_url, spec)).call() {
+            Ok(r) => r
+                .header("content-length")
+                .and_then(|v| v.parse::<u64>().ok())
+                .and_then(|n| total.map(|t| t + n)),
+            Err(_) => None,
+        };
+        if total.is_none() {
+            break;
+        }
+    }
+    if let Some(j) = state.downloads.jobs.lock().expect("dl lock").get_mut(&name) {
+        j.total_bytes = total;
+    }
+
+    // No partial installs: remove the current .part and every artifact THIS
+    // run finished (a 3/4 set would look forever half-installed).
+    let cleanup = |completed: &[std::path::PathBuf], part: &std::path::Path| {
+        let _ = std::fs::remove_file(part);
+        for f in completed {
+            let _ = std::fs::remove_file(f);
+        }
+    };
+
+    let mut completed: Vec<std::path::PathBuf> = Vec::new();
+    let mut done_bytes: u64 = 0;
+    for spec in &specs {
+        let part = spec
+            .dest_file
+            .with_file_name(format!("{}.part", spec.filename));
+        if cancel.load(Ordering::Relaxed) {
+            cleanup(&completed, &part);
+            log::info!("model {name} download cancelled");
+            return set("cancelled", None);
+        }
+        let resp = match ureq::get(&artifact_url(&base_url, spec)).call() {
+            Ok(r) => r,
+            Err(e) => {
+                cleanup(&completed, &part);
+                return set(
+                    "error",
+                    Some(format!("HF download failed ({}): {e}", spec.filename)),
+                );
+            }
+        };
+        let outcome = (|| {
+            let file = std::fs::File::create(&part)?;
+            let mut writer = std::io::BufWriter::new(file);
+            let out = copy_with_progress(resp.into_reader(), &mut writer, &cancel, |bytes| {
+                if let Some(j) = state.downloads.jobs.lock().expect("dl lock").get_mut(&name) {
+                    j.downloaded_bytes = done_bytes + bytes;
+                }
+            })?;
+            writer.flush()?;
+            Ok::<CopyOutcome, std::io::Error>(out)
+        })();
+        match outcome {
+            Ok(CopyOutcome::Done(bytes)) => {
+                if let Err(e) = std::fs::rename(&part, &spec.dest_file) {
+                    cleanup(&completed, &part);
+                    return set(
+                        "error",
+                        Some(format!("finalize download failed ({}): {e}", spec.filename)),
+                    );
+                }
+                completed.push(spec.dest_file.clone());
+                done_bytes += bytes;
+                if let Some(j) = state.downloads.jobs.lock().expect("dl lock").get_mut(&name) {
+                    j.downloaded_bytes = done_bytes;
+                }
+            }
+            Ok(CopyOutcome::Cancelled) => {
+                cleanup(&completed, &part);
+                log::info!("model {name} download cancelled");
+                return set("cancelled", None);
+            }
+            Err(e) => {
+                cleanup(&completed, &part);
+                return set(
+                    "error",
+                    Some(format!("HF download failed ({}): {e}", spec.filename)),
+                );
+            }
+        }
+    }
+    log::info!(
+        "model {name} downloaded ({done_bytes} bytes, {} artifacts) → {}",
+        completed.len(),
+        first.dest_dir.display()
+    );
+    set("done", None);
+}
+
 /// `DELETE /models/download/{name}` acknowledgement: the model name and the
 /// resulting download `status` — `"cancelling"` when a live download was asked
 /// to stop, otherwise the job's current (terminal) status.
@@ -508,11 +720,19 @@ pub async fn delete_model(
     }
     let resolved = registry::resolve_named_model(&state.config, &name)
         .map_err(|e| registry_error_status(&e))?;
-    let dir = resolved
-        .bin_path
-        .parent()
-        .ok_or_else(|| ApiError::internal("model weight has no parent directory"))?;
-    std::fs::remove_dir_all(dir).map_err(ApiError::internal)?;
+    // Backend-aware removal root: whisper's `bin_path` is the weight FILE
+    // inside the model dir, but a parakeet model's `bin_path` IS its artifact
+    // directory — `.parent()` there would be the whole models_dir and the
+    // delete would wipe EVERY installed model.
+    let dir = match resolved.backend {
+        registry::BackendKind::ParakeetNemotron => resolved.bin_path.clone(),
+        registry::BackendKind::WhisperGgml => resolved
+            .bin_path
+            .parent()
+            .ok_or_else(|| ApiError::internal("model weight has no parent directory"))?
+            .to_path_buf(),
+    };
+    std::fs::remove_dir_all(&dir).map_err(ApiError::internal)?;
     log::info!("removed model {name} → {}", dir.display());
     Ok(Json(DeleteModelResponse {
         name,
@@ -632,6 +852,8 @@ mod wire_shape_tests {
                 formats: vec!["ggml".to_string()],
                 installed: false,
                 runnable: true,
+                backend: registry::BackendKind::WhisperGgml,
+                supports_native_stream: false,
             }],
         };
         assert_eq!(
@@ -651,7 +873,9 @@ mod wire_shape_tests {
                     "tags": ["fast"],
                     "formats": ["ggml"],
                     "installed": false,
-                    "runnable": true
+                    "runnable": true,
+                    "backend": "whisper-ggml",
+                    "supports_native_stream": false
                 }]
             })
         );

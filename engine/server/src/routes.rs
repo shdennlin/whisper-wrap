@@ -394,7 +394,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> 
             // false on a fresh install until POST /models/active loads weights;
             // the PWA's first-run gate keys off this.
             loaded: engine.is_some(),
-            load_time_ms: engine.as_ref().map(|e| e.load_time_ms),
+            load_time_ms: engine.as_ref().map(|e| e.load_time_ms()),
         },
         backend: StatusBackend {
             backend: "whisper-rs".to_owned(),

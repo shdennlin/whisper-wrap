@@ -7,9 +7,10 @@
  * ASR's capability decides which strategy applies; the UI reads the single
  * resolved value to decide live availability and which hint to show.
  *
- * Today only `windowed-batch` is wired (the existing ListenSocket over WS
- * /listen). `native-stream` is the seam follow-up providers plug into — without
- * it each provider would have to re-touch the capture UI.
+ * Both wired strategies ride the same WS /listen sink: the SERVER dispatches
+ * native vs windowed-batch per active model (asr-backend-nemotron), so
+ * client-side the strategy value informs UI affordances (availability, hint
+ * copy), not the transport.
  */
 
 import {
@@ -25,9 +26,33 @@ export interface AsrCapability {
   /** Runs locally via Whisper → supports the WS /listen windowed-batch
    *  emulation. */
   localWhisper: boolean;
-  /** Exposes a native low-latency streaming path (cloud streaming /
-   *  streaming-capable model). Not wired yet — reserved for follow-ups. */
+  /** Exposes a native low-latency streaming path (a streaming-capable model,
+   *  e.g. parakeet-nemotron). Derived from the active model row's
+   *  `supports_native_stream` — see {@link capabilityFromModels}. */
   nativeStream?: boolean;
+}
+
+/** The subset of a GET /models row the live-caption seam reads (structurally
+ *  compatible with the generated `ModelEntry`). */
+export interface LiveModelRow {
+  name: string;
+  supports_native_stream?: boolean;
+}
+
+/**
+ * Derive the active ASR capability from the GET /models listing: the engine
+ * is local (windowed-batch always available as the fallback), and native
+ * streaming comes from the ACTIVE model row's `supports_native_stream` flag.
+ */
+export function capabilityFromModels(listing: {
+  active: string;
+  models: LiveModelRow[];
+}): AsrCapability {
+  const row = listing.models.find((m) => m.name === listing.active);
+  return {
+    localWhisper: true,
+    nativeStream: row?.supports_native_stream === true,
+  };
 }
 
 /** Caption callbacks receive the text plus the (offset-translated) timing. */
@@ -64,15 +89,18 @@ export function resolveLiveStrategy(asr: AsrCapability): LiveStrategy {
 }
 
 /**
- * Build the sink for a strategy: the listen-socket-backed sink for
- * `windowed-batch`, and `null` for `none` (and for the not-yet-wired
- * `native-stream`) so the caller knows there is nothing to attach.
+ * Build the sink for a strategy, or `null` for `none` so the caller knows
+ * there is nothing to attach. `native-stream` and `windowed-batch` share the
+ * listen-socket sink: the server decides the decode path per active model on
+ * the same WS /listen, so the client-side transport is identical.
  */
 export function createLiveSink(
   strategy: LiveStrategy,
   opts: CreateLiveSinkOptions,
 ): LiveCaptionSink | null {
-  if (strategy === "windowed-batch") return new WindowedBatchSink(opts.wsUrl);
+  if (strategy === "windowed-batch" || strategy === "native-stream") {
+    return new WindowedBatchSink(opts.wsUrl);
+  }
   return null;
 }
 

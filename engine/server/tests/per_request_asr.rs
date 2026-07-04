@@ -14,11 +14,11 @@ use tower::ServiceExt;
 
 use common::{body_json, no_model_app, no_model_router, tiny_wav};
 
-// `Arc<WhisperEngine>` isn't `Debug`, so `expect_err` won't compile — pull the
+// `Arc<dyn AsrBackend>` isn't `Debug`, so `expect_err` won't compile — pull the
 // error's status out by hand.
 fn err_status(
     r: Result<
-        std::sync::Arc<whisper_wrap_core::WhisperEngine>,
+        std::sync::Arc<dyn whisper_wrap_core::AsrBackend>,
         whisper_wrap_server::routes::ApiError,
     >,
 ) -> StatusCode {
@@ -43,6 +43,18 @@ async fn engine_for_default_path_is_503_without_active_engine() {
     assert_eq!(
         err_status(state.engine_for(Some("breeze-asr-25"))),
         StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
+async fn engine_for_parakeet_model_without_artifacts_is_409() {
+    // A parakeet-nemotron model with its ONNX artifact set absent must fail
+    // resolution with the 409 ModelFileMissing path — the backend-aware
+    // load branch must never be reached with a whisper loader for it.
+    let (_router, state) = no_model_app("pra-parakeet-missing");
+    assert_eq!(
+        err_status(state.engine_for(Some("parakeet-fixture"))),
+        StatusCode::CONFLICT
     );
 }
 

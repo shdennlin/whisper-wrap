@@ -9,6 +9,7 @@ use std::time::Instant;
 use thiserror::Error;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+use crate::asr_backend::AsrBackend;
 use crate::words::{tokens_to_words, RawToken, Word};
 
 #[derive(Debug, Error)]
@@ -189,5 +190,37 @@ impl WhisperEngine {
             duration_seconds: samples.len() as f64 / 16000.0,
             segments,
         })
+    }
+}
+
+/// whisper is a batch backend: the trait methods delegate to the inherent
+/// ones and the native-streaming hooks keep the trait defaults (no session).
+impl AsrBackend for WhisperEngine {
+    fn transcribe(
+        &self,
+        samples: &[f32],
+        language: &str,
+        prompt: Option<&str>,
+        translate: bool,
+    ) -> Result<TranscribeResult, AsrError> {
+        WhisperEngine::transcribe(self, samples, language, prompt, translate)
+    }
+
+    fn transcribe_with_words(
+        &self,
+        samples: &[f32],
+        language: &str,
+        prompt: Option<&str>,
+        translate: bool,
+    ) -> Result<TranscribeResult, AsrError> {
+        WhisperEngine::transcribe_with_words(self, samples, language, prompt, translate)
+    }
+
+    fn name(&self) -> &'static str {
+        "whisper"
+    }
+
+    fn load_time_ms(&self) -> u128 {
+        self.load_time_ms
     }
 }

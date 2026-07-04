@@ -8,6 +8,14 @@ license.workspace = true
 name = "whisper-wrap-server"
 path = "src/main.rs"
 
+[features]
+# Nemotron streaming ASR (parakeet-rs / ONNX Runtime) ships in the stock
+# build now that the backend is wired into the registry + engine loading
+# (asr-backend-nemotron task 7). Disable with --no-default-features for a
+# whisper-only build.
+default = ["parakeet"]
+parakeet = ["whisper-wrap-core/parakeet"]
+
 [dependencies]
 whisper-wrap-core = { path = "../core", features = ["diarize"] }
 ulid = "1"

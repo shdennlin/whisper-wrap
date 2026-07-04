@@ -26,6 +26,14 @@ models:
         quant: q6_k
         filename: ggml-breeze-asr-25-q6_k.bin
         local_dir: breeze-asr-25-ggml
+  parakeet-fixture:
+    description: "test — parakeet-nemotron multi-file ONNX artifact set (sorts after breeze so /models[0] stays breeze)"
+    backend: parakeet-nemotron
+    variants:
+      - format: onnx
+        local_dir: parakeet-fixture-onnx
+        repo_id: "test-org/parakeet-fixture"
+        subfolder: streaming-onnx
   whisper-small-test:
     description: "test — registered, non-active, weights absent (sorts after breeze so /models[0] stays breeze)"
     variants:

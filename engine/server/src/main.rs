@@ -4,9 +4,10 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use whisper_wrap_core::{actions, registry, Config, WhisperEngine};
+use whisper_wrap_core::{actions, registry, Config};
 use whisper_wrap_server::ai_config::AiConfigStore;
 use whisper_wrap_server::history::HistoryDb;
+use whisper_wrap_server::state::load_backend;
 use whisper_wrap_server::{build_router, AppState};
 
 #[tokio::main]
@@ -37,14 +38,21 @@ async fn main() -> anyhow::Result<()> {
     // can be fetched via POST /models/download and loaded with POST
     // /models/active, no restart required.
     let model = registry::resolve_active_model_lenient(&config).context("resolve model")?;
-    let engine = if model.bin_path.is_file() {
+    // "Weights present" is backend-aware: whisper's bin_path is a file, a
+    // parakeet model's is its artifact DIRECTORY (strict resolve checks the
+    // full ONNX set).
+    let weights_present = match model.backend {
+        registry::BackendKind::WhisperGgml => model.bin_path.is_file(),
+        registry::BackendKind::ParakeetNemotron => registry::resolve_active_model(&config).is_ok(),
+    };
+    let engine = if weights_present {
         log::info!(
             "loading model {:?} from {}",
             model.name,
             model.bin_path.display()
         );
-        let engine = WhisperEngine::load(&model.bin_path).context("load whisper model")?;
-        log::info!("model loaded in {} ms", engine.load_time_ms);
+        let engine = load_backend(&model).context("load model")?;
+        log::info!("model loaded in {} ms", engine.load_time_ms());
         Some(engine)
     } else {
         log::warn!(
