@@ -500,6 +500,67 @@
         }
       }
     },
+    "/config/dictionary": {
+      "get": {
+        "tags": [
+          "dictionary-config"
+        ],
+        "summary": "`GET /config/dictionary` — the current effective dictionary config.",
+        "operationId": "get_dictionary",
+        "responses": {
+          "200": {
+            "description": "The effective dictionary config (conversion mode + replacement table).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictionaryConfig"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "dictionary-config"
+        ],
+        "summary": "`PUT /config/dictionary` — validate, persist, return the stored config.",
+        "operationId": "put_dictionary",
+        "requestBody": {
+          "description": "Full dictionary config document. Missing fields default (off / empty table).",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DictionaryConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The stored dictionary config.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictionaryConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid mode, empty `from`, or table over the cap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/items/{id}/ai": {
       "post": {
         "tags": [
@@ -2708,6 +2769,21 @@
           }
         }
       },
+      "DictionaryConfig": {
+        "type": "object",
+        "description": "The on-disk document AND the wire shape of both endpoints (they are\nidentical by design — no secrets to mask here).",
+        "properties": {
+          "replacements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReplacementPair"
+            }
+          },
+          "zh_convert": {
+            "$ref": "#/components/schemas/ZhConvertSetting"
+          }
+        }
+      },
       "DiscoveryResponse": {
         "type": "object",
         "description": "Success body of `GET /` — the hand-maintained API discovery document.\n\nThe wire shape is an object `{ \"endpoints\": [...] }`, so this is typed as a\nnamed object with an `endpoints` array property (NOT a top-level array — the\nlive handler wraps the list under `endpoints`, and the wire shape is\npreserved byte-for-byte).",
@@ -3308,6 +3384,24 @@
           "status": {
             "type": "string",
             "description": "pending | running | done | error | cancelled."
+          }
+        }
+      },
+      "ReplacementPair": {
+        "type": "object",
+        "description": "One ordered replacement pair. `from` matches ASCII-case-insensitively;\n`to` is inserted exactly as authored (see `whisper_wrap_core::replace`).",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "example": "Cloud Code"
+          },
+          "to": {
+            "type": "string",
+            "example": "Claude Code"
           }
         }
       },
@@ -3971,6 +4065,14 @@
             "description": "Transcribed text (empty string when filtered/empty)."
           }
         }
+      },
+      "ZhConvertSetting": {
+        "type": "string",
+        "description": "The conversion mode. `s2twp` is deliberately not offered — phrase-level\nlocalization would rewrite words the speaker never said (design Non-Goal).",
+        "enum": [
+          "off",
+          "s2tw"
+        ]
       }
     },
     "securitySchemes": {

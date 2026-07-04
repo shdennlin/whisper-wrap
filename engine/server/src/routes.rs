@@ -297,10 +297,18 @@ pub async fn transcribe(
             }))
         }
         FilterDecision::Keep(text) => {
+            // Pipeline position (zh-convert-dictionary): empty-filter, then
+            // zh conversion + word replacements — on the joined text AND the
+            // per-segment texts, so every returned surface agrees.
+            let text = state.dictionary.apply(&text);
             let segments = result
                 .segments
                 .iter()
-                .map(|s| serde_json::to_value(s).expect("Segment is always serializable"))
+                .map(|s| {
+                    let mut s = s.clone();
+                    s.text = state.dictionary.apply(&s.text);
+                    serde_json::to_value(&s).expect("Segment is always serializable")
+                })
                 .collect::<Vec<_>>();
             Ok(Json(TranscribeResponse {
                 text,

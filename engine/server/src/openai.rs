@@ -254,10 +254,13 @@ async fn transcribe_or_translate(state: Arc<AppState>, req: Request, translate: 
             )
         }
         FilterDecision::Keep(text) => {
+            // Pipeline position (zh-convert-dictionary): applied to the
+            // joined text and the subtitle cues alike.
+            let text = state.dictionary.apply(&text);
             let cues: Vec<(f64, f64, String)> = result
                 .segments
                 .iter()
-                .map(|s| (s.start, s.end, s.text.clone()))
+                .map(|s| (s.start, s.end, state.dictionary.apply(&s.text)))
                 .collect();
             match response_format.as_str() {
                 "json" => Json(OpenAiTranscription { text }).into_response(),

@@ -76,7 +76,10 @@ async fn handle(socket: WebSocket, state: Arc<AppState>) {
         state.config.filter_min_duration_ms,
         &tx,
     );
-    let close_reason = run_stream(session, &mut stream, &tx).await;
+    let close_reason = run_stream(session, &mut stream, &tx, &|t: &str| {
+        state.dictionary.apply(t)
+    })
+    .await;
 
     if let Some(reason) = close_reason {
         let _ = tx
@@ -137,13 +140,18 @@ fn open_session(
 ///
 /// Generic over the message stream so the loop is unit-testable without a
 /// WebSocket upgrade. Returns the close reason (`Some` → error + close 1003).
-async fn run_stream<S>(
+async fn run_stream<S, F>(
     session: Box<dyn StreamSession>,
     stream: &mut S,
     tx: &mpsc::Sender<String>,
+    // The dictionary apply step (zh-convert-dictionary): partial and final
+    // text pass through the SAME transform, so the finalized text never
+    // contradicts the caption the user watched (Live caption consistency).
+    apply: &F,
 ) -> Option<&'static str>
 where
     S: futures_util::Stream<Item = Result<Message, axum::Error>> + Unpin,
+    F: Fn(&str) -> String,
 {
     use futures_util::StreamExt;
 
@@ -185,7 +193,7 @@ where
                                     .send(
                                         json!({
                                             "type": "final",
-                                            "text": step.text,
+                                            "text": apply(&step.text),
                                             "start_ms": segment_start_ms,
                                             "end_ms": end_ms,
                                         })
@@ -201,7 +209,7 @@ where
                                 .send(
                                     json!({
                                         "type": "partial",
-                                        "text": step.text,
+                                        "text": apply(&step.text),
                                         "start_ms": segment_start_ms,
                                         "end_ms": end_ms,
                                     })
@@ -240,7 +248,7 @@ where
                             .send(
                                 json!({
                                     "type": "final",
-                                    "text": step.text,
+                                    "text": apply(&step.text),
                                     "start_ms": segment_start_ms,
                                     "end_ms": end_ms,
                                 })
@@ -419,10 +427,21 @@ mod stream_driver_tests {
     }
 
     /// Drive `frames` through the handler's own `open_session` → `run_stream`
-    /// composition; collect (close_reason, messages).
+    /// composition; collect (close_reason, messages). Identity apply step —
+    /// text is forwarded verbatim, as before zh-convert-dictionary.
     async fn drive(
         engine: Arc<dyn AsrBackend>,
         frames: Vec<Message>,
+    ) -> (Option<&'static str>, Vec<Value>) {
+        drive_with(engine, frames, |t| t.to_owned()).await
+    }
+
+    /// Same as [`drive`] but with an explicit dictionary apply step, mirroring
+    /// how `handle()` passes `state.dictionary.apply`.
+    async fn drive_with(
+        engine: Arc<dyn AsrBackend>,
+        frames: Vec<Message>,
+        apply: impl Fn(&str) -> String,
     ) -> (Option<&'static str>, Vec<Value>) {
         let (tx, mut rx) = mpsc::channel::<String>(64);
         let session = open_session(
@@ -434,13 +453,42 @@ mod stream_driver_tests {
         );
         let items: Vec<Result<Message, axum::Error>> = frames.into_iter().map(Ok).collect();
         let mut stream = futures_util::stream::iter(items);
-        let reason = run_stream(session, &mut stream, &tx).await;
+        let reason = run_stream(session, &mut stream, &tx, &apply).await;
         drop(tx);
         let mut out = Vec::new();
         while let Some(msg) = rx.recv().await {
             out.push(serde_json::from_str(&msg).expect("json message"));
         }
         (reason, out)
+    }
+
+    // Live caption consistency (zh-convert-dictionary): partial and final
+    // text pass through the SAME dictionary apply step, so the finalized
+    // text never contradicts the caption the user watched.
+    #[tokio::test]
+    async fn partials_and_finals_pass_through_the_same_apply_step() {
+        use crate::dictionary_config::{apply_config, DictionaryConfig};
+
+        let cfg: DictionaryConfig = serde_json::from_value(serde_json::json!({
+            "zh_convert": "s2tw",
+            "replacements": [ { "from": "雲端", "to": "雲端硬碟" } ]
+        }))
+        .expect("valid test config");
+        let (stub, _) = StubNative::new(vec![partial("简体")], final_step("云端"));
+        let frames = vec![frame(250)];
+        let (reason, msgs) = drive_with(stub, frames, move |t| apply_config(t, &cfg)).await;
+
+        assert_eq!(reason, None);
+        assert_eq!(
+            msgs,
+            vec![
+                // Partial: converted (簡体→簡體) before it reaches the socket.
+                serde_json::json!({"type": "partial", "text": "簡體", "start_ms": 0, "end_ms": 250}),
+                // Finish tail final: converted, THEN the Traditional-script
+                // rule applies (云端 → 雲端 → 雲端硬碟).
+                serde_json::json!({"type": "final", "text": "雲端硬碟", "start_ms": 0, "end_ms": 250}),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -529,7 +577,9 @@ mod stream_driver_tests {
         assert_eq!(reason, Some("frame size out of range"));
         assert_eq!(
             msgs,
-            vec![serde_json::json!({"type": "partial", "text": "hi", "start_ms": 0, "end_ms": 250})],
+            vec![
+                serde_json::json!({"type": "partial", "text": "hi", "start_ms": 0, "end_ms": 250})
+            ],
             "error close must not flush a final"
         );
     }

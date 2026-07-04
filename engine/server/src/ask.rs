@@ -189,7 +189,9 @@ async fn stt_phase(
             );
             Err(ApiError::new(StatusCode::BAD_REQUEST, "no_speech_detected"))
         }
-        FilterDecision::Keep(text) => Ok(text),
+        // Pipeline position (zh-convert-dictionary): the transcript is
+        // converted before it is embedded in the LLM prompt or returned.
+        FilterDecision::Keep(text) => Ok(state.dictionary.apply(&text)),
     }
 }
 

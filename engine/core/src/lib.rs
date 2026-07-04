@@ -15,10 +15,12 @@ pub mod diarize;
 pub mod mime;
 pub mod postprocess;
 pub mod registry;
+pub mod replace;
 pub mod stream;
 pub mod subtitle;
 pub mod vad;
 pub mod words;
+pub mod zh_convert;
 
 pub use asr::{Segment, TranscribeResult, WhisperEngine};
 pub use asr_backend::{AsrBackend, StreamSession, StreamStep};

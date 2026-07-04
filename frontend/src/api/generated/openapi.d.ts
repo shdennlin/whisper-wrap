@@ -182,6 +182,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/dictionary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** `GET /config/dictionary` — the current effective dictionary config. */
+        get: operations["get_dictionary"];
+        /** `PUT /config/dictionary` — validate, persist, return the stored config. */
+        put: operations["put_dictionary"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/items/{id}/ai": {
         parameters: {
             query?: never;
@@ -849,6 +867,14 @@ export interface components {
             removed: boolean;
         };
         /**
+         * @description The on-disk document AND the wire shape of both endpoints (they are
+         *     identical by design — no secrets to mask here).
+         */
+        DictionaryConfig: {
+            replacements?: components["schemas"]["ReplacementPair"][];
+            zh_convert?: components["schemas"]["ZhConvertSetting"];
+        };
+        /**
          * @description Success body of `GET /` — the hand-maintained API discovery document.
          *
          *     The wire shape is an object `{ "endpoints": [...] }`, so this is typed as a
@@ -1080,6 +1106,16 @@ export interface components {
             stage: string;
             /** @description pending | running | done | error | cancelled. */
             status: string;
+        };
+        /**
+         * @description One ordered replacement pair. `from` matches ASCII-case-insensitively;
+         *     `to` is inserted exactly as authored (see `whisper_wrap_core::replace`).
+         */
+        ReplacementPair: {
+            /** @example Cloud Code */
+            from: string;
+            /** @example Claude Code */
+            to: string;
         };
         /**
          * @description The 202 run-accepted descriptor shared by every stage launcher: the opened
@@ -1317,6 +1353,12 @@ export interface components {
             /** @description Transcribed text (empty string when filtered/empty). */
             text: string;
         };
+        /**
+         * @description The conversion mode. `s2twp` is deliberately not offered — phrase-level
+         *     localization would rewrite words the speaker never said (design Non-Goal).
+         * @enum {string}
+         */
+        ZhConvertSetting: "off" | "s2tw";
     };
     responses: never;
     parameters: never;
@@ -1693,6 +1735,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AiTestResult"];
+                };
+            };
+        };
+    };
+    get_dictionary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The effective dictionary config (conversion mode + replacement table). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictionaryConfig"];
+                };
+            };
+        };
+    };
+    put_dictionary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Full dictionary config document. Missing fields default (off / empty table). */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DictionaryConfig"];
+            };
+        };
+        responses: {
+            /** @description The stored dictionary config. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DictionaryConfig"];
+                };
+            };
+            /** @description Invalid mode, empty `from`, or table over the cap. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
         };

@@ -1,5 +1,5 @@
-//! Drift guard: the generated OpenAPI document must document exactly the 49
-//! API routes (method+path pairs across 37 unique paths) wired in
+//! Drift guard: the generated OpenAPI document must document exactly the 51
+//! API routes (method+path pairs across 38 unique paths) wired in
 //! `build_router()` — no more, no less — and must NOT document the three
 //! undocumented infrastructure entries (`/openapi.json`, `/docs`, `/app`).
 //!
@@ -24,7 +24,7 @@ use common::no_model_router;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-/// The authoritative inventory: 49 (method, path) pairs across 37 unique paths.
+/// The authoritative inventory: 51 (method, path) pairs across 38 unique paths.
 /// Methods are lowercase to match OpenAPI path-item keys.
 const EXPECTED: &[(&str, &str)] = &[
     // Core transcription / QA
@@ -81,6 +81,9 @@ const EXPECTED: &[(&str, &str)] = &[
     ("put", "/config/ai"),
     ("get", "/config/ai/models"),
     ("post", "/config/ai/test"),
+    // Dictionary config (zh-convert-dictionary)
+    ("get", "/config/dictionary"),
+    ("put", "/config/dictionary"),
     // Status / discovery
     ("get", "/actions"),
     ("get", "/status"),
@@ -92,7 +95,7 @@ const EXPECTED: &[(&str, &str)] = &[
 const UNDOCUMENTED: &[&str] = &["/openapi.json", "/docs", "/app"];
 
 #[tokio::test]
-async fn documented_routes_match_the_49_route_inventory() {
+async fn documented_routes_match_the_51_route_inventory() {
     let router = no_model_router("openapi-coverage");
     let resp = router
         .oneshot(Request::get("/openapi.json").body(Body::empty()).unwrap())
@@ -105,7 +108,7 @@ async fn documented_routes_match_the_49_route_inventory() {
     let paths = doc["paths"].as_object().expect(".paths is an object");
 
     // Collect the documented (method, path) pairs — each method on a
-    // multi-method path counts as its own pair (49, not 37).
+    // multi-method path counts as its own pair (51, not 38).
     let documented: BTreeSet<(String, String)> = paths
         .iter()
         .flat_map(|(path, item)| {
@@ -135,7 +138,7 @@ async fn documented_routes_match_the_49_route_inventory() {
         missing.is_empty() && extra.is_empty(),
         "OpenAPI path drift.\n  missing from document (expected but not wired): {missing:?}\n  extra in document (wired but not expected): {extra:?}"
     );
-    assert_eq!(documented.len(), 49, "exactly 49 method+path pairs");
+    assert_eq!(documented.len(), 51, "exactly 51 method+path pairs");
 
     // The undocumented infrastructure entries must be absent from the document.
     for infra in UNDOCUMENTED {
@@ -179,7 +182,9 @@ async fn no_operation_is_a_bare_stub() {
                 .map(|o| !o.is_empty())
                 .unwrap_or(false);
             if !has_tag || !has_response {
-                offenders.push(format!("{method} {path} (tag={has_tag}, responses={has_response})"));
+                offenders.push(format!(
+                    "{method} {path} (tag={has_tag}, responses={has_response})"
+                ));
             }
         }
     }

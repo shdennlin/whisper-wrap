@@ -13,6 +13,10 @@ serde_yaml.workspace = true
 whisper-rs.workspace = true
 infer = "0.16"
 uuid = { version = "1", features = ["v4"] }
+# Transcript post-process dictionary (zh-convert-dictionary): pure-Rust OpenCC
+# for s2tw conversion + case-insensitive multi-pattern word replacement.
+ferrous-opencc = "0.4"
+aho-corasick = "1"
 sherpa-rs = { version = "0.6", features = ["download-binaries"], optional = true }
 parakeet-rs = { version = "0.3", optional = true }
 

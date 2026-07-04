@@ -3064,3 +3064,27 @@ html.is-desktop-shell .shell-view { background: var(--bg); }
   width: 7px; height: 7px; border-radius: 50%; background: var(--rec);
   animation: rec-blink 1.2s infinite;
 }
+
+/* ---- Settings Dictionary card (zh-convert-dictionary) ---- */
+.settings-dictionary { display: flex; flex-direction: column; gap: 10px; }
+.settings-dictionary .dictionary-title { margin: 0; font-size: 13px; }
+.settings-dictionary .dictionary-toggle-row {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px;
+}
+.settings-dictionary .dictionary-hint { margin: 0; font-size: 11.5px; color: var(--muted); }
+.settings-dictionary .dictionary-add-row,
+.settings-dictionary .dictionary-row { display: flex; align-items: center; gap: 8px; }
+.settings-dictionary .dictionary-add-row input,
+.settings-dictionary .dictionary-row input {
+  flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: inherit; padding: 5px 8px; font-size: 12.5px;
+}
+.settings-dictionary .dictionary-add-row button,
+.settings-dictionary .dictionary-delete {
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+}
+.settings-dictionary .dictionary-arrow { color: var(--muted); flex: 0 0 auto; }
+.settings-dictionary .dictionary-list { display: flex; flex-direction: column; gap: 6px; }
+.settings-dictionary .dictionary-empty { margin: 0; font-size: 11.5px; color: var(--muted); }
+.settings-dictionary .dictionary-status { margin: 0; font-size: 11.5px; color: var(--rec); }

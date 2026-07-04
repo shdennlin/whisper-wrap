@@ -462,6 +462,21 @@ export const STRINGS = {
     "settingsView.searchPlaceholder": "Search settings…",
     "settingsView.searchAria": "Search settings",
 
+    // ---- Dictionary section (zh-convert-dictionary) ----
+    "dictionary.title": "Dictionary",
+    "dictionary.zhConvertLabel": "Convert Simplified Chinese to Traditional (Taiwan)",
+    "dictionary.zhConvertHint":
+      "Applied to new transcriptions before they are saved. Character-level only — it never rewrites the words you said.",
+    "dictionary.fromPlaceholder": "Original text (use commas for multiple)",
+    "dictionary.toPlaceholder": "Replacement text",
+    "dictionary.add": "Add",
+    "dictionary.delete": "Delete",
+    "dictionary.empty": "No replacements yet. Add one to auto-correct words in new transcripts.",
+    "dictionary.fromAria": "Original text",
+    "dictionary.toAria": "Replacement text",
+    "dictionary.loadError": "Could not load dictionary settings: {message}",
+    "dictionary.saveError": "Save failed: {message}",
+
     // ---- License view (fe-license-tab) ----
     "license.title": "License",
     "license.deviceLabel": "Device name",
@@ -918,6 +933,21 @@ export const STRINGS = {
     "settingsView.title": "設定",
     "settingsView.searchPlaceholder": "搜尋設定…",
     "settingsView.searchAria": "搜尋設定",
+
+    // ---- Dictionary section (zh-convert-dictionary) ----
+    "dictionary.title": "字典",
+    "dictionary.zhConvertLabel": "簡體中文自動轉繁體（台灣）",
+    "dictionary.zhConvertHint":
+      "在新的轉錄存檔前套用。僅做字形轉換——不會改寫你說的用詞。",
+    "dictionary.fromPlaceholder": "原文（多個請用逗號分隔）",
+    "dictionary.toPlaceholder": "替換文字",
+    "dictionary.add": "新增",
+    "dictionary.delete": "刪除",
+    "dictionary.empty": "尚無替換規則。新增一筆即可自動修正新轉錄中的詞彙。",
+    "dictionary.fromAria": "原文",
+    "dictionary.toAria": "替換文字",
+    "dictionary.loadError": "無法載入字典設定：{message}",
+    "dictionary.saveError": "儲存失敗：{message}",
 
     // ---- License view (fe-license-tab) ----
     "license.title": "授權",

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderSettings } from "./settings-view";
 import type { AiProviderFormDeps } from "./ai-provider-form";
 import type { AiConfigView } from "../api/ai-config";
+import type { DictionarySectionDeps } from "./dictionary-section";
 
 const SAVED: AiConfigView = {
   provider: "gemini",
@@ -20,6 +21,16 @@ function aiDeps(overrides: Partial<AiProviderFormDeps> = {}): AiProviderFormDeps
     listModels: async () => ({ models: [], error: null }),
     testConfig: async () => ({ ok: true, error: null }),
     ...overrides,
+  };
+}
+
+function dictDeps(): DictionarySectionDeps {
+  return {
+    get: async () => ({
+      zh_convert: "off",
+      replacements: [{ from: "Cloud Code", to: "Claude Code" }],
+    }),
+    put: async (c) => c,
   };
 }
 
@@ -63,6 +74,45 @@ describe("renderSettings", () => {
     expect(hint.textContent).toContain("AIza…9b2c");
     const keyInput = container.querySelector<HTMLInputElement>(".ai-key-input")!;
     expect(keyInput.value).toBe("");
+  });
+
+  it("mounts the dictionary section as its own mrow card (zh-convert-dictionary)", async () => {
+    const container = document.createElement("div");
+    await renderSettings(container, {
+      mount: () => {},
+      aiDeps: aiDeps(),
+      dictDeps: dictDeps(),
+    });
+    const dict = container.querySelector<HTMLElement>(".settings-dictionary")!;
+    expect(dict).toBeTruthy();
+    expect(dict.classList.contains("mrow")).toBe(true);
+    expect(dict.querySelector("[data-dict-toggle]")).toBeTruthy();
+    expect(dict.querySelectorAll("[data-dict-row]")).toHaveLength(1);
+  });
+
+  it("the settings search filter hides and shows the dictionary section", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await renderSettings(container, {
+      mount: () => {},
+      aiDeps: aiDeps(),
+      dictDeps: dictDeps(),
+    });
+    const search = container.querySelector<HTMLInputElement>(".settings-search-input")!;
+    const dict = container.querySelector<HTMLElement>(".settings-dictionary")!;
+
+    search.value = "zzzz-no-match";
+    search.dispatchEvent(new Event("input"));
+    expect(dict.hidden).toBe(true);
+
+    // Matches a stored pair's text (lives in <input> values).
+    search.value = "claude";
+    search.dispatchEvent(new Event("input"));
+    expect(dict.hidden).toBe(false);
+
+    search.value = "";
+    search.dispatchEvent(new Event("input"));
+    expect(dict.hidden).toBe(false);
   });
 
   it("still renders the editor when the config read fails", async () => {

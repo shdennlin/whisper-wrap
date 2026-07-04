@@ -11,6 +11,7 @@ use whisper_wrap_core::registry::BackendKind;
 use whisper_wrap_core::{registry, AsrBackend, Config, ResolvedModel, WhisperEngine};
 
 use crate::ai_config::AiConfigStore;
+use crate::dictionary_config::DictionaryConfigStore;
 use crate::history::HistoryDb;
 use crate::llm::LlmClient;
 use crate::meeting::MeetingState;
@@ -64,6 +65,10 @@ pub struct AppState {
     pub llm: RwLock<Arc<LlmClient>>,
     /// Owns `data/llm_config.json` + the env baseline; resolves/saves config.
     pub ai_config: AiConfigStore,
+    /// Owns `data/dictionary_config.json` — zh conversion mode + word
+    /// replacements (zh-convert-dictionary). Built from `config.data_dir`,
+    /// so it takes no constructor argument of its own.
+    pub dictionary: DictionaryConfigStore,
     pub actions: Vec<Action>,
     pub action_categories: Vec<Category>,
     pub meeting: MeetingState,
@@ -92,6 +97,7 @@ impl AppState {
         action_categories: Vec<Category>,
         history: HistoryDb,
     ) -> Self {
+        let dictionary = DictionaryConfigStore::new(&config.data_dir);
         AppState {
             config,
             model: RwLock::new(model),
@@ -99,6 +105,7 @@ impl AppState {
             engines: Mutex::new(HashMap::new()),
             llm: RwLock::new(Arc::new(llm)),
             ai_config,
+            dictionary,
             actions,
             action_categories,
             meeting: MeetingState::default(),

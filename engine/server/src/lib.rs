@@ -4,6 +4,7 @@
 pub mod ai_config;
 pub mod ask;
 pub mod aux_models;
+pub mod dictionary_config;
 pub mod history;
 pub mod items;
 pub mod listen;

@@ -149,6 +149,11 @@ pub fn api_router() -> OpenApiRouter<Arc<AppState>> {
         ))
         .routes(routes!(crate::ai_config::list_models))
         .routes(routes!(crate::ai_config::test_config))
+        // Dictionary config (zh-convert-dictionary)
+        .routes(routes!(
+            crate::dictionary_config::get_dictionary,
+            crate::dictionary_config::put_dictionary
+        ))
         // Status / discovery (token-exempt; documented last)
         .routes(routes!(crate::routes::status))
         .routes(routes!(crate::routes::discovery))

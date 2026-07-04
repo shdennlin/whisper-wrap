@@ -13,6 +13,10 @@
  */
 
 import { mountAiProviderForm, type AiProviderFormDeps } from "./ai-provider-form";
+import {
+  mountDictionarySection,
+  type DictionarySectionDeps,
+} from "./dictionary-section";
 import { t } from "../i18n";
 
 /** Anything the view can drive with the top-of-page search box. */
@@ -25,6 +29,8 @@ export interface SettingsViewDeps {
   mount?: (host: HTMLElement) => SettingsFilterable | void;
   /** AI-config client deps for the editor — overridable for tests. */
   aiDeps?: AiProviderFormDeps;
+  /** Dictionary-config client deps (zh-convert-dictionary) — for tests. */
+  dictDeps?: DictionarySectionDeps;
 }
 
 export async function renderSettings(
@@ -64,6 +70,13 @@ export async function renderSettings(
   container.appendChild(aiSection);
   await mountAiProviderForm(aiSection, deps.aiDeps);
 
+  // Dictionary card (zh-convert-dictionary): the s2tw conversion toggle +
+  // word-replacement editor over the engine's /config/dictionary surface.
+  const dictSection = document.createElement("div");
+  dictSection.className = "settings-dictionary mrow";
+  container.appendChild(dictSection);
+  const dictHandle = await mountDictionarySection(dictSection, deps.dictDeps);
+
   const frame = document.createElement("div");
   frame.className = "mrow-frame";
   const host = document.createElement("div");
@@ -77,5 +90,8 @@ export async function renderSettings(
     panel?.filter(searchInput.value);
     // Treat the AI provider card as one searchable section.
     aiSection.hidden = q !== "" && !(aiSection.textContent ?? "").toLowerCase().includes(q);
+    // The dictionary card filters itself (its pair values live in inputs,
+    // which textContent cannot see).
+    dictHandle.filter(searchInput.value);
   });
 }
