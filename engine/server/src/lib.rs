@@ -10,6 +10,7 @@ pub mod items;
 pub mod listen;
 pub mod llm;
 pub mod meeting;
+pub mod model_config;
 pub mod models;
 pub mod openai;
 pub mod openapi;
@@ -268,7 +269,10 @@ mod tests {
                     .uri("/v1/x")
                     .header("origin", "wwoverlay://localhost")
                     .header("access-control-request-method", "POST")
-                    .header("access-control-request-headers", "authorization,content-type")
+                    .header(
+                        "access-control-request-headers",
+                        "authorization,content-type",
+                    )
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -419,9 +423,15 @@ mod tests {
             .expect("a token cookie is set on the /app response")
             .to_str()
             .unwrap();
-        assert!(set.contains("engine_token=secret"), "cookie carries the token: {set}");
+        assert!(
+            set.contains("engine_token=secret"),
+            "cookie carries the token: {set}"
+        );
         assert!(set.contains("HttpOnly"), "cookie is HttpOnly: {set}");
-        assert!(set.contains("SameSite=Strict"), "cookie is SameSite=Strict: {set}");
+        assert!(
+            set.contains("SameSite=Strict"),
+            "cookie is SameSite=Strict: {set}"
+        );
     }
 
     #[tokio::test]

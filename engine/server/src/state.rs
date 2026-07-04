@@ -15,6 +15,7 @@ use crate::dictionary_config::DictionaryConfigStore;
 use crate::history::HistoryDb;
 use crate::llm::LlmClient;
 use crate::meeting::MeetingState;
+use crate::model_config::ModelConfigStore;
 use crate::models::{registry_error_status, DownloadState};
 use crate::routes::ApiError;
 
@@ -30,10 +31,9 @@ pub fn load_backend(resolved: &ResolvedModel) -> Result<Arc<dyn AsrBackend>, Asr
             #[cfg(feature = "parakeet")]
             {
                 // For parakeet, `bin_path` is the ONNX artifact DIRECTORY.
-                Ok(
-                    Arc::new(whisper_wrap_core::ParakeetBackend::load(&resolved.bin_path)?)
-                        as Arc<dyn AsrBackend>,
-                )
+                Ok(Arc::new(whisper_wrap_core::ParakeetBackend::load(
+                    &resolved.bin_path,
+                )?) as Arc<dyn AsrBackend>)
             }
             #[cfg(not(feature = "parakeet"))]
             {
@@ -69,6 +69,10 @@ pub struct AppState {
     /// replacements (zh-convert-dictionary). Built from `config.data_dir`,
     /// so it takes no constructor argument of its own.
     pub dictionary: DictionaryConfigStore,
+    /// Owns `data/model_config.json` — the persisted active-model selection,
+    /// written by `POST /models/active` and read back at boot so the choice
+    /// survives a restart. Built from `config.data_dir` like `dictionary`.
+    pub model_config: ModelConfigStore,
     pub actions: Vec<Action>,
     pub action_categories: Vec<Category>,
     pub meeting: MeetingState,
@@ -98,6 +102,7 @@ impl AppState {
         history: HistoryDb,
     ) -> Self {
         let dictionary = DictionaryConfigStore::new(&config.data_dir);
+        let model_config = ModelConfigStore::new(&config.data_dir);
         AppState {
             config,
             model: RwLock::new(model),
@@ -106,6 +111,7 @@ impl AppState {
             llm: RwLock::new(Arc::new(llm)),
             ai_config,
             dictionary,
+            model_config,
             actions,
             action_categories,
             meeting: MeetingState::default(),
@@ -200,7 +206,8 @@ mod load_backend_tests {
     use super::*;
 
     fn sandbox(test: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ww-load-backend-{}-{test}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ww-load-backend-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create sandbox");
         dir

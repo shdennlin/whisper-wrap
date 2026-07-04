@@ -96,7 +96,9 @@ pub struct ModelsListResponse {
         (status = 500, description = "Registry read error.", body = crate::routes::ApiErrorBody)
     )
 )]
-pub async fn list(State(state): State<Arc<AppState>>) -> Result<Json<ModelsListResponse>, ApiError> {
+pub async fn list(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ModelsListResponse>, ApiError> {
     let models = registry::list_models(&state.config).map_err(ApiError::internal)?;
     Ok(Json(ModelsListResponse {
         active: state.model_snapshot().name,
@@ -188,6 +190,9 @@ pub async fn set_active(
 
     *state.engine.write().expect("engine lock") = Some(engine);
     *state.model.write().expect("model lock") = resolved;
+    // Persist only a selection that actually loaded, so boot can trust the
+    // stored name (resolved leniently there — weights may vanish later).
+    state.model_config.save_active(&req.name);
 
     Ok(Json(SetActiveResponse {
         active: req.name,
@@ -283,14 +288,13 @@ pub async fn download(
     // parakeet-nemotron: the whole ONNX artifact set is ONE logical unit —
     // one job, sequential files, aggregated progress, all-or-nothing install.
     if backend == BackendKind::ParakeetNemotron {
-        let specs = registry::parakeet_download_spec(&state.config, &req.name).map_err(|e| {
-            match &e {
+        let specs =
+            registry::parakeet_download_spec(&state.config, &req.name).map_err(|e| match &e {
                 E::UnknownModel(_) | E::NoOnnxVariant(_) => {
                     ApiError::new(StatusCode::NOT_FOUND, e.to_string())
                 }
                 _ => ApiError::internal(e),
-            }
-        })?;
+            })?;
         // "Installed" means the FULL set — a partial set (crash leftovers)
         // re-downloads everything rather than reporting already_present.
         if specs.iter().all(|s| s.dest_file.is_file()) {

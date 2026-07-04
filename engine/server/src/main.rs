@@ -31,8 +31,14 @@ async fn main() -> anyhow::Result<()> {
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let config = Config::from_env();
+    let mut config = Config::from_env();
     config.ensure_temp_dir().context("create temp dir")?;
+
+    // A model activated via POST /models/active is persisted to
+    // data/model_config.json; prefer it over the MODEL_NAME env/default so
+    // the selection survives a restart (stored > env > default).
+    config.model_name = whisper_wrap_server::model_config::ModelConfigStore::new(&config.data_dir)
+        .resolve_model_name(&config);
 
     // Lenient resolve so self-host also boots with zero weights — the model
     // can be fetched via POST /models/download and loaded with POST

@@ -57,16 +57,30 @@ pub fn no_model_router(test: &str) -> Router {
 }
 
 pub fn no_model_app(test: &str) -> (Router, Arc<AppState>) {
-    no_model_app_inner(test, None)
+    no_model_app_inner(test, None, |_| {})
 }
 
 /// Same zero-weights harness but with the `engine_token` gate enabled, so
 /// token-exemption / 401-vs-404 behavior can be exercised.
 pub fn no_model_router_with_token(test: &str, token: &str) -> Router {
-    no_model_app_inner(test, Some(token.to_owned())).0
+    no_model_app_inner(test, Some(token.to_owned()), |_| {}).0
 }
 
-fn no_model_app_inner(test: &str, engine_token: Option<String>) -> (Router, Arc<AppState>) {
+/// Zero-weights harness with a pre-boot hook over the fresh `data/` dir, so
+/// tests can seed persisted config files (e.g. `model_config.json`) before
+/// the boot-time model resolution runs.
+pub fn no_model_app_seeded(
+    test: &str,
+    seed: impl FnOnce(&std::path::Path),
+) -> (Router, Arc<AppState>) {
+    no_model_app_inner(test, None, seed)
+}
+
+fn no_model_app_inner(
+    test: &str,
+    engine_token: Option<String>,
+    seed: impl FnOnce(&std::path::Path),
+) -> (Router, Arc<AppState>) {
     let base = sandbox(test);
     let reg_path = base.join("models.yaml");
     std::fs::write(&reg_path, REGISTRY_YAML).expect("write registry");
@@ -85,6 +99,12 @@ fn no_model_app_inner(test: &str, engine_token: Option<String>) -> (Router, Arc<
     config.diarize_emb_model_balanced = base.join("diarization/embedding-balanced.onnx");
     std::fs::create_dir_all(&config.temp_dir).expect("temp dir");
     std::fs::create_dir_all(&config.data_dir).expect("data dir");
+    seed(&config.data_dir);
+
+    // Mirrors main.rs: a persisted data/model_config.json selection wins
+    // over the configured default (stored > env > default).
+    config.model_name = whisper_wrap_server::model_config::ModelConfigStore::new(&config.data_dir)
+        .resolve_model_name(&config);
 
     // Mirrors main.rs: lenient resolve succeeds, weights absent → no engine.
     let model = registry::resolve_active_model_lenient(&config).expect("lenient resolve");
