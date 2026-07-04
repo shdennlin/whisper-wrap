@@ -15,6 +15,7 @@ pub mod openapi;
 pub mod routes;
 pub mod runs;
 pub mod state;
+pub mod windowed_batch;
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -59,6 +59,40 @@ impl ChunkBuffer {
     }
 }
 
+/// Running-utterance accumulator: turns the decoder's per-push text
+/// DELTAS into `StreamStep`s that satisfy the trait's driver contract —
+/// every non-empty partial carries the CURRENT FULL utterance hypothesis,
+/// and `finish` flushes the complete utterance. Pure and unit-testable
+/// without the model.
+#[derive(Debug, Default)]
+struct UtteranceAccumulator {
+    utterance: String,
+}
+
+impl UtteranceAccumulator {
+    /// Fold a push delta in. Empty delta → empty step ("no update");
+    /// otherwise the step carries the whole utterance so far.
+    fn push_delta(&mut self, delta: &str) -> StreamStep {
+        if delta.is_empty() {
+            return StreamStep::default();
+        }
+        self.utterance.push_str(delta);
+        StreamStep {
+            text: self.utterance.clone(),
+            is_final: false,
+        }
+    }
+
+    /// Fold the flush delta in and consume the utterance as the final.
+    fn finish_delta(&mut self, delta: &str) -> StreamStep {
+        self.utterance.push_str(delta);
+        StreamStep {
+            text: std::mem::take(&mut self.utterance),
+            is_final: true,
+        }
+    }
+}
+
 /// Nemotron 3.5 streaming ASR backend (parakeet-rs / ONNX Runtime).
 ///
 /// `Nemotron` needs `&mut self` per chunk, so the model sits behind a
@@ -173,15 +207,19 @@ impl AsrBackend for ParakeetBackend {
         Some(Box::new(ParakeetStream {
             model: Arc::clone(&self.model),
             chunker: ChunkBuffer::new(),
+            acc: UtteranceAccumulator::default(),
         }))
     }
 }
 
-/// One live streaming decode session. Buffers arbitrary-size pushes and
-/// runs the model only per full `CHUNK_SAMPLES` block.
+/// One live streaming decode session. Buffers arbitrary-size pushes, runs
+/// the model only per full `CHUNK_SAMPLES` block, and accumulates the
+/// decoder's deltas so every step carries the full utterance hypothesis
+/// (the `StreamSession` driver contract).
 struct ParakeetStream {
     model: Arc<Mutex<Nemotron>>,
     chunker: ChunkBuffer,
+    acc: UtteranceAccumulator,
 }
 
 impl ParakeetStream {
@@ -205,21 +243,15 @@ impl ParakeetStream {
 impl StreamSession for ParakeetStream {
     fn push(&mut self, pcm_chunk: &[f32]) -> Result<StreamStep, AsrError> {
         let blocks = self.chunker.feed(pcm_chunk);
-        let text = self.decode_blocks(&blocks)?;
-        Ok(StreamStep {
-            text,
-            is_final: false,
-        })
+        let delta = self.decode_blocks(&blocks)?;
+        Ok(self.acc.push_delta(&delta))
     }
 
     fn finish(&mut self) -> Result<StreamStep, AsrError> {
         let mut blocks: Vec<Vec<f32>> = self.chunker.take_padded().into_iter().collect();
         blocks.extend(std::iter::repeat_n(vec![0.0f32; CHUNK_SAMPLES], FLUSH_CHUNKS));
-        let text = self.decode_blocks(&blocks)?;
-        Ok(StreamStep {
-            text,
-            is_final: true,
-        })
+        let delta = self.decode_blocks(&blocks)?;
+        Ok(self.acc.finish_delta(&delta))
     }
 }
 
@@ -249,6 +281,47 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert!(blocks.iter().all(|b| b.len() == CHUNK_SAMPLES));
         assert_eq!(cb.remaining(), 20_000 - 2 * CHUNK_SAMPLES); // 2080
+    }
+
+    #[test]
+    fn utterance_accumulator_returns_the_running_full_hypothesis() {
+        // Driver contract: partial steps carry the CURRENT FULL utterance
+        // hypothesis, not the delta; an empty decode is "no update".
+        let mut acc = UtteranceAccumulator::default();
+        let step = acc.push_delta("hello ");
+        assert!(!step.is_final);
+        assert_eq!(step.text, "hello ");
+        let step = acc.push_delta("");
+        assert!(!step.is_final);
+        assert!(step.text.is_empty(), "empty delta must not re-emit");
+        let step = acc.push_delta("world");
+        assert!(!step.is_final);
+        assert_eq!(step.text, "hello world");
+    }
+
+    #[test]
+    fn utterance_accumulator_finish_flushes_the_whole_utterance() {
+        let mut acc = UtteranceAccumulator::default();
+        acc.push_delta("hello ");
+        acc.push_delta("world");
+        let step = acc.finish_delta("!");
+        assert!(step.is_final);
+        assert_eq!(step.text, "hello world!");
+        // The utterance is consumed: a fresh finish yields nothing.
+        let step = acc.finish_delta("");
+        assert!(step.is_final);
+        assert!(step.text.is_empty());
+    }
+
+    #[test]
+    fn utterance_accumulator_finish_with_no_new_delta_still_returns_the_tail() {
+        // A clean close after partials must persist the un-finalized
+        // utterance even when the flush decodes nothing new.
+        let mut acc = UtteranceAccumulator::default();
+        acc.push_delta("again");
+        let step = acc.finish_delta("");
+        assert!(step.is_final);
+        assert_eq!(step.text, "again");
     }
 
     #[test]

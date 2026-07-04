@@ -6,15 +6,35 @@
 
 use crate::asr::{AsrError, TranscribeResult};
 
-/// One incremental streaming step: text produced since the previous push.
+/// One streaming step. `text` is NOT a delta: a non-final step carries the
+/// CURRENT FULL utterance hypothesis (empty = no update this push); a final
+/// step (`is_final`) carries the COMPLETE utterance text and ends it (empty
+/// final = the utterance ended with nothing to emit, e.g. filtered noise).
 #[derive(Debug, Clone, Default)]
 pub struct StreamStep {
     pub text: String,
     pub is_final: bool,
 }
 
-/// A stateful streaming decode session (one per live connection). Implemented
-/// by native-streaming backends; whisper does not provide one.
+/// A stateful streaming decode session (one per live connection).
+///
+/// # Driver contract (`WS /listen`)
+///
+/// The driver forwards step text VERBATIM — it never accumulates or diffs.
+/// Sessions must therefore return, per `push`, the full current-utterance
+/// hypothesis (revisions REPLACE the client's partial line), or empty text
+/// when there is nothing new. A step with `is_final` ends the utterance:
+/// its text is the whole utterance, and the next non-empty step starts a
+/// new one. `finish` flushes any decoder tail and returns the remaining
+/// utterance as the final (empty = nothing left to emit; a windowed-batch
+/// emulation discards its un-endpointed buffer here).
+///
+/// `push`/`finish` are synchronous and may run inference inline; the driver
+/// off-loads each call onto a blocking task.
+///
+/// Provided by native-streaming backends via [`AsrBackend::open_stream`];
+/// batch-only backends (whisper) are wrapped in the server's
+/// `WindowedBatchSession` adapter instead.
 pub trait StreamSession: Send {
     fn push(&mut self, pcm_chunk: &[f32]) -> Result<StreamStep, AsrError>;
     fn finish(&mut self) -> Result<StreamStep, AsrError>;
